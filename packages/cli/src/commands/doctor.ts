@@ -5,9 +5,9 @@
  * - Git repo exists
  * - .adit/ directory exists
  * - Database is accessible
- * - Hooks are installed
+ * - Hooks are configured in Claude Code settings
  * - Checkpoint refs are consistent
- * - Claude Code settings have hooks registered
+ * - Claude Code settings have all 3 required hooks registered
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -65,10 +65,10 @@ export async function doctorCommand(): Promise<void> {
 
   // 4. Hooks — check .claude/settings.local.json or .claude/settings.json
   const settingsLocalPath = join(config.projectRoot, ".claude", "settings.local.json");
-  const settingsPath = join(config.projectRoot, ".claude", "settings.json");
+  const settingsJsonPath = join(config.projectRoot, ".claude", "settings.json");
   let hooksOk = false;
   let hooksDetail = "No hooks found in .claude/settings.local.json or .claude/settings.json";
-  for (const p of [settingsLocalPath, settingsPath]) {
+  for (const p of [settingsLocalPath, settingsJsonPath]) {
     if (existsSync(p)) {
       try {
         const content = JSON.parse(readFileSync(p, "utf-8"));
@@ -85,7 +85,7 @@ export async function doctorCommand(): Promise<void> {
   checks.push({
     name: "Hooks config",
     ok: hooksOk,
-    detail: hooksOk ? hooksDetail : hooksDetail,
+    detail: hooksDetail,
   });
 
   // 5. Checkpoint refs integrity
