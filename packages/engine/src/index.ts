@@ -49,5 +49,6 @@ export {
   type ListOptions,
 } from "./timeline/manager.js";
 
-// Environment capture
+// Environment capture & diffing
 export { captureEnvironment } from "./environment/capture.js";
+export { diffEnvironments } from "./environment/differ.js";

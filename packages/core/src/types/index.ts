@@ -23,4 +23,4 @@ export type {
   AditPlan,
 } from "./plan.js";
 
-export type { EnvSnapshot } from "./environment.js";
+export type { EnvSnapshot, EnvDiff, EnvChange } from "./environment.js";

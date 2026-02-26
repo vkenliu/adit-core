@@ -1,26 +1,13 @@
 {
   "name": "adit",
-  "version": "0.1.0",
-  "description": "AI Development Intent Tracker — The Transparent Time Machine. Records every prompt, code change, and tool call with git-native checkpoints and instant revert.",
-  "author": "ADIT Contributors",
-  "license": "MIT",
-  "repository": "https://github.com/vkenliu/adit-core",
-  "hooks": "./hooks/hooks.json",
-  "commands": {
-    "list": "./commands/list.md",
-    "show": "./commands/show.md",
-    "revert": "./commands/revert.md",
-    "undo": "./commands/undo.md",
-    "search": "./commands/search.md",
-    "plan": "./commands/plan.md",
-    "doctor": "./commands/doctor.md"
+  "version": "0.2.0",
+  "description": "AI Development Intent Tracker — Transparent Time Machine for AI-assisted coding",
+  "author": {
+    "name": "ADIT Contributors",
+    "url": "https://github.com/vkenliu/adit-core"
   },
-  "supported_hooks": [
-    "UserPromptSubmit",
-    "PostToolUse",
-    "Stop"
-  ],
-  "requires": {
-    "node": ">=20.0.0"
-  }
+  "homepage": "https://github.com/vkenliu/adit-core",
+  "repository": "https://github.com/vkenliu/adit-core",
+  "license": "MIT",
+  "keywords": ["flight-recorder", "timeline", "git", "checkpoint", "ai-development"]
 }

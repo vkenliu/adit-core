@@ -22,9 +22,34 @@ export interface EnvSnapshot {
   nodeVersion: string | null;
   pythonVersion: string | null;
   osInfo: string | null;
+  /** JSON: {inDocker: bool, image?: string} */
+  containerInfo: string | null;
+  /** JSON: {rust?, go?, java?, ruby?, ...} */
+  runtimeVersionsJson: string | null;
+  /** JSON: {shell, version} */
+  shellInfo: string | null;
+  /** JSON: {arch, cpuModel, totalMem, freeMem, diskFree?} */
+  systemResourcesJson: string | null;
+  /** JSON: {name, version, globalVersion?} */
+  packageManagerJson: string | null;
   capturedAt: string;
   /** Vector clock */
   vclockJson: string;
   /** Soft delete */
   deletedAt: string | null;
+}
+
+/** Structured diff between two environment snapshots */
+export interface EnvDiff {
+  changes: EnvChange[];
+  severity: "none" | "info" | "warning" | "breaking";
+}
+
+/** A single field-level change in the environment */
+export interface EnvChange {
+  field: string;
+  category: "git" | "dependency" | "runtime" | "system";
+  oldValue: string | null;
+  newValue: string | null;
+  severity: "info" | "warning" | "breaking";
 }

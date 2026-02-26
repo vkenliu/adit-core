@@ -46,5 +46,6 @@ export {
   insertEnvSnapshot,
   getEnvSnapshotById,
   getLatestEnvSnapshot,
+  listEnvSnapshots,
   type CreateEnvSnapshotInput,
 } from "./env-snapshots.js";

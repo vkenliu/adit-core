@@ -30,7 +30,7 @@ export type {
   AditPlan,
 } from "./types/index.js";
 
-export type { EnvSnapshot } from "./types/index.js";
+export type { EnvSnapshot, EnvDiff, EnvChange } from "./types/index.js";
 
 // Database
 export {
@@ -63,6 +63,7 @@ export {
   insertEnvSnapshot,
   getEnvSnapshotById,
   getLatestEnvSnapshot,
+  listEnvSnapshots,
 } from "./db/index.js";
 
 export type {

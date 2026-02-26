@@ -17,6 +17,7 @@ export type EventType =
   | "checkpoint" // Git checkpoint created
   | "revert" // User reverted to checkpoint
   | "env_snapshot" // Environment captured
+  | "env_drift" // Environment changed between snapshots
   | "plan_update"; // SpecFlow plan modified
 
 /** Who performed the action */

@@ -12,18 +12,37 @@ import { initCommand } from "./commands/init.js";
 import { listCommand } from "./commands/list.js";
 import { showCommand } from "./commands/show.js";
 import { revertCommand, undoCommand } from "./commands/revert.js";
-import { labelCommand, searchCommand } from "./commands/label.js";
-import { diffCommand, promptCommand, envCommand } from "./commands/diff.js";
+import {
+  labelCommand,
+  labelRemoveCommand,
+  labelListCommand,
+  searchCommand,
+} from "./commands/label.js";
+import {
+  diffCommand,
+  promptCommand,
+  envCommand,
+  envLatestCommand,
+  envDiffCommand,
+  envHistoryCommand,
+} from "./commands/diff.js";
 import { doctorCommand } from "./commands/doctor.js";
-import { exportCommand } from "./commands/export.js";
+import { exportCommand, exportSessionCommand } from "./commands/export.js";
 import { statusCommand } from "./commands/status.js";
+import { configCommand } from "./commands/config.js";
+import {
+  pluginInstallCommand,
+  pluginUninstallCommand,
+  pluginListCommand,
+  pluginValidateCommand,
+} from "./commands/plugin.js";
 
 const program = new Command();
 
 program
   .name("adit")
   .description("AI Development Intent Tracker — The Transparent Time Machine")
-  .version("0.1.0");
+  .version("0.2.0");
 
 program
   .command("init")
@@ -68,17 +87,53 @@ program
   .option("-y, --yes", "Skip confirmation")
   .action((opts) => undoCommand({ yes: opts.yes }));
 
-program
-  .command("label <id> <label>")
+// Label management
+const labelCmd = program
+  .command("label")
+  .description("Manage labels on events");
+
+labelCmd
+  .command("add <id> <label>")
   .description("Add a label to an event")
   .action((id, label) => labelCommand(id, label));
 
+labelCmd
+  .command("remove <id> <label>")
+  .description("Remove a label from an event")
+  .action((id, label) => labelRemoveCommand(id, label));
+
+labelCmd
+  .command("list")
+  .description("List all labels or events with a specific label")
+  .option("--label <name>", "Filter by label name")
+  .option("--json", "Output as JSON")
+  .action((opts) => labelListCommand({ label: opts.label, json: opts.json }));
+
+// Search
 program
   .command("search <query>")
   .description("Search events by text")
   .option("-l, --limit <n>", "Max results", "20")
+  .option("-a, --actor <actor>", "Filter by actor")
+  .option("-t, --type <type>", "Filter by event type")
+  .option("--from <date>", "Start date (ISO 8601)")
+  .option("--to <date>", "End date (ISO 8601)")
+  .option("--branch <branch>", "Filter by git branch")
+  .option("--has-checkpoint", "Only events with checkpoints")
+  .option("--format <fmt>", "Output format (json)")
+  .option("--json", "Output as JSON")
   .action((query, opts) =>
-    searchCommand(query, { limit: parseInt(opts.limit, 10) }),
+    searchCommand(query, {
+      limit: parseInt(opts.limit, 10),
+      actor: opts.actor,
+      type: opts.type,
+      from: opts.from,
+      to: opts.to,
+      branch: opts.branch,
+      hasCheckpoint: opts.hasCheckpoint,
+      format: opts.format,
+      json: opts.json,
+    }),
   );
 
 program
@@ -109,10 +164,34 @@ program
     }),
   );
 
-program
-  .command("env <id>")
+// Environment snapshot commands
+const envCmd = program
+  .command("env")
+  .description("Environment snapshot commands");
+
+envCmd
+  .command("show <id>")
   .description("Show environment snapshot for an event")
   .action((id) => envCommand(id));
+
+envCmd
+  .command("latest")
+  .description("Show the most recent environment snapshot")
+  .option("--json", "Output as JSON")
+  .action((opts) => envLatestCommand({ json: opts.json }));
+
+envCmd
+  .command("diff <id1> <id2>")
+  .description("Compare two environment snapshots")
+  .option("--json", "Output as JSON")
+  .action((id1, id2, opts) => envDiffCommand(id1, id2, { json: opts.json }));
+
+envCmd
+  .command("history")
+  .description("List environment snapshot history")
+  .option("-l, --limit <n>", "Max results", "20")
+  .option("--json", "Output as JSON")
+  .action((opts) => envHistoryCommand({ limit: parseInt(opts.limit, 10), json: opts.json }));
 
 program
   .command("status")
@@ -123,15 +202,80 @@ program
 program
   .command("doctor")
   .description("Validate ADIT installation health")
-  .action(() => doctorCommand());
+  .option("--fix", "Attempt automatic fixes")
+  .option("--json", "Output as JSON")
+  .action((opts) => doctorCommand({ fix: opts.fix, json: opts.json }));
 
-program
-  .command("export <id>")
-  .description("Export an event bundle")
-  .option("-f, --format <fmt>", "Output format (json|jsonl)", "json")
+// Export commands
+const exportCmd = program
+  .command("export")
+  .description("Export event data");
+
+exportCmd
+  .command("event <id>")
+  .description("Export a single event bundle")
+  .option("-f, --format <fmt>", "Output format (json)", "json")
   .option("-o, --output <path>", "Output file path")
   .action((id, opts) =>
     exportCommand(id, { format: opts.format, output: opts.output }),
   );
+
+exportCmd
+  .command("session [session-id]")
+  .description("Export entire session")
+  .option("-f, --format <fmt>", "Output format (json|jsonl|markdown)", "json")
+  .option("-o, --output <path>", "Output file path")
+  .option("--from <date>", "Start date filter")
+  .option("--to <date>", "End date filter")
+  .option("--include-diffs", "Include full diffs")
+  .option("--include-env", "Include environment snapshots")
+  .option("--gzip", "Compress output with gzip")
+  .action((sessionId, opts) =>
+    exportSessionCommand(sessionId, {
+      format: opts.format,
+      output: opts.output,
+      from: opts.from,
+      to: opts.to,
+      includeDiffs: opts.includeDiffs,
+      includeEnv: opts.includeEnv,
+      gzip: opts.gzip,
+    }),
+  );
+
+// Config
+program
+  .command("config")
+  .description("Show ADIT configuration")
+  .option("--json", "Output as JSON")
+  .action((opts) => configCommand({ json: opts.json }));
+
+// Plugin management
+const pluginCmd = program
+  .command("plugin")
+  .description("Manage platform plugin integrations");
+
+pluginCmd
+  .command("install [platform]")
+  .description("Install ADIT hooks for a platform")
+  .option("--json", "Output as JSON")
+  .action((platform, opts) => pluginInstallCommand(platform, { json: opts.json }));
+
+pluginCmd
+  .command("uninstall [platform]")
+  .description("Remove ADIT hooks for a platform")
+  .option("--json", "Output as JSON")
+  .action((platform, opts) => pluginUninstallCommand(platform, { json: opts.json }));
+
+pluginCmd
+  .command("list")
+  .description("List available platform adapters")
+  .option("--json", "Output as JSON")
+  .action((opts) => pluginListCommand({ json: opts.json }));
+
+pluginCmd
+  .command("validate [platform]")
+  .description("Validate platform plugin installation")
+  .option("--json", "Output as JSON")
+  .action((platform, opts) => pluginValidateCommand(platform, { json: opts.json }));
 
 program.parse();
