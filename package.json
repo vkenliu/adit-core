@@ -1,0 +1,40 @@
+{
+  "name": "adit-core",
+  "version": "0.1.0",
+  "description": "AI Development Intent Tracker — The Transparent Time Machine",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "scripts": {
+    "build": "pnpm -r run build",
+    "build:core": "pnpm --filter @adit/core run build",
+    "build:engine": "pnpm --filter @adit/engine run build",
+    "build:hooks": "pnpm --filter @adit/hooks run build",
+    "build:cli": "pnpm --filter @adit/cli run build",
+    "build:plans": "pnpm --filter @adit/plans run build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint packages/*/src/**/*.ts",
+    "lint:fix": "eslint packages/*/src/**/*.ts --fix",
+    "format": "prettier --write \"packages/*/src/**/*.ts\"",
+    "format:check": "prettier --check \"packages/*/src/**/*.ts\"",
+    "typecheck": "pnpm -r run typecheck"
+  },
+  "keywords": [
+    "ai",
+    "development",
+    "flight-recorder",
+    "claude-code",
+    "git",
+    "timeline"
+  ],
+  "author": "ADIT Contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vkenliu/adit-core"
+  }
+}
