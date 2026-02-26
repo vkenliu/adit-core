@@ -49,7 +49,7 @@ describe("Adapter Registry", () => {
 
 describe("Claude Code Adapter", () => {
   it("has correct hook mappings", () => {
-    expect(claudeCodeAdapter.hookMappings).toHaveLength(5);
+    expect(claudeCodeAdapter.hookMappings).toHaveLength(6);
 
     const mappings = claudeCodeAdapter.hookMappings.map((m) => m.platformEvent);
     expect(mappings).toContain("UserPromptSubmit");
@@ -57,6 +57,7 @@ describe("Claude Code Adapter", () => {
     expect(mappings).toContain("Stop");
     expect(mappings).toContain("SessionStart");
     expect(mappings).toContain("SessionEnd");
+    expect(mappings).toContain("TaskCompleted");
   });
 
   it("parseInput normalizes prompt-submit", () => {
@@ -96,7 +97,27 @@ describe("Claude Code Adapter", () => {
     expect(input.hookType).toBe("session-start");
   });
 
-  it("generateHookConfig produces valid structure", () => {
+  it("parseInput normalizes task-completed with task fields", () => {
+    const input = claudeCodeAdapter.parseInput(
+      {
+        cwd: "/project",
+        task_id: "task-001",
+        task_subject: "Implement auth",
+        task_description: "Add login endpoint",
+        teammate_name: "implementer",
+        team_name: "my-team",
+      },
+      "TaskCompleted",
+    );
+    expect(input.hookType).toBe("task-completed");
+    expect(input.taskId).toBe("task-001");
+    expect(input.taskSubject).toBe("Implement auth");
+    expect(input.taskDescription).toBe("Add login endpoint");
+    expect(input.teammateName).toBe("implementer");
+    expect(input.teamName).toBe("my-team");
+  });
+
+  it("generateHookConfig produces valid structure with async hooks", () => {
     const config = claudeCodeAdapter.generateHookConfig("npx adit-hook");
     expect(config.configPath).toBe(".claude/settings.local.json");
     expect(config.content.hooks).toBeDefined();
@@ -107,5 +128,14 @@ describe("Claude Code Adapter", () => {
     expect(hooks.Stop).toBeDefined();
     expect(hooks.SessionStart).toBeDefined();
     expect(hooks.SessionEnd).toBeDefined();
+    expect(hooks.TaskCompleted).toBeDefined();
+
+    // Verify async: true is set on all hooks
+    for (const hookName of Object.keys(hooks)) {
+      const entries = hooks[hookName] as Array<{
+        hooks: Array<{ type: string; command: string; async: boolean }>;
+      }>;
+      expect(entries[0].hooks[0].async).toBe(true);
+    }
   });
 });

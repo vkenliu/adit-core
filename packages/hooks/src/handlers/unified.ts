@@ -37,6 +37,9 @@ export async function dispatchHook(input: NormalizedHookInput): Promise<void> {
     case "session-end":
       await handleSessionEnd(input);
       break;
+    case "task-completed":
+      await handleTaskCompleted(input);
+      break;
   }
 }
 
@@ -222,6 +225,31 @@ async function handleSessionEnd(input: NormalizedHookInput): Promise<void> {
     // Mark session as completed
     const { endSession } = await import("@adit/core");
     endSession(ctx.db, ctx.session.id, "completed");
+  } finally {
+    ctx.db.close();
+  }
+}
+
+/** Handle task completed — record semantic milestone in timeline */
+async function handleTaskCompleted(input: NormalizedHookInput): Promise<void> {
+  const ctx = await initHookContext(input.cwd);
+  const timeline = createTimelineManager(ctx.db, ctx.config);
+
+  try {
+    await timeline.recordEvent({
+      sessionId: ctx.session.id,
+      eventType: "task_completed",
+      actor: "assistant",
+      responseText: input.taskSubject ?? "Task completed",
+      toolName: input.taskId ?? null,
+      toolInputJson: JSON.stringify({
+        taskId: input.taskId,
+        taskSubject: input.taskSubject,
+        taskDescription: input.taskDescription,
+        teammateName: input.teammateName,
+        teamName: input.teamName,
+      }),
+    });
   } finally {
     ctx.db.close();
   }

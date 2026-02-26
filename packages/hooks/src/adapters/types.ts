@@ -56,6 +56,11 @@ export interface NormalizedHookInput {
   toolInput?: Record<string, unknown>;
   toolOutput?: Record<string, unknown>;
   stopReason?: string;
+  taskId?: string;
+  taskSubject?: string;
+  taskDescription?: string;
+  teammateName?: string;
+  teamName?: string;
   rawPlatformData?: Record<string, unknown>;
 }
 
@@ -85,4 +90,5 @@ export type AditHookType =
   | "tool-use"
   | "stop"
   | "session-start"
-  | "session-end";
+  | "session-end"
+  | "task-completed";
