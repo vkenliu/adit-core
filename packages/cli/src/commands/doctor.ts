@@ -71,9 +71,7 @@ export async function doctorCommand(): Promise<void> {
   for (const p of [settingsLocalPath, settingsPath]) {
     if (existsSync(p)) {
       try {
-        const content = JSON.parse(
-          await import("node:fs").then((fs) => fs.readFileSync(p, "utf-8")),
-        );
+        const content = JSON.parse(readFileSync(p, "utf-8"));
         if (content.hooks) {
           hooksOk = true;
           hooksDetail = p;
@@ -119,29 +117,31 @@ export async function doctorCommand(): Promise<void> {
     detail: `${refCount} refs${orphanedRefs > 0 ? `, ${orphanedRefs} orphaned` : ""}`,
   });
 
-  // 6. Claude Code settings — verify hooks are registered
+  // 6. Claude Code settings — verify all 3 required hooks are registered
   const requiredHooks = ["UserPromptSubmit", "PostToolUse", "Stop"] as const;
-  const settingsLocations = [
+  const hookSettingsLocations = [
+    join(config.projectRoot, ".claude", "settings.local.json"),
     join(config.projectRoot, ".claude", "settings.json"),
     join(homedir(), ".claude", "settings.json"),
   ];
 
   let claudeSettingsOk = false;
-  let claudeSettingsDetail = "No Claude Code settings.json found";
+  let claudeSettingsDetail = "No Claude Code settings found";
   const missingHooks: string[] = [];
 
-  for (const settingsPath of settingsLocations) {
-    if (!existsSync(settingsPath)) continue;
+  for (const hookSettingsPath of hookSettingsLocations) {
+    if (!existsSync(hookSettingsPath)) continue;
     try {
-      const raw = readFileSync(settingsPath, "utf-8");
+      const raw = readFileSync(hookSettingsPath, "utf-8");
       const settings = JSON.parse(raw);
       const hooks = settings.hooks;
       if (!hooks) {
-        claudeSettingsDetail = `${settingsPath} found but has no hooks configuration`;
+        claudeSettingsDetail = `${hookSettingsPath} found but has no hooks configuration`;
         break;
       }
 
       // Check each required hook for an adit-hook command
+      // Supports both flat format ({command: "..."}) and nested format ({hooks: [{command: "..."}]})
       for (const hookName of requiredHooks) {
         const hookEntries = hooks[hookName];
         if (!Array.isArray(hookEntries)) {
@@ -149,8 +149,17 @@ export async function doctorCommand(): Promise<void> {
           continue;
         }
         const hasAdit = hookEntries.some(
-          (entry: { command?: string }) =>
-            typeof entry.command === "string" && entry.command.includes("adit-hook"),
+          (entry: { command?: string; hooks?: Array<{ command?: string }> }) => {
+            if (typeof entry.command === "string" && entry.command.includes("adit-hook")) {
+              return true;
+            }
+            if (Array.isArray(entry.hooks)) {
+              return entry.hooks.some(
+                (h) => typeof h.command === "string" && h.command.includes("adit-hook"),
+              );
+            }
+            return false;
+          },
         );
         if (!hasAdit) {
           missingHooks.push(hookName);
@@ -159,11 +168,11 @@ export async function doctorCommand(): Promise<void> {
 
       claudeSettingsOk = missingHooks.length === 0;
       claudeSettingsDetail = claudeSettingsOk
-        ? `All hooks registered in ${settingsPath}`
-        : `Missing hooks in ${settingsPath}: ${missingHooks.join(", ")}`;
+        ? `All hooks registered in ${hookSettingsPath}`
+        : `Missing hooks in ${hookSettingsPath}: ${missingHooks.join(", ")}`;
       break;
     } catch {
-      claudeSettingsDetail = `Failed to parse ${settingsPath}`;
+      claudeSettingsDetail = `Failed to parse ${hookSettingsPath}`;
     }
   }
 
