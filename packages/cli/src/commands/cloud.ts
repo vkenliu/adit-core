@@ -28,7 +28,7 @@ import type { DeviceAuthOptions } from "@adit/cloud";
 import { createHash } from "node:crypto";
 import { hostname } from "node:os";
 
-const DEFAULT_SERVER_URL = "https://cloud.adit.dev";
+const DEFAULT_SERVER_URL = "https://adit-cloud.varve.ai";
 
 /**
  * `adit cloud login` — Interactive device authorization flow.
