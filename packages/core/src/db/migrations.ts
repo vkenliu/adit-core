@@ -161,4 +161,17 @@ export const migrations: Migration[] = [
       ALTER TABLE env_snapshots ADD COLUMN package_manager_json TEXT;
     `,
   },
+  {
+    id: 7,
+    name: "create_sync_state",
+    sql: `
+      CREATE TABLE IF NOT EXISTS sync_state (
+        server_url            TEXT PRIMARY KEY,
+        client_id             TEXT NOT NULL,
+        last_synced_event_id  TEXT,
+        last_synced_at        TEXT,
+        sync_version          INTEGER NOT NULL DEFAULT 0
+      );
+    `,
+  },
 ];

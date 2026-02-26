@@ -15,6 +15,7 @@
     "build:hooks": "pnpm --filter @adit/hooks run build",
     "build:cli": "pnpm --filter @adit/cli run build",
     "build:plans": "pnpm --filter @adit/plans run build",
+    "build:cloud": "pnpm --filter @adit/cloud run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint packages/*/src/**/*.ts",

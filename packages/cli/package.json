@@ -19,6 +19,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@adit/cloud": "workspace:*",
     "@adit/core": "workspace:*",
     "@adit/engine": "workspace:*",
     "@adit/hooks": "workspace:*",
