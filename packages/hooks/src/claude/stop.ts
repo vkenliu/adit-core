@@ -23,11 +23,20 @@ export async function handleStop(): Promise<void> {
   // Only create checkpoint if there are actual changes
   const dirty = await hasUncommittedChanges(cwd);
 
+  // Query the most recent prompt_submit event to link prompt → response
+  const recentPrompts = await timeline.list({
+    sessionId: ctx.session.id,
+    eventType: "prompt_submit",
+    limit: 1,
+  });
+  const lastPrompt = recentPrompts[0]?.promptText ?? null;
+
   // Record the assistant response event
   const event = await timeline.recordEvent({
     sessionId: ctx.session.id,
     eventType: "assistant_response",
     actor: "assistant",
+    promptText: lastPrompt,
     responseText: stopReason ?? "completed",
   });
 
