@@ -16,6 +16,7 @@ import { labelCommand, searchCommand } from "./commands/label.js";
 import { diffCommand, promptCommand, envCommand } from "./commands/diff.js";
 import { doctorCommand } from "./commands/doctor.js";
 import { exportCommand } from "./commands/export.js";
+import { statusCommand } from "./commands/status.js";
 
 const program = new Command();
 
@@ -84,10 +85,14 @@ program
   .command("diff <id>")
   .description("Show diff for a checkpoint event")
   .option("-n, --max-lines <n>", "Max lines to show")
+  .option("-o, --offset-lines <n>", "Skip first N lines")
   .option("-f, --file <path>", "Filter by file path")
   .action((id, opts) =>
     diffCommand(id, {
       maxLines: opts.maxLines ? parseInt(opts.maxLines, 10) : undefined,
+      offsetLines: opts.offsetLines
+        ? parseInt(opts.offsetLines, 10)
+        : undefined,
       file: opts.file,
     }),
   );
@@ -95,12 +100,25 @@ program
 program
   .command("prompt <id>")
   .description("Show prompt text for an event")
-  .action((id) => promptCommand(id));
+  .option("-m, --max-chars <n>", "Max characters to show")
+  .option("-o, --offset <n>", "Character offset to start from")
+  .action((id, opts) =>
+    promptCommand(id, {
+      maxChars: opts.maxChars ? parseInt(opts.maxChars, 10) : undefined,
+      offset: opts.offset ? parseInt(opts.offset, 10) : undefined,
+    }),
+  );
 
 program
   .command("env <id>")
   .description("Show environment snapshot for an event")
   .action((id) => envCommand(id));
+
+program
+  .command("status")
+  .description("Show ADIT status for the current project")
+  .option("--json", "Output as JSON")
+  .action((opts) => statusCommand({ json: opts.json }));
 
 program
   .command("doctor")

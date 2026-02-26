@@ -4,7 +4,42 @@
  */
 
 import { loadConfig, openDatabase, closeDatabase } from "@adit/core";
-import { createTimelineManager, hasUncommittedChanges } from "@adit/engine";
+import {
+  createTimelineManager,
+  hasUncommittedChanges,
+  runGit,
+  getHeadSha,
+} from "@adit/engine";
+
+/** Lock/dependency files to check for changes between checkpoints */
+const DEP_FILES = [
+  "package.json",
+  "package-lock.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "bun.lockb",
+  "requirements.txt",
+  "Pipfile.lock",
+  "poetry.lock",
+  "Gemfile.lock",
+  "go.sum",
+  "Cargo.lock",
+  "composer.lock",
+];
+
+/** Check if dependency files changed between two SHAs */
+async function checkDependencyChanges(
+  cwd: string,
+  fromSha: string,
+  toSha: string,
+): Promise<string[]> {
+  const result = await runGit(
+    ["diff", "--name-only", fromSha, toSha, "--", ...DEP_FILES],
+    { cwd },
+  );
+  if (result.exitCode !== 0 || !result.stdout.trim()) return [];
+  return result.stdout.trim().split("\n").filter(Boolean);
+}
 
 export async function revertCommand(
   eventId: string,
@@ -33,8 +68,27 @@ export async function revertCommand(
           "Warning: You have uncommitted changes. They will be lost on revert.",
         );
         console.log("Use --yes to skip this warning.");
-        // In a real TUI we'd prompt for confirmation
-        // For now, proceed anyway since we're non-interactive in hooks
+      }
+    }
+
+    // Check for dependency file changes
+    const headSha = await getHeadSha(config.projectRoot);
+    if (headSha) {
+      const depChanges = await checkDependencyChanges(
+        config.projectRoot,
+        headSha,
+        event.checkpointSha,
+      );
+      if (depChanges.length > 0) {
+        console.log(
+          "\nWarning: Dependency files changed between current state and target checkpoint:",
+        );
+        for (const file of depChanges) {
+          console.log(`  - ${file}`);
+        }
+        console.log(
+          "You may need to re-install dependencies after reverting (e.g., pnpm install).\n",
+        );
       }
     }
 
@@ -68,6 +122,29 @@ export async function undoCommand(opts: { yes?: boolean }): Promise<void> {
         console.log(
           "Warning: You have uncommitted changes. They will be lost on undo.",
         );
+      }
+    }
+
+    // Check for dependency changes before undo
+    const headSha = await getHeadSha(config.projectRoot);
+    const latestCheckpoint = await timeline.list({
+      hasCheckpoint: true,
+      limit: 1,
+    });
+    if (headSha && latestCheckpoint[0]?.checkpointSha) {
+      const depChanges = await checkDependencyChanges(
+        config.projectRoot,
+        headSha,
+        latestCheckpoint[0].checkpointSha,
+      );
+      if (depChanges.length > 0) {
+        console.log(
+          "\nWarning: Dependency files changed. You may need to re-install dependencies after undo:",
+        );
+        for (const file of depChanges) {
+          console.log(`  - ${file}`);
+        }
+        console.log();
       }
     }
 
