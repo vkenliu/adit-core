@@ -5,11 +5,13 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { AditEvent } from "@adit/core";
+import type { SortField } from "../../commands/list.js";
 
 interface EventListProps {
   events: AditEvent[];
   selectedIndex: number;
   height: number;
+  sortField?: SortField;
 }
 
 function actorSymbol(actor: string): string {
@@ -73,10 +75,23 @@ function truncate(s: string, max: number): string {
   return s.length > max ? s.substring(0, max - 3) + "..." : s;
 }
 
+function sortIndicator(column: string, sortField?: SortField): string {
+  if (!sortField) return "";
+  if (
+    (column === "TIME" && sortField === "TIME") ||
+    (column === "ACTOR" && sortField === "ACTOR") ||
+    (column === "SEQ" && sortField === "SEQ")
+  ) {
+    return sortField === "ACTOR" ? " ↑" : " ↓";
+  }
+  return "";
+}
+
 export function EventList({
   events,
   selectedIndex,
   height,
+  sortField,
 }: EventListProps): React.ReactElement {
   // Calculate visible window
   const visibleHeight = Math.max(height - 2, 5);
@@ -92,7 +107,7 @@ export function EventList({
     <Box flexDirection="column" width="100%">
       <Box flexDirection="row" paddingX={1}>
         <Text bold dimColor>
-          {"  "}TIME{"     "}ACTOR{"  "}SUMMARY
+          {"  "}TIME{sortIndicator("TIME", sortField)}{"     "}ACTOR{sortIndicator("ACTOR", sortField)}{"  "}SUMMARY
         </Text>
       </Box>
       {visible.map((event, idx) => {
