@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hook_type": "command",
+        "command": "npx adit-hook prompt-submit",
+        "timeout": 5000
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hook_type": "command",
+        "command": "npx adit-hook tool-use",
+        "timeout": 5000
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hook_type": "command",
+        "command": "npx adit-hook stop",
+        "timeout": 30000
+      }
+    ]
+  }
+}

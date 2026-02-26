@@ -1,0 +1,26 @@
+{
+  "name": "@adit/core",
+  "version": "0.1.0",
+  "description": "Core types, database, and sync primitives for ADIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0",
+    "ulid": "^2.3.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "typescript": "^5.7.2"
+  }
+}

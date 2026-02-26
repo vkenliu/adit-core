@@ -1,0 +1,30 @@
+{
+  "name": "@adit/cli",
+  "version": "0.1.0",
+  "description": "CLI and TUI for ADIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "adit": "./dist/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@adit/core": "workspace:*",
+    "@adit/engine": "workspace:*",
+    "@adit/plans": "workspace:*",
+    "commander": "^13.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}
