@@ -18,7 +18,8 @@ export type EventType =
   | "revert" // User reverted to checkpoint
   | "env_snapshot" // Environment captured
   | "env_drift" // Environment changed between snapshots
-  | "plan_update"; // SpecFlow plan modified
+  | "plan_update" // SpecFlow plan modified
+  | "task_completed"; // Agent marked a task as done
 
 /** Who performed the action */
 export type Actor = "assistant" | "user" | "tool" | "system";

@@ -23,6 +23,7 @@ const HOOK_MAPPINGS: HookMapping[] = [
   { platformEvent: "Stop", aditHandler: "stop" },
   { platformEvent: "SessionStart", aditHandler: "session-start" },
   { platformEvent: "SessionEnd", aditHandler: "session-end" },
+  { platformEvent: "TaskCompleted", aditHandler: "task-completed" },
 ];
 
 /** Map Claude Code platform events to ADIT hook types */
@@ -32,6 +33,7 @@ const PLATFORM_TO_ADIT: Record<string, AditHookType> = {
   Stop: "stop",
   SessionStart: "session-start",
   SessionEnd: "session-end",
+  TaskCompleted: "task-completed",
 };
 
 export const claudeCodeAdapter: PlatformAdapter = {
@@ -51,13 +53,18 @@ export const claudeCodeAdapter: PlatformAdapter = {
       toolInput: raw.tool_input as Record<string, unknown> | undefined,
       toolOutput: raw.tool_output as Record<string, unknown> | undefined,
       stopReason: raw.stop_reason as string | undefined,
+      taskId: raw.task_id as string | undefined,
+      taskSubject: raw.task_subject as string | undefined,
+      taskDescription: raw.task_description as string | undefined,
+      teammateName: raw.teammate_name as string | undefined,
+      teamName: raw.team_name as string | undefined,
       rawPlatformData: raw,
     };
   },
 
   generateHookConfig(aditBinaryPath: string): PlatformHookConfig {
     const makeHookEntry = (command: string) => [
-      { hooks: [{ type: "command", command }] },
+      { hooks: [{ type: "command", command, async: true }] },
     ];
 
     return {
@@ -69,6 +76,7 @@ export const claudeCodeAdapter: PlatformAdapter = {
           Stop: makeHookEntry(`${aditBinaryPath} stop`),
           SessionStart: makeHookEntry(`${aditBinaryPath} session-start`),
           SessionEnd: makeHookEntry(`${aditBinaryPath} session-end`),
+          TaskCompleted: makeHookEntry(`${aditBinaryPath} task-completed`),
         },
       },
     };
