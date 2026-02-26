@@ -6,6 +6,9 @@
 
 import { loadConfig, openDatabase, closeDatabase, type AditEvent, type Actor, type EventType, parseDiffStats, parseLabels } from "@adit/core";
 import { createTimelineManager } from "@adit/engine";
+import pc from "picocolors";
+
+export type SortField = "SEQ" | "ACTOR" | "TIME";
 
 export interface ListCommandOptions {
   limit?: number;
@@ -14,6 +17,8 @@ export interface ListCommandOptions {
   checkpoints?: boolean;
   query?: string;
   expand?: boolean;
+  sort?: SortField;
+  json?: boolean;
 }
 
 export async function listCommand(opts: ListCommandOptions): Promise<void> {
@@ -40,34 +45,48 @@ export async function listCommand(opts: ListCommandOptions): Promise<void> {
       return;
     }
 
+    // Sort events — default is TIME (descending, most recent first)
+    const sortField = opts.sort ?? "TIME";
+    events = sortEvents(events, sortField);
+
+    // JSON output
+    if (opts.json) {
+      console.log(JSON.stringify(events, null, 2));
+      return;
+    }
+
     // Print header
     console.log(
-      padRight("ID", 12) +
-        padRight("SEQ", 5) +
-        padRight("ACTOR", 6) +
-        padRight("TYPE", 20) +
-        padRight("TIME", 20) +
-        "SUMMARY",
+      pc.bold(
+        padRight("ID", 12) +
+          padRight("SEQ", 5) +
+          padRight("ACTOR", 6) +
+          padRight("TYPE", 20) +
+          padRight("TIME", 20) +
+          "SUMMARY",
+      ),
     );
-    console.log("-".repeat(90));
+    console.log(pc.dim("-".repeat(90)));
 
     for (const event of events) {
-      const actorChar = actorSymbol(event.actor);
+      const actor = actorSymbol(event.actor);
       const time = formatTime(event.startedAt);
       const summary = getSummary(event, opts.expand);
       const idShort = event.id.substring(0, 10);
+      const checkpoint = event.checkpointSha ? " " + pc.green("*") : "";
 
       console.log(
-        padRight(idShort, 12) +
+        pc.dim(padRight(idShort, 12)) +
           padRight(String(event.sequence), 5) +
-          padRight(actorChar, 6) +
+          colorActor(padRight(actor, 6), event.actor) +
           padRight(event.eventType, 20) +
-          padRight(time, 20) +
-          summary,
+          pc.dim(padRight(time, 20)) +
+          summary +
+          checkpoint,
       );
     }
 
-    console.log(`\n${events.length} events shown.`);
+    console.log(pc.dim(`\n${events.length} events shown (sorted by ${sortField}).`));
   } finally {
     closeDatabase(db);
   }
@@ -85,6 +104,21 @@ function actorSymbol(actor: string): string {
       return "[S]";
     default:
       return "[?]";
+  }
+}
+
+function colorActor(text: string, actor: string): string {
+  switch (actor) {
+    case "assistant":
+      return pc.green(text);
+    case "user":
+      return pc.cyan(text);
+    case "tool":
+      return pc.yellow(text);
+    case "system":
+      return pc.magenta(text);
+    default:
+      return text;
   }
 }
 
@@ -129,4 +163,21 @@ function truncate(s: string, max: number): string {
 
 function padRight(s: string, len: number): string {
   return s.length >= len ? s.substring(0, len) : s + " ".repeat(len - s.length);
+}
+
+export function sortEvents(events: AditEvent[], field: SortField): AditEvent[] {
+  const sorted = [...events];
+  switch (field) {
+    case "SEQ":
+      sorted.sort((a, b) => b.sequence - a.sequence);
+      break;
+    case "ACTOR":
+      sorted.sort((a, b) => a.actor.localeCompare(b.actor));
+      break;
+    case "TIME":
+    default:
+      sorted.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+      break;
+  }
+  return sorted;
 }

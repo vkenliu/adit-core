@@ -36,6 +36,7 @@ import {
   pluginListCommand,
   pluginValidateCommand,
 } from "./commands/plugin.js";
+import { launchTui } from "./tui/index.js";
 
 const program = new Command();
 
@@ -59,6 +60,8 @@ program
   .option("-c, --checkpoints", "Only show checkpoint events")
   .option("-q, --query <text>", "Search by text")
   .option("-e, --expand", "Show expanded summaries")
+  .option("-s, --sort <field>", "Sort by field: SEQ, ACTOR, or TIME (default: TIME)")
+  .option("--json", "Output as JSON")
   .action((opts) =>
     listCommand({
       limit: parseInt(opts.limit, 10),
@@ -67,6 +70,8 @@ program
       checkpoints: opts.checkpoints,
       query: opts.query,
       expand: opts.expand,
+      sort: opts.sort ? opts.sort.toUpperCase() : undefined,
+      json: opts.json,
     }),
   );
 
@@ -277,5 +282,11 @@ pluginCmd
   .description("Validate platform plugin installation")
   .option("--json", "Output as JSON")
   .action((platform, opts) => pluginValidateCommand(platform, { json: opts.json }));
+
+// TUI — interactive terminal interface
+program
+  .command("tui")
+  .description("Launch the interactive terminal UI")
+  .action(() => launchTui());
 
 program.parse();
