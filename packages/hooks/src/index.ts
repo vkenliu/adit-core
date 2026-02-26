@@ -4,30 +4,25 @@
  * ADIT hook dispatcher.
  *
  * Entry point for `npx adit-hook <command>`.
+ * Uses the platform adapter pattern to handle events from any supported AI tool.
  * All errors are caught and swallowed — hooks must never block the AI agent.
  */
 
-import { handlePromptSubmit } from "./claude/prompt-submit.js";
-import { handleToolUse } from "./claude/tool-use.js";
-import { handleStop } from "./claude/stop.js";
+import { readStdin } from "./common/context.js";
+import { detectPlatform, getAdapter } from "./adapters/index.js";
+import { dispatchHook } from "./handlers/unified.js";
 
 const command = process.argv[2];
 
 async function main(): Promise<void> {
-  switch (command) {
-    case "prompt-submit":
-      await handlePromptSubmit();
-      break;
-    case "tool-use":
-      await handleToolUse();
-      break;
-    case "stop":
-      await handleStop();
-      break;
-    default:
-      // Unknown command — exit silently
-      break;
-  }
+  if (!command) return;
+
+  const raw = await readStdin();
+  const platform = detectPlatform();
+  const adapter = getAdapter(platform);
+  const input = adapter.parseInput(raw, command);
+
+  await dispatchHook(input);
 }
 
 // Fail-open: catch everything, exit 0

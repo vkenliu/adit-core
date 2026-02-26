@@ -1,0 +1,19 @@
+{
+  "captureEnv": true,
+  "captureToolIO": true,
+  "maxDiffLines": 5000,
+  "checkpointOnStop": true,
+  "autoLabel": false,
+  "redactKeys": [
+    "password",
+    "secret",
+    "token",
+    "key",
+    "authorization",
+    "cookie",
+    "api_key",
+    "apiKey",
+    "access_token",
+    "refresh_token"
+  ]
+}

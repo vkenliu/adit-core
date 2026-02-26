@@ -150,4 +150,15 @@ export const migrations: Migration[] = [
         ON diffs(event_id);
     `,
   },
+  {
+    id: 6,
+    name: "add_env_snapshot_enrichment",
+    sql: `
+      ALTER TABLE env_snapshots ADD COLUMN container_info TEXT;
+      ALTER TABLE env_snapshots ADD COLUMN runtime_versions_json TEXT;
+      ALTER TABLE env_snapshots ADD COLUMN shell_info TEXT;
+      ALTER TABLE env_snapshots ADD COLUMN system_resources_json TEXT;
+      ALTER TABLE env_snapshots ADD COLUMN package_manager_json TEXT;
+    `,
+  },
 ];

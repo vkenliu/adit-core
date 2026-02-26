@@ -20,6 +20,9 @@ importers:
       '@adit/engine':
         specifier: workspace:*
         version: link:../engine
+      '@adit/hooks':
+        specifier: workspace:*
+        version: link:../hooks
       '@adit/plans':
         specifier: workspace:*
         version: link:../plans

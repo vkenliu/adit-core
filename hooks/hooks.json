@@ -2,26 +2,52 @@
   "hooks": {
     "UserPromptSubmit": [
       {
-        "matcher": "",
-        "hook_type": "command",
-        "command": "npx adit-hook prompt-submit",
-        "timeout": 5000
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/adit-hook.sh prompt-submit"
+          }
+        ]
       }
     ],
     "PostToolUse": [
       {
-        "matcher": "",
-        "hook_type": "command",
-        "command": "npx adit-hook tool-use",
-        "timeout": 5000
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/adit-hook.sh tool-use"
+          }
+        ]
       }
     ],
     "Stop": [
       {
-        "matcher": "",
-        "hook_type": "command",
-        "command": "npx adit-hook stop",
-        "timeout": 30000
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/adit-hook.sh stop"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/adit-hook.sh session-start"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/adit-hook.sh session-end"
+          }
+        ]
       }
     ]
   }

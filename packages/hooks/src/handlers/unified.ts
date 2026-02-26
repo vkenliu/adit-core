@@ -1,0 +1,213 @@
+/**
+ * Unified hook dispatcher.
+ *
+ * Platform-agnostic handler that processes normalized hook input
+ * and delegates to the appropriate ADIT handler.
+ */
+
+import { redactSensitiveKeys, getLatestEnvSnapshot } from "@adit/core";
+import {
+  hasUncommittedChanges,
+  getChangedFiles,
+  createTimelineManager,
+  captureEnvironment,
+  diffEnvironments,
+} from "@adit/engine";
+import { initHookContext } from "../common/context.js";
+import type { NormalizedHookInput } from "../adapters/types.js";
+
+/**
+ * Dispatch a normalized hook input to the appropriate handler.
+ * This is the single entry point for all platform hook events.
+ */
+export async function dispatchHook(input: NormalizedHookInput): Promise<void> {
+  switch (input.hookType) {
+    case "prompt-submit":
+      await handlePromptSubmitUnified(input);
+      break;
+    case "tool-use":
+      await handleToolUseUnified(input);
+      break;
+    case "stop":
+      await handleStopUnified(input);
+      break;
+    case "session-start":
+      await handleSessionStart(input);
+      break;
+    case "session-end":
+      await handleSessionEnd(input);
+      break;
+  }
+}
+
+/** Handle prompt submission */
+async function handlePromptSubmitUnified(input: NormalizedHookInput): Promise<void> {
+  if (!input.prompt) return;
+
+  const ctx = await initHookContext(input.cwd);
+  const timeline = createTimelineManager(ctx.db, ctx.config);
+
+  try {
+    // Check if user made manual edits since last checkpoint
+    const dirty = await hasUncommittedChanges(input.cwd);
+    if (dirty) {
+      const changes = await getChangedFiles(input.cwd);
+      const userEditEvent = await timeline.recordEvent({
+        sessionId: ctx.session.id,
+        eventType: "user_edit",
+        actor: "user",
+        responseText: `Manual edits: ${changes.length} files changed`,
+      });
+
+      await timeline.createCheckpoint(
+        userEditEvent.id,
+        `[adit] user edit before prompt (${changes.length} files)`,
+      );
+    }
+
+    await timeline.recordEvent({
+      sessionId: ctx.session.id,
+      eventType: "prompt_submit",
+      actor: "user",
+      promptText: input.prompt,
+    });
+  } finally {
+    ctx.db.close();
+  }
+}
+
+/** Handle tool use */
+async function handleToolUseUnified(input: NormalizedHookInput): Promise<void> {
+  if (!input.toolName) return;
+
+  const ctx = await initHookContext(input.cwd);
+  const timeline = createTimelineManager(ctx.db, ctx.config);
+
+  try {
+    const safeInput = input.toolInput
+      ? redactSensitiveKeys(input.toolInput, ctx.config.redactKeys)
+      : null;
+    const safeOutput = input.toolOutput
+      ? redactSensitiveKeys(input.toolOutput, ctx.config.redactKeys)
+      : null;
+
+    let eventType: "tool_call" | "mcp_call" | "subagent_call" | "skill_call" = "tool_call";
+    if (input.toolName.includes("/")) {
+      eventType = "mcp_call";
+    } else if (input.toolName === "Task" || input.toolName === "task") {
+      eventType = "subagent_call";
+    } else if (input.toolName === "Skill" || input.toolName === "skill") {
+      eventType = "skill_call";
+    }
+
+    await timeline.recordEvent({
+      sessionId: ctx.session.id,
+      eventType,
+      actor: "tool",
+      toolName: input.toolName,
+      toolInputJson: safeInput ? JSON.stringify(safeInput) : null,
+      toolOutputJson: safeOutput ? JSON.stringify(safeOutput) : null,
+    });
+  } finally {
+    ctx.db.close();
+  }
+}
+
+/** Handle stop (assistant response complete) */
+async function handleStopUnified(input: NormalizedHookInput): Promise<void> {
+  const ctx = await initHookContext(input.cwd);
+  const timeline = createTimelineManager(ctx.db, ctx.config);
+
+  try {
+    const dirty = await hasUncommittedChanges(input.cwd);
+
+    const recentPrompts = await timeline.list({
+      sessionId: ctx.session.id,
+      eventType: "prompt_submit",
+      limit: 1,
+    });
+    const lastPrompt = recentPrompts[0]?.promptText ?? null;
+
+    const event = await timeline.recordEvent({
+      sessionId: ctx.session.id,
+      eventType: "assistant_response",
+      actor: "assistant",
+      promptText: lastPrompt,
+      responseText: input.stopReason ?? "completed",
+    });
+
+    if (dirty) {
+      await timeline.createCheckpoint(
+        event.id,
+        `[adit] assistant response (${input.stopReason ?? "completed"})`,
+      );
+    }
+
+    if (ctx.config.captureEnv) {
+      try {
+        // Get previous snapshot before capturing new one
+        const prevSnapshot = getLatestEnvSnapshot(ctx.db, ctx.session.id);
+        await captureEnvironment(ctx.db, ctx.config, ctx.session.id);
+
+        // Detect env drift if we have a previous snapshot
+        if (prevSnapshot) {
+          const currentSnapshot = getLatestEnvSnapshot(ctx.db, ctx.session.id);
+          if (currentSnapshot) {
+            const diff = diffEnvironments(prevSnapshot, currentSnapshot);
+            if (diff.changes.length > 0) {
+              await timeline.recordEvent({
+                sessionId: ctx.session.id,
+                eventType: "env_drift",
+                actor: "system",
+                responseText: `Environment drift detected: ${diff.changes.length} changes (${diff.severity})`,
+                toolInputJson: JSON.stringify(diff),
+              });
+            }
+          }
+        }
+      } catch {
+        // Fail-open
+      }
+    }
+  } finally {
+    ctx.db.close();
+  }
+}
+
+/** Handle session start — capture initial env snapshot */
+async function handleSessionStart(input: NormalizedHookInput): Promise<void> {
+  const ctx = await initHookContext(input.cwd);
+
+  try {
+    if (ctx.config.captureEnv) {
+      try {
+        await captureEnvironment(ctx.db, ctx.config, ctx.session.id);
+      } catch {
+        // Fail-open
+      }
+    }
+  } finally {
+    ctx.db.close();
+  }
+}
+
+/** Handle session end — capture final env snapshot and close session */
+async function handleSessionEnd(input: NormalizedHookInput): Promise<void> {
+  const ctx = await initHookContext(input.cwd);
+
+  try {
+    if (ctx.config.captureEnv) {
+      try {
+        await captureEnvironment(ctx.db, ctx.config, ctx.session.id);
+      } catch {
+        // Fail-open
+      }
+    }
+
+    // Mark session as completed
+    const { endSession } = await import("@adit/core");
+    endSession(ctx.db, ctx.session.id, "completed");
+  } finally {
+    ctx.db.close();
+  }
+}
