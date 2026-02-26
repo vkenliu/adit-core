@@ -169,6 +169,21 @@ async function handleStopUnified(input: NormalizedHookInput): Promise<void> {
         // Fail-open
       }
     }
+
+    // Auto-sync to cloud (fire-and-forget, fail-open)
+    // Uses dynamic import so @adit/cloud is not a build-time dependency.
+    // The module name is constructed to prevent TypeScript from resolving it.
+    try {
+      const cloudModuleName = ["@adit", "cloud"].join("/");
+      const cloudModule = await import(cloudModuleName) as {
+        triggerAutoSync: (db: unknown, projectId: string) => Promise<void>;
+      };
+      cloudModule.triggerAutoSync(ctx.db, ctx.config.projectId).catch(() => {
+        /* fail-open */
+      });
+    } catch {
+      // @adit/cloud not installed — silently skip
+    }
   } finally {
     ctx.db.close();
   }

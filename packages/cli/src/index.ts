@@ -36,6 +36,12 @@ import {
   pluginListCommand,
   pluginValidateCommand,
 } from "./commands/plugin.js";
+import {
+  cloudLoginCommand,
+  cloudLogoutCommand,
+  cloudSyncCommand,
+  cloudStatusCommand,
+} from "./commands/cloud.js";
 import { launchTui } from "./tui/index.js";
 
 const program = new Command();
@@ -282,6 +288,34 @@ pluginCmd
   .description("Validate platform plugin installation")
   .option("--json", "Output as JSON")
   .action((platform, opts) => pluginValidateCommand(platform, { json: opts.json }));
+
+// Cloud sync
+const cloudCmd = program
+  .command("cloud")
+  .description("Cloud sync commands");
+
+cloudCmd
+  .command("login")
+  .description("Authenticate with adit-cloud via device code flow")
+  .option("-s, --server <url>", "Cloud server URL")
+  .action((opts) => cloudLoginCommand({ server: opts.server }));
+
+cloudCmd
+  .command("logout")
+  .description("Clear stored cloud credentials")
+  .action(() => cloudLogoutCommand());
+
+cloudCmd
+  .command("sync")
+  .description("Push unsynced records to cloud")
+  .option("--json", "Output as JSON")
+  .action((opts) => cloudSyncCommand({ json: opts.json }));
+
+cloudCmd
+  .command("status")
+  .description("Show cloud sync status")
+  .option("--json", "Output as JSON")
+  .action((opts) => cloudStatusCommand({ json: opts.json }));
 
 // TUI — interactive terminal interface
 program

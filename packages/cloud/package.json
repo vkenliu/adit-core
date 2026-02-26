@@ -1,0 +1,26 @@
+{
+  "name": "@adit/cloud",
+  "version": "0.1.0",
+  "description": "Cloud sync client for ADIT — device auth, incremental push, conflict resolution",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@adit/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "better-sqlite3": "^12.6.2",
+    "typescript": "^5.7.2"
+  }
+}
