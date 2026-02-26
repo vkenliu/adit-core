@@ -17,6 +17,11 @@ export interface CreateEnvSnapshotInput {
   nodeVersion?: string | null;
   pythonVersion?: string | null;
   osInfo?: string | null;
+  containerInfo?: string | null;
+  runtimeVersionsJson?: string | null;
+  shellInfo?: string | null;
+  systemResourcesJson?: string | null;
+  packageManagerJson?: string | null;
   vclockJson: string;
 }
 
@@ -29,8 +34,10 @@ export function insertEnvSnapshot(
       id, session_id, git_branch, git_head_sha,
       modified_files, dep_lock_hash, dep_lock_path,
       env_vars_json, node_version, python_version, os_info,
+      container_info, runtime_versions_json, shell_info,
+      system_resources_json, package_manager_json,
       captured_at, vclock_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)
   `).run(
     input.id,
     input.sessionId,
@@ -43,6 +50,11 @@ export function insertEnvSnapshot(
     input.nodeVersion ?? null,
     input.pythonVersion ?? null,
     input.osInfo ?? null,
+    input.containerInfo ?? null,
+    input.runtimeVersionsJson ?? null,
+    input.shellInfo ?? null,
+    input.systemResourcesJson ?? null,
+    input.packageManagerJson ?? null,
     input.vclockJson,
   );
 }
@@ -63,10 +75,23 @@ export function getLatestEnvSnapshot(
 ): EnvSnapshot | null {
   const row = db
     .prepare(
-      "SELECT * FROM env_snapshots WHERE session_id = ? AND deleted_at IS NULL ORDER BY captured_at DESC LIMIT 1",
+      "SELECT * FROM env_snapshots WHERE session_id = ? AND deleted_at IS NULL ORDER BY captured_at DESC, id DESC LIMIT 1",
     )
     .get(sessionId) as Record<string, unknown> | undefined;
   return row ? rowToEnvSnapshot(row) : null;
+}
+
+export function listEnvSnapshots(
+  db: Database.Database,
+  sessionId: string,
+  limit = 20,
+): EnvSnapshot[] {
+  const rows = db
+    .prepare(
+      "SELECT * FROM env_snapshots WHERE session_id = ? AND deleted_at IS NULL ORDER BY captured_at DESC, id DESC LIMIT ?",
+    )
+    .all(sessionId, limit) as Record<string, unknown>[];
+  return rows.map(rowToEnvSnapshot);
 }
 
 function rowToEnvSnapshot(row: Record<string, unknown>): EnvSnapshot {
@@ -82,6 +107,11 @@ function rowToEnvSnapshot(row: Record<string, unknown>): EnvSnapshot {
     nodeVersion: (row.node_version as string) ?? null,
     pythonVersion: (row.python_version as string) ?? null,
     osInfo: (row.os_info as string) ?? null,
+    containerInfo: (row.container_info as string) ?? null,
+    runtimeVersionsJson: (row.runtime_versions_json as string) ?? null,
+    shellInfo: (row.shell_info as string) ?? null,
+    systemResourcesJson: (row.system_resources_json as string) ?? null,
+    packageManagerJson: (row.package_manager_json as string) ?? null,
     capturedAt: row.captured_at as string,
     vclockJson: row.vclock_json as string,
     deletedAt: (row.deleted_at as string) ?? null,

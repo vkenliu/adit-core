@@ -1,7 +1,7 @@
 /**
  * `adit diff <id>` — Show the diff for a checkpoint event.
  * `adit prompt <id>` — Show the prompt text for an event.
- * `adit env <id>` — Show environment snapshot for an event.
+ * `adit env` — Show/compare environment snapshots.
  */
 
 import {
@@ -9,8 +9,12 @@ import {
   openDatabase,
   closeDatabase,
   getEnvSnapshotById,
+  getLatestEnvSnapshot,
+  getActiveSession,
+  listEnvSnapshots,
+  type EnvSnapshot,
 } from "@adit/core";
-import { createTimelineManager } from "@adit/engine";
+import { createTimelineManager, diffEnvironments } from "@adit/engine";
 
 export async function diffCommand(
   eventId: string,
@@ -97,6 +101,7 @@ export async function promptCommand(
   }
 }
 
+/** Show environment snapshot for a specific event (legacy command) */
 export async function envCommand(eventId: string): Promise<void> {
   const config = loadConfig();
   const db = openDatabase(config.dbPath);
@@ -119,25 +124,179 @@ export async function envCommand(eventId: string): Promise<void> {
       process.exit(1);
     }
 
-    console.log(`Environment Snapshot: ${snap.id}`);
-    console.log(`  Branch:     ${snap.gitBranch}`);
-    console.log(`  HEAD:       ${snap.gitHeadSha}`);
-    console.log(`  Captured:   ${snap.capturedAt}`);
-    if (snap.nodeVersion) console.log(`  Node:       ${snap.nodeVersion}`);
-    if (snap.pythonVersion) console.log(`  Python:     ${snap.pythonVersion}`);
-    if (snap.osInfo) console.log(`  OS:         ${snap.osInfo}`);
-    if (snap.depLockPath) {
-      console.log(`  Lock file:  ${snap.depLockPath}`);
-      console.log(`  Lock hash:  ${snap.depLockHash ?? "-"}`);
+    printEnvSnapshot(snap);
+  } finally {
+    closeDatabase(db);
+  }
+}
+
+/** `adit env latest` — show the most recent env snapshot for the active session */
+export async function envLatestCommand(opts?: { json?: boolean }): Promise<void> {
+  const config = loadConfig();
+  const db = openDatabase(config.dbPath);
+
+  try {
+    const session = getActiveSession(db, config.projectId, config.clientId);
+    if (!session) {
+      console.error("No active session. Run 'adit init' first.");
+      process.exit(1);
     }
-    if (snap.modifiedFiles) {
-      const files = JSON.parse(snap.modifiedFiles);
+
+    const snap = getLatestEnvSnapshot(db, session.id);
+    if (!snap) {
+      console.error("No environment snapshots found for this session.");
+      process.exit(1);
+    }
+
+    if (opts?.json) {
+      console.log(JSON.stringify(snap, null, 2));
+    } else {
+      printEnvSnapshot(snap);
+    }
+  } finally {
+    closeDatabase(db);
+  }
+}
+
+/** `adit env diff <id1> <id2>` — compare two environment snapshots */
+export async function envDiffCommand(
+  id1: string,
+  id2: string,
+  opts?: { json?: boolean },
+): Promise<void> {
+  const config = loadConfig();
+  const db = openDatabase(config.dbPath);
+
+  try {
+    const snap1 = getEnvSnapshotById(db, id1);
+    const snap2 = getEnvSnapshotById(db, id2);
+
+    if (!snap1) {
+      console.error(`Snapshot not found: ${id1}`);
+      process.exit(1);
+    }
+    if (!snap2) {
+      console.error(`Snapshot not found: ${id2}`);
+      process.exit(1);
+    }
+
+    const diff = diffEnvironments(snap1, snap2);
+
+    if (opts?.json) {
+      console.log(JSON.stringify(diff, null, 2));
+      return;
+    }
+
+    if (diff.changes.length === 0) {
+      console.log("No environment changes detected.");
+      return;
+    }
+
+    console.log(`Environment Diff (${diff.severity}):\n`);
+    for (const change of diff.changes) {
+      const severityTag = change.severity === "breaking" ? "!!!" : change.severity === "warning" ? " !" : "  ";
+      console.log(`  ${severityTag} [${change.category}] ${change.field}`);
+      console.log(`       old: ${change.oldValue ?? "(none)"}`);
+      console.log(`       new: ${change.newValue ?? "(none)"}`);
+    }
+  } finally {
+    closeDatabase(db);
+  }
+}
+
+/** `adit env history` — list env snapshots for the session */
+export async function envHistoryCommand(
+  opts?: { limit?: number; json?: boolean },
+): Promise<void> {
+  const config = loadConfig();
+  const db = openDatabase(config.dbPath);
+
+  try {
+    const session = getActiveSession(db, config.projectId, config.clientId);
+    if (!session) {
+      console.error("No active session. Run 'adit init' first.");
+      process.exit(1);
+    }
+
+    const snapshots = listEnvSnapshots(db, session.id, opts?.limit ?? 20);
+
+    if (snapshots.length === 0) {
+      console.log("No environment snapshots found.");
+      return;
+    }
+
+    if (opts?.json) {
+      console.log(JSON.stringify(snapshots, null, 2));
+      return;
+    }
+
+    console.log(`Environment Snapshots (${snapshots.length}):\n`);
+    for (const snap of snapshots) {
+      const id = snap.id.substring(0, 10);
+      console.log(`  ${id}  ${snap.capturedAt}  ${snap.gitBranch} @ ${snap.gitHeadSha.substring(0, 7)}`);
+      if (snap.nodeVersion) console.log(`           Node: ${snap.nodeVersion}`);
+    }
+  } finally {
+    closeDatabase(db);
+  }
+}
+
+/** Print a formatted env snapshot to the console */
+function printEnvSnapshot(snap: EnvSnapshot): void {
+  console.log(`Environment Snapshot: ${snap.id}`);
+  console.log(`  Branch:     ${snap.gitBranch}`);
+  console.log(`  HEAD:       ${snap.gitHeadSha}`);
+  console.log(`  Captured:   ${snap.capturedAt}`);
+  if (snap.nodeVersion) console.log(`  Node:       ${snap.nodeVersion}`);
+  if (snap.pythonVersion) console.log(`  Python:     ${snap.pythonVersion}`);
+  if (snap.osInfo) console.log(`  OS:         ${snap.osInfo}`);
+  if (snap.depLockPath) {
+    console.log(`  Lock file:  ${snap.depLockPath}`);
+    console.log(`  Lock hash:  ${snap.depLockHash ?? "-"}`);
+  }
+  if (snap.containerInfo) {
+    try {
+      const info = JSON.parse(snap.containerInfo);
+      console.log(`  Container:  ${info.inDocker ? "Docker" : "None"}${info.image ? ` (${info.image})` : ""}`);
+    } catch { /* ignore */ }
+  }
+  if (snap.runtimeVersionsJson) {
+    try {
+      const versions = JSON.parse(snap.runtimeVersionsJson) as Record<string, string>;
+      for (const [name, ver] of Object.entries(versions)) {
+        console.log(`  ${name.charAt(0).toUpperCase() + name.slice(1)}:${" ".repeat(Math.max(1, 9 - name.length))}${ver}`);
+      }
+    } catch { /* ignore */ }
+  }
+  if (snap.shellInfo) {
+    try {
+      const info = JSON.parse(snap.shellInfo);
+      console.log(`  Shell:      ${info.shell}${info.version ? ` (${info.version})` : ""}`);
+    } catch { /* ignore */ }
+  }
+  if (snap.systemResourcesJson) {
+    try {
+      const res = JSON.parse(snap.systemResourcesJson);
+      const totalGB = (res.totalMem / (1024 ** 3)).toFixed(1);
+      const freeGB = (res.freeMem / (1024 ** 3)).toFixed(1);
+      console.log(`  Arch:       ${res.arch}`);
+      console.log(`  CPU:        ${res.cpuModel}`);
+      console.log(`  Memory:     ${freeGB}GB free / ${totalGB}GB total`);
+    } catch { /* ignore */ }
+  }
+  if (snap.packageManagerJson) {
+    try {
+      const pm = JSON.parse(snap.packageManagerJson);
+      console.log(`  Pkg Mgr:    ${pm.name} v${pm.version}`);
+    } catch { /* ignore */ }
+  }
+  if (snap.modifiedFiles) {
+    try {
+      const files = JSON.parse(snap.modifiedFiles) as string[];
       console.log(`  Modified:   ${files.length} files`);
       for (const f of files) {
         console.log(`    - ${f}`);
       }
-    }
-  } finally {
-    closeDatabase(db);
+    } catch { /* ignore */ }
   }
 }

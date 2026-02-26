@@ -21,6 +21,7 @@
   "dependencies": {
     "@adit/core": "workspace:*",
     "@adit/engine": "workspace:*",
+    "@adit/hooks": "workspace:*",
     "@adit/plans": "workspace:*",
     "commander": "^13.0.0"
   },

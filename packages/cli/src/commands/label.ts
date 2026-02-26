@@ -1,15 +1,31 @@
 /**
- * `adit label <id> <label>` — Add a label to an event.
- * `adit search <query>` — Search events by text.
+ * `adit label` — Manage labels on events.
+ * `adit search` — Search events with filters.
  */
 
-import { loadConfig, openDatabase, closeDatabase } from "@adit/core";
+import {
+  loadConfig,
+  openDatabase,
+  closeDatabase,
+  queryEvents,
+  getActiveSession,
+  type AditEvent,
+  type EventType,
+} from "@adit/core";
 import { createTimelineManager } from "@adit/engine";
 
+const LABEL_REGEX = /^[a-zA-Z0-9_-]{1,50}$/;
+
+/** `adit label <id> <label>` — add a label to an event */
 export async function labelCommand(
   eventId: string,
   label: string,
 ): Promise<void> {
+  if (!LABEL_REGEX.test(label)) {
+    console.error(`Invalid label format. Must be alphanumeric/hyphens, max 50 chars.`);
+    process.exit(1);
+  }
+
   const config = loadConfig();
   const db = openDatabase(config.dbPath);
   const timeline = createTimelineManager(db, config);
@@ -22,16 +38,163 @@ export async function labelCommand(
   }
 }
 
-export async function searchCommand(
-  query: string,
-  opts: { limit?: number },
+/** `adit label remove <id> <label>` — remove a label from an event */
+export async function labelRemoveCommand(
+  eventId: string,
+  label: string,
 ): Promise<void> {
   const config = loadConfig();
   const db = openDatabase(config.dbPath);
   const timeline = createTimelineManager(db, config);
 
   try {
-    const events = await timeline.search(query, opts.limit ?? 20);
+    const event = await timeline.get(eventId);
+    if (!event) {
+      console.error(`Event not found: ${eventId}`);
+      process.exit(1);
+    }
+
+    const labels: string[] = event.labelsJson ? JSON.parse(event.labelsJson) : [];
+    const idx = labels.indexOf(label);
+    if (idx === -1) {
+      console.error(`Label "${label}" not found on event ${eventId.substring(0, 10)}`);
+      process.exit(1);
+    }
+
+    labels.splice(idx, 1);
+
+    const { updateEventLabels, tick, deserialize, serialize } = await import("@adit/core");
+    const vclock = tick(deserialize(event.vclockJson), config.clientId);
+    updateEventLabels(db, eventId, JSON.stringify(labels), serialize(vclock));
+
+    console.log(`Removed label "${label}" from event ${eventId.substring(0, 10)}`);
+  } finally {
+    closeDatabase(db);
+  }
+}
+
+/** `adit label list` — list all labels or events with a specific label */
+export async function labelListCommand(
+  opts?: { label?: string; json?: boolean },
+): Promise<void> {
+  const config = loadConfig();
+  const db = openDatabase(config.dbPath);
+
+  try {
+    const session = getActiveSession(db, config.projectId, config.clientId);
+    const events = queryEvents(db, {
+      sessionId: session?.id,
+      limit: 1000,
+    });
+
+    if (opts?.label) {
+      const matched = events.filter((e) => {
+        if (!e.labelsJson) return false;
+        try {
+          const labels: string[] = JSON.parse(e.labelsJson);
+          return labels.includes(opts.label!);
+        } catch {
+          return false;
+        }
+      });
+
+      if (opts.json) {
+        console.log(JSON.stringify(matched.map(formatEventSummary), null, 2));
+        return;
+      }
+
+      if (matched.length === 0) {
+        console.log(`No events with label "${opts.label}"`);
+        return;
+      }
+
+      console.log(`Events with label "${opts.label}":\n`);
+      for (const event of matched) {
+        printEventLine(event);
+      }
+    } else {
+      const labelMap = new Map<string, number>();
+      for (const event of events) {
+        if (!event.labelsJson) continue;
+        try {
+          const labels: string[] = JSON.parse(event.labelsJson);
+          for (const label of labels) {
+            labelMap.set(label, (labelMap.get(label) ?? 0) + 1);
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      if (opts?.json) {
+        console.log(JSON.stringify(Object.fromEntries(labelMap), null, 2));
+        return;
+      }
+
+      if (labelMap.size === 0) {
+        console.log("No labels found. Use `adit label <id> <label>` to add one.");
+        return;
+      }
+
+      console.log("Labels:\n");
+      for (const [label, count] of [...labelMap.entries()].sort()) {
+        console.log(`  ${label} (${count} events)`);
+      }
+    }
+  } finally {
+    closeDatabase(db);
+  }
+}
+
+/** `adit search <query>` — search events with advanced filters */
+export async function searchCommand(
+  query: string,
+  opts: {
+    limit?: number;
+    actor?: string;
+    type?: string;
+    from?: string;
+    to?: string;
+    branch?: string;
+    hasCheckpoint?: boolean;
+    format?: string;
+    json?: boolean;
+  },
+): Promise<void> {
+  const config = loadConfig();
+  const db = openDatabase(config.dbPath);
+  const timeline = createTimelineManager(db, config);
+
+  try {
+    let events = await timeline.search(query, opts.limit ?? 100);
+
+    if (opts.actor) {
+      events = events.filter((e) => e.actor === opts.actor);
+    }
+    if (opts.type) {
+      events = events.filter((e) => e.eventType === (opts.type as EventType));
+    }
+    if (opts.from) {
+      const fromDate = new Date(opts.from).toISOString();
+      events = events.filter((e) => e.startedAt >= fromDate);
+    }
+    if (opts.to) {
+      const toDate = new Date(opts.to).toISOString();
+      events = events.filter((e) => e.startedAt <= toDate);
+    }
+    if (opts.branch) {
+      events = events.filter((e) => e.gitBranch === opts.branch);
+    }
+    if (opts.hasCheckpoint) {
+      events = events.filter((e) => e.checkpointSha != null);
+    }
+
+    events = events.slice(0, opts.limit ?? 20);
+
+    if (opts.format === "json" || opts.json) {
+      console.log(JSON.stringify(events.map(formatEventSummary), null, 2));
+      return;
+    }
 
     if (events.length === 0) {
       console.log(`No events matching "${query}"`);
@@ -40,16 +203,39 @@ export async function searchCommand(
 
     console.log(`Found ${events.length} events matching "${query}":\n`);
     for (const event of events) {
-      const idShort = event.id.substring(0, 10);
-      const time = event.startedAt.substring(11, 19);
-      const snippet =
-        event.promptText?.substring(0, 80) ??
-        event.toolName ??
-        event.responseText?.substring(0, 80) ??
-        event.eventType;
-      console.log(`  ${idShort}  ${time}  [${event.actor[0].toUpperCase()}]  ${snippet}`);
+      printEventLine(event);
     }
   } finally {
     closeDatabase(db);
   }
+}
+
+function printEventLine(event: AditEvent): void {
+  const idShort = event.id.substring(0, 10);
+  const time = event.startedAt.substring(11, 19);
+  const labels = event.labelsJson ? ` ${JSON.parse(event.labelsJson).map((l: string) => `[${l}]`).join("")}` : "";
+  const checkpoint = event.checkpointSha ? " *" : "";
+  const snippet =
+    event.promptText?.substring(0, 80) ??
+    event.toolName ??
+    event.responseText?.substring(0, 80) ??
+    event.eventType;
+  console.log(`  ${idShort}  ${time}  [${event.actor[0].toUpperCase()}]${checkpoint}  ${snippet}${labels}`);
+}
+
+function formatEventSummary(event: AditEvent): Record<string, unknown> {
+  return {
+    id: event.id,
+    eventType: event.eventType,
+    actor: event.actor,
+    startedAt: event.startedAt,
+    gitBranch: event.gitBranch,
+    checkpointSha: event.checkpointSha,
+    labels: event.labelsJson ? JSON.parse(event.labelsJson) : [],
+    snippet:
+      event.promptText?.substring(0, 200) ??
+      event.toolName ??
+      event.responseText?.substring(0, 200) ??
+      null,
+  };
 }
