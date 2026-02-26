@@ -46,46 +46,78 @@ export async function initCommand(opts: { cwd?: string }): Promise<void> {
     console.log("Created .gitignore with .adit/");
   }
 
-  // Create hooks directory for Claude Code if not present
-  const hooksDir = join(gitRoot, ".claude", "hooks");
-  if (!existsSync(join(gitRoot, "hooks", "hooks.json"))) {
-    mkdirSync(join(gitRoot, "hooks"), { recursive: true });
-    writeFileSync(
-      join(gitRoot, "hooks", "hooks.json"),
-      JSON.stringify(
-        {
-          hooks: {
-            UserPromptSubmit: [
+  // Install Claude Code hooks in .claude/settings.local.json
+  const settingsLocalPath = join(gitRoot, ".claude", "settings.local.json");
+  let needsHooks = true;
+  if (existsSync(settingsLocalPath)) {
+    try {
+      const existing = JSON.parse(
+        await import("node:fs").then((fs) =>
+          fs.readFileSync(settingsLocalPath, "utf-8"),
+        ),
+      );
+      if (existing.hooks) {
+        needsHooks = false;
+      }
+    } catch {
+      // parse error — overwrite
+    }
+  }
+  if (needsHooks) {
+    mkdirSync(join(gitRoot, ".claude"), { recursive: true });
+    // Merge with existing settings if present
+    let existingSettings: Record<string, unknown> = {};
+    if (existsSync(settingsLocalPath)) {
+      try {
+        existingSettings = JSON.parse(
+          await import("node:fs").then((fs) =>
+            fs.readFileSync(settingsLocalPath, "utf-8"),
+          ),
+        );
+      } catch {
+        // ignore
+      }
+    }
+    const settings = {
+      ...existingSettings,
+      hooks: {
+        UserPromptSubmit: [
+          {
+            hooks: [
               {
-                matcher: "",
-                hook_type: "command",
-                command: "npx adit-hook prompt-submit",
+                type: "command",
+                command: "adit-hook prompt-submit",
                 timeout: 5000,
               },
             ],
-            PostToolUse: [
+          },
+        ],
+        PostToolUse: [
+          {
+            hooks: [
               {
-                matcher: "",
-                hook_type: "command",
-                command: "npx adit-hook tool-use",
+                type: "command",
+                command: "adit-hook tool-use",
                 timeout: 5000,
               },
             ],
-            Stop: [
+          },
+        ],
+        Stop: [
+          {
+            hooks: [
               {
-                matcher: "",
-                hook_type: "command",
-                command: "npx adit-hook stop",
+                type: "command",
+                command: "adit-hook stop",
                 timeout: 30000,
               },
             ],
           },
-        },
-        null,
-        2,
-      ),
-    );
-    console.log("Created hooks/hooks.json for Claude Code");
+        ],
+      },
+    };
+    writeFileSync(settingsLocalPath, JSON.stringify(settings, null, 2) + "\n");
+    console.log("Installed hooks in .claude/settings.local.json");
   }
 
   console.log("\nADIT initialized successfully!");

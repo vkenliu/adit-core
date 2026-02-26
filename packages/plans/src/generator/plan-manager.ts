@@ -5,7 +5,7 @@
  * as records in the database for timeline linking and cloud sync.
  */
 
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type Database from "better-sqlite3";
 import {

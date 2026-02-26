@@ -14,7 +14,6 @@ import {
   allocateSequence,
   getEventById,
   queryEvents,
-  updateEventStatus,
   updateEventCheckpoint,
   updateEventLabels,
   searchEvents,
@@ -30,7 +29,7 @@ import {
 } from "@adit/core";
 import { createSnapshot, getCheckpointDiff } from "../snapshot/creator.js";
 import { getHeadSha, getCurrentBranch } from "../git/runner.js";
-import { storeCheckpointRef, getRefPrefix } from "../git/refs.js";
+import { getRefPrefix } from "../git/refs.js";
 import { runGitOrThrow } from "../git/runner.js";
 
 export interface TimelineManager {
