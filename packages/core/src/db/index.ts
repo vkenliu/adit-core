@@ -49,3 +49,10 @@ export {
   listEnvSnapshots,
   type CreateEnvSnapshotInput,
 } from "./env-snapshots.js";
+
+export {
+  getSyncState,
+  upsertSyncState,
+  clearSyncState,
+  type SyncState,
+} from "./sync-state.js";

@@ -14,6 +14,9 @@ importers:
 
   packages/cli:
     dependencies:
+      '@adit/cloud':
+        specifier: workspace:*
+        version: link:../cloud
       '@adit/core':
         specifier: workspace:*
         version: link:../core
@@ -45,6 +48,22 @@ importers:
       '@types/react':
         specifier: ^18.3.28
         version: 18.3.28
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+
+  packages/cloud:
+    dependencies:
+      '@adit/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^7.6.13
+        version: 7.6.13
+      better-sqlite3:
+        specifier: ^12.6.2
+        version: 12.6.2
       typescript:
         specifier: ^5.7.2
         version: 5.9.3

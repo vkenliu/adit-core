@@ -1,0 +1,307 @@
+/**
+ * `adit cloud` — Cloud sync commands.
+ *
+ * Subcommands:
+ *   login   — Authenticate via device code flow
+ *   logout  — Clear stored credentials
+ *   sync    — Push unsynced records to cloud
+ *   status  — Show sync state and unsynced count
+ */
+
+import { loadConfig, openDatabase, closeDatabase } from "@adit/core";
+import {
+  loadCloudConfig,
+  loadCredentials,
+  saveCredentials,
+  clearCredentials,
+  isTokenExpired,
+  requestDeviceCode,
+  pollForToken,
+  CloudClient,
+  SyncEngine,
+  countUnsyncedRecords,
+  CloudAuthError,
+  CloudNetworkError,
+  CloudApiError,
+} from "@adit/cloud";
+import type { DeviceAuthOptions } from "@adit/cloud";
+import { createHash } from "node:crypto";
+import { hostname } from "node:os";
+
+const DEFAULT_SERVER_URL = "https://cloud.adit.dev";
+
+/**
+ * `adit cloud login` — Interactive device authorization flow.
+ */
+export async function cloudLoginCommand(opts?: {
+  server?: string;
+}): Promise<void> {
+  const serverUrl = opts?.server ?? process.env.ADIT_CLOUD_URL ?? DEFAULT_SERVER_URL;
+  const config = loadConfig();
+
+  console.log(`Connecting to ${serverUrl}...`);
+  console.log();
+
+  // Build machine identifier (deterministic per-machine)
+  const machineId = createHash("sha256")
+    .update(`${hostname()}-${config.clientId}`)
+    .digest("hex")
+    .substring(0, 32);
+
+  const authOptions: DeviceAuthOptions = {
+    machineId,
+    platform: `${process.platform}-${process.arch}`,
+    aditVersion: "0.2.0",
+    displayName: hostname(),
+  };
+
+  try {
+    // Step 1: Request device code
+    const deviceCode = await requestDeviceCode(serverUrl, authOptions);
+
+    console.log("To authenticate, open this URL in your browser:");
+    console.log(`  ${deviceCode.verificationUrl}`);
+    console.log();
+    console.log(`Then enter this code: ${deviceCode.userCode}`);
+    console.log();
+    console.log("Waiting for approval... (press Ctrl+C to cancel)");
+
+    // Step 2: Poll for approval
+    const tokenResponse = await pollForToken(
+      serverUrl,
+      deviceCode.deviceCode,
+    );
+
+    // Step 3: Save credentials
+    const expiresAt = new Date(
+      Date.now() + 60 * 60 * 1000, // 1 hour from now
+    ).toISOString();
+
+    saveCredentials({
+      accessToken: tokenResponse.accessToken,
+      refreshToken: tokenResponse.refreshToken,
+      clientId: tokenResponse.clientId,
+      expiresAt: tokenResponse.expiresAt ?? expiresAt,
+      serverUrl,
+    });
+
+    console.log();
+    console.log("Authenticated successfully.");
+    console.log(`Client ID: ${tokenResponse.clientId}`);
+    console.log("Credentials saved to ~/.adit/cloud-credentials.json");
+  } catch (error) {
+    if (error instanceof CloudApiError) {
+      console.error(`Login failed: ${error.message}`);
+    } else if (error instanceof CloudNetworkError) {
+      console.error(`Cannot reach ${serverUrl}: ${error.message}`);
+    } else {
+      console.error(
+        `Login failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    process.exitCode = 1;
+  }
+}
+
+/**
+ * `adit cloud logout` — Clear stored credentials.
+ */
+export async function cloudLogoutCommand(): Promise<void> {
+  const credentials = loadCredentials();
+
+  if (!credentials) {
+    console.log("Not logged in to any cloud server.");
+    return;
+  }
+
+  // Try to revoke the refresh token on the server
+  try {
+    const client = new CloudClient(credentials.serverUrl, credentials);
+    await client.post("/api/auth/token/revoke", {
+      refreshToken: credentials.refreshToken,
+    });
+  } catch {
+    // Best-effort revocation — don't block logout on network errors
+  }
+
+  // Clear local sync state
+  const config = loadConfig();
+  try {
+    const db = openDatabase(config.dbPath);
+    try {
+      const { clearSyncState } = await import("@adit/core");
+      clearSyncState(db, credentials.serverUrl);
+    } finally {
+      closeDatabase(db);
+    }
+  } catch {
+    // Database may not exist
+  }
+
+  clearCredentials();
+  console.log("Logged out. Credentials cleared.");
+}
+
+/**
+ * `adit cloud sync` — Push unsynced records to cloud.
+ */
+export async function cloudSyncCommand(opts?: {
+  json?: boolean;
+}): Promise<void> {
+  const cloudConfig = loadCloudConfig();
+  const credentials = loadCredentials();
+
+  if (!credentials) {
+    const msg = "Not logged in. Run 'adit cloud login' first.";
+    if (opts?.json) {
+      console.log(JSON.stringify({ error: msg }));
+    } else {
+      console.error(msg);
+    }
+    process.exitCode = 1;
+    return;
+  }
+
+  const serverUrl = cloudConfig.serverUrl ?? credentials.serverUrl;
+  const config = loadConfig();
+
+  if (!opts?.json) {
+    console.log(`Syncing with ${serverUrl}...`);
+  }
+
+  const db = openDatabase(config.dbPath);
+  try {
+    const client = new CloudClient(serverUrl, credentials);
+    const engine = new SyncEngine(db, client, {
+      projectId: config.projectId,
+      batchSize: cloudConfig.batchSize,
+      serverUrl,
+      cloudClientId: credentials.clientId,
+    });
+
+    const result = await engine.sync();
+
+    if (opts?.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      if (result.batches === 0) {
+        console.log("Already up to date. No records to sync.");
+      } else {
+        console.log(
+          `Sync complete: ${result.accepted} accepted, ${result.duplicates} duplicates, ${result.conflicts.length} conflicts (${result.batches} batch${result.batches !== 1 ? "es" : ""})`,
+        );
+      }
+    }
+  } catch (error) {
+    const msg =
+      error instanceof CloudAuthError
+        ? `Authentication failed: ${error.message}. Run 'adit cloud login' to re-authenticate.`
+        : error instanceof CloudNetworkError
+          ? `Network error: ${error.message}`
+          : `Sync failed: ${error instanceof Error ? error.message : String(error)}`;
+
+    if (opts?.json) {
+      console.log(JSON.stringify({ error: msg }));
+    } else {
+      console.error(msg);
+    }
+    process.exitCode = 1;
+  } finally {
+    closeDatabase(db);
+  }
+}
+
+/**
+ * `adit cloud status` — Show sync state and unsynced record count.
+ */
+export async function cloudStatusCommand(opts?: {
+  json?: boolean;
+}): Promise<void> {
+  const cloudConfig = loadCloudConfig();
+  const credentials = loadCredentials();
+  const config = loadConfig();
+
+  const status: Record<string, unknown> = {
+    serverUrl: cloudConfig.serverUrl,
+    enabled: cloudConfig.enabled,
+    autoSync: cloudConfig.autoSync,
+    loggedIn: credentials !== null,
+  };
+
+  if (credentials) {
+    status.clientId = credentials.clientId;
+    status.tokenExpired = isTokenExpired(credentials);
+  }
+
+  // Count unsynced records
+  try {
+    const db = openDatabase(config.dbPath);
+    try {
+      const { getSyncState } = await import("@adit/core");
+      const syncState = getSyncState(
+        db,
+        cloudConfig.serverUrl ?? credentials?.serverUrl ?? "",
+      );
+
+      status.syncState = syncState
+        ? {
+            lastSyncedEventId: syncState.lastSyncedEventId,
+            lastSyncedAt: syncState.lastSyncedAt,
+            syncVersion: syncState.syncVersion,
+          }
+        : null;
+
+      const unsyncedCount = countUnsyncedRecords(
+        db,
+        syncState?.lastSyncedEventId ?? null,
+        syncState?.lastSyncedAt ?? null,
+        config.projectId,
+      );
+      status.unsyncedRecords = unsyncedCount;
+    } finally {
+      closeDatabase(db);
+    }
+  } catch {
+    status.unsyncedRecords = "unknown";
+  }
+
+  if (opts?.json) {
+    console.log(JSON.stringify(status, null, 2));
+    return;
+  }
+
+  console.log("Cloud Sync Status");
+  console.log("==================");
+  console.log();
+  console.log(`Server:       ${cloudConfig.serverUrl ?? "(not configured)"}`);
+  console.log(`Enabled:      ${cloudConfig.enabled ? "yes" : "no"}`);
+  console.log(`Auto-sync:    ${cloudConfig.autoSync ? "yes" : "no"}`);
+  console.log(`Logged in:    ${credentials ? "yes" : "no"}`);
+
+  if (credentials) {
+    console.log(`Client ID:    ${credentials.clientId}`);
+    console.log(
+      `Token:        ${isTokenExpired(credentials) ? "expired" : "valid"}`,
+    );
+  }
+
+  const syncState = status.syncState as {
+    lastSyncedEventId: string | null;
+    lastSyncedAt: string | null;
+    syncVersion: number;
+  } | null;
+
+  if (syncState) {
+    console.log(
+      `Last sync:    ${syncState.lastSyncedAt ?? "never"}`,
+    );
+    console.log(
+      `Cursor:       ${syncState.lastSyncedEventId?.substring(0, 10) ?? "none"}...`,
+    );
+    console.log(`Sync version: ${syncState.syncVersion}`);
+  } else {
+    console.log("Last sync:    never");
+  }
+
+  console.log(`Unsynced:     ${status.unsyncedRecords} records`);
+}

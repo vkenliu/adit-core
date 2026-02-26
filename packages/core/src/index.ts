@@ -64,6 +64,9 @@ export {
   getEnvSnapshotById,
   getLatestEnvSnapshot,
   listEnvSnapshots,
+  getSyncState,
+  upsertSyncState,
+  clearSyncState,
 } from "./db/index.js";
 
 export type {
@@ -73,6 +76,7 @@ export type {
   DiffRecord,
   CreatePlanInput,
   CreateEnvSnapshotInput,
+  SyncState,
 } from "./db/index.js";
 
 // Config
