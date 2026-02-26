@@ -17,7 +17,7 @@ import {
   closeDatabase,
   queryEvents,
 } from "@adit/core";
-import { isGitRepo, listCheckpointRefs, resolveCheckpointRef } from "@adit/engine";
+import { isGitRepo, listCheckpointRefs } from "@adit/engine";
 
 interface Check {
   name: string;
@@ -47,11 +47,9 @@ export async function doctorCommand(): Promise<void> {
 
   // 3. Database
   let dbOk = false;
-  let eventCount = 0;
   try {
     const db = openDatabase(config.dbPath);
-    const events = queryEvents(db, { limit: 1 });
-    eventCount = events.length;
+    queryEvents(db, { limit: 1 });
     dbOk = true;
     closeDatabase(db);
   } catch (e) {
@@ -63,13 +61,31 @@ export async function doctorCommand(): Promise<void> {
     detail: dbOk ? `${config.dbPath} (accessible)` : "Cannot open database",
   });
 
-  // 4. Hooks
-  const hooksPath = join(config.projectRoot, "hooks", "hooks.json");
-  const hooksOk = existsSync(hooksPath);
+  // 4. Hooks — check .claude/settings.local.json or .claude/settings.json
+  const settingsLocalPath = join(config.projectRoot, ".claude", "settings.local.json");
+  const settingsPath = join(config.projectRoot, ".claude", "settings.json");
+  let hooksOk = false;
+  let hooksDetail = "No hooks found in .claude/settings.local.json or .claude/settings.json";
+  for (const p of [settingsLocalPath, settingsPath]) {
+    if (existsSync(p)) {
+      try {
+        const content = JSON.parse(
+          await import("node:fs").then((fs) => fs.readFileSync(p, "utf-8")),
+        );
+        if (content.hooks) {
+          hooksOk = true;
+          hooksDetail = p;
+          break;
+        }
+      } catch {
+        // ignore parse errors
+      }
+    }
+  }
   checks.push({
     name: "Hooks config",
     ok: hooksOk,
-    detail: hooksOk ? hooksPath : "No hooks.json found",
+    detail: hooksOk ? hooksDetail : hooksDetail,
   });
 
   // 5. Checkpoint refs integrity

@@ -8,14 +8,12 @@
  * 4. Records the prompt_submit event
  */
 
-import { generateId, createClock, serialize, allocateSequence, insertEvent } from "@adit/core";
 import { hasUncommittedChanges, getChangedFiles, createTimelineManager } from "@adit/engine";
 import { initHookContext, readStdin } from "../common/context.js";
 
 export async function handlePromptSubmit(): Promise<void> {
   const input = await readStdin();
 
-  const sessionId = input.session_id as string | undefined;
   const cwd = (input.cwd as string) ?? process.cwd();
   const prompt = input.prompt as string | undefined;
 

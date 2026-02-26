@@ -1,0 +1,367 @@
+#!/usr/bin/env bash
+# ────────────────────────────────────────────────────────────────────
+#  ADIT Core — install.sh
+#  Detects the system environment, installs required runtimes and
+#  libraries, builds the project, and registers the `adit` and
+#  `adit-hook` commands.
+# ────────────────────────────────────────────────────────────────────
+set -euo pipefail
+
+# ── Colours / helpers ───────────────────────────────────────────────
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m' # No Colour
+
+info()  { printf "${CYAN}[info]${NC}  %s\n" "$*"; }
+ok()    { printf "${GREEN}[ok]${NC}    %s\n" "$*"; }
+warn()  { printf "${YELLOW}[warn]${NC}  %s\n" "$*"; }
+err()   { printf "${RED}[error]${NC} %s\n" "$*" >&2; }
+die()   { err "$*"; exit 1; }
+
+# ── Constants ───────────────────────────────────────────────────────
+REQUIRED_NODE_MAJOR=20
+REQUIRED_PNPM_MAJOR=9
+
+# Resolve the directory where this script lives (= project root)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# ── OS / distro detection ──────────────────────────────────────────
+detect_platform() {
+  OS="$(uname -s)"
+  ARCH="$(uname -m)"
+
+  case "$OS" in
+    Darwin) PLATFORM=macos ;;
+    Linux)  PLATFORM=linux ;;
+    *)      die "Unsupported operating system: $OS" ;;
+  esac
+
+  DISTRO=""
+  PKG_MANAGER=""
+  if [[ "$PLATFORM" == "linux" ]]; then
+    if   command -v apt-get &>/dev/null; then DISTRO=debian; PKG_MANAGER=apt;
+    elif command -v dnf     &>/dev/null; then DISTRO=fedora; PKG_MANAGER=dnf;
+    elif command -v yum     &>/dev/null; then DISTRO=rhel;   PKG_MANAGER=yum;
+    elif command -v pacman  &>/dev/null; then DISTRO=arch;   PKG_MANAGER=pacman;
+    elif command -v apk     &>/dev/null; then DISTRO=alpine; PKG_MANAGER=apk;
+    elif command -v zypper  &>/dev/null; then DISTRO=suse;   PKG_MANAGER=zypper;
+    else warn "Unknown Linux distribution — will attempt best-effort install"; fi
+  fi
+
+  printf "\n${BOLD}System detected${NC}\n"
+  printf "  OS:           %s\n" "$OS"
+  printf "  Arch:         %s\n" "$ARCH"
+  printf "  Platform:     %s\n" "$PLATFORM"
+  [[ -n "$DISTRO" ]] && printf "  Distro:       %s\n" "$DISTRO"
+  [[ -n "$PKG_MANAGER" ]] && printf "  Pkg manager:  %s\n" "$PKG_MANAGER"
+  echo
+}
+
+# ── Helper: version comparison ──────────────────────────────────────
+# Returns 0 if $1 >= $2 (major-version comparison)
+version_ge() {
+  local have="$1" need="$2"
+  [[ "$have" -ge "$need" ]] 2>/dev/null
+}
+
+# ── Git ─────────────────────────────────────────────────────────────
+ensure_git() {
+  if command -v git &>/dev/null; then
+    ok "git $(git --version | awk '{print $3}') found"
+    return
+  fi
+  info "Installing git …"
+  case "$PLATFORM" in
+    macos)
+      # Xcode CLI tools include git
+      xcode-select --install 2>/dev/null || true
+      ;;
+    linux)
+      case "$PKG_MANAGER" in
+        apt)    sudo apt-get update -qq && sudo apt-get install -y -qq git ;;
+        dnf)    sudo dnf install -y git ;;
+        yum)    sudo yum install -y git ;;
+        pacman) sudo pacman -Sy --noconfirm git ;;
+        apk)    sudo apk add --no-cache git ;;
+        zypper) sudo zypper install -y git ;;
+        *)      die "Cannot install git — unknown package manager" ;;
+      esac
+      ;;
+  esac
+  command -v git &>/dev/null || die "git installation failed"
+  ok "git installed"
+}
+
+# ── Build tools (for better-sqlite3 native addon) ──────────────────
+ensure_build_tools() {
+  info "Checking build tools for native modules …"
+  case "$PLATFORM" in
+    macos)
+      if xcode-select -p &>/dev/null; then
+        ok "Xcode Command Line Tools found"
+      else
+        info "Installing Xcode Command Line Tools …"
+        xcode-select --install 2>/dev/null || true
+        warn "A dialog may have appeared — please complete the install, then re-run this script"
+        exit 1
+      fi
+      ;;
+    linux)
+      local missing=()
+      command -v python3 &>/dev/null || missing+=(python3)
+      command -v make    &>/dev/null || missing+=(make)
+      command -v g++     &>/dev/null || command -v c++ &>/dev/null || missing+=(g++)
+
+      if [[ ${#missing[@]} -eq 0 ]]; then
+        ok "Build tools found (python3, make, g++)"
+        return
+      fi
+
+      info "Installing build tools: ${missing[*]} …"
+      case "$PKG_MANAGER" in
+        apt)
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq python3 make g++
+          ;;
+        dnf)    sudo dnf install -y python3 make gcc-c++ ;;
+        yum)    sudo yum install -y python3 make gcc-c++ ;;
+        pacman) sudo pacman -Sy --noconfirm python make gcc ;;
+        apk)    sudo apk add --no-cache python3 make g++ ;;
+        zypper) sudo zypper install -y python3 make gcc-c++ ;;
+        *)      warn "Please install python3, make, and g++ manually" ;;
+      esac
+      ok "Build tools installed"
+      ;;
+  esac
+}
+
+# ── Node.js ─────────────────────────────────────────────────────────
+ensure_node() {
+  if command -v node &>/dev/null; then
+    local node_ver
+    node_ver="$(node -v | sed 's/^v//')"
+    local node_major="${node_ver%%.*}"
+    if version_ge "$node_major" "$REQUIRED_NODE_MAJOR"; then
+      ok "Node.js v${node_ver} found (>= ${REQUIRED_NODE_MAJOR} required)"
+      return
+    else
+      warn "Node.js v${node_ver} found but >= ${REQUIRED_NODE_MAJOR} is required"
+    fi
+  fi
+
+  info "Installing Node.js >= ${REQUIRED_NODE_MAJOR} …"
+
+  # Prefer fnm if available, else nvm, else system package manager
+  if command -v fnm &>/dev/null; then
+    info "Using fnm …"
+    fnm install "$REQUIRED_NODE_MAJOR" && fnm use "$REQUIRED_NODE_MAJOR"
+  elif command -v nvm &>/dev/null || [[ -s "$HOME/.nvm/nvm.sh" ]]; then
+    info "Using nvm …"
+    # shellcheck disable=SC1091
+    [[ -s "$HOME/.nvm/nvm.sh" ]] && source "$HOME/.nvm/nvm.sh"
+    nvm install "$REQUIRED_NODE_MAJOR" && nvm use "$REQUIRED_NODE_MAJOR"
+  else
+    # Install via platform package manager or NodeSource
+    case "$PLATFORM" in
+      macos)
+        if command -v brew &>/dev/null; then
+          brew install "node@${REQUIRED_NODE_MAJOR}"
+          brew link --overwrite "node@${REQUIRED_NODE_MAJOR}" 2>/dev/null || true
+        else
+          die "Please install Homebrew (https://brew.sh) or Node.js >= ${REQUIRED_NODE_MAJOR} manually"
+        fi
+        ;;
+      linux)
+        case "$PKG_MANAGER" in
+          apt)
+            info "Setting up NodeSource repository …"
+            curl -fsSL "https://deb.nodesource.com/setup_${REQUIRED_NODE_MAJOR}.x" | sudo -E bash -
+            sudo apt-get install -y -qq nodejs
+            ;;
+          dnf)
+            curl -fsSL "https://rpm.nodesource.com/setup_${REQUIRED_NODE_MAJOR}.x" | sudo -E bash -
+            sudo dnf install -y nodejs
+            ;;
+          yum)
+            curl -fsSL "https://rpm.nodesource.com/setup_${REQUIRED_NODE_MAJOR}.x" | sudo -E bash -
+            sudo yum install -y nodejs
+            ;;
+          pacman) sudo pacman -Sy --noconfirm nodejs npm ;;
+          apk)    sudo apk add --no-cache "nodejs~=${REQUIRED_NODE_MAJOR}" npm ;;
+          zypper)
+            curl -fsSL "https://rpm.nodesource.com/setup_${REQUIRED_NODE_MAJOR}.x" | sudo -E bash -
+            sudo zypper install -y nodejs
+            ;;
+          *)
+            die "Cannot auto-install Node.js — please install Node.js >= ${REQUIRED_NODE_MAJOR} manually"
+            ;;
+        esac
+        ;;
+    esac
+  fi
+
+  command -v node &>/dev/null || die "Node.js installation failed"
+  local final_ver
+  final_ver="$(node -v | sed 's/^v//')"
+  local final_major="${final_ver%%.*}"
+  version_ge "$final_major" "$REQUIRED_NODE_MAJOR" || die "Node.js v${final_ver} is below the required v${REQUIRED_NODE_MAJOR}"
+  ok "Node.js v${final_ver} ready"
+}
+
+# ── pnpm ────────────────────────────────────────────────────────────
+ensure_pnpm() {
+  if command -v pnpm &>/dev/null; then
+    local pnpm_ver
+    pnpm_ver="$(pnpm -v)"
+    local pnpm_major="${pnpm_ver%%.*}"
+    if version_ge "$pnpm_major" "$REQUIRED_PNPM_MAJOR"; then
+      ok "pnpm v${pnpm_ver} found (>= ${REQUIRED_PNPM_MAJOR} required)"
+      return
+    else
+      warn "pnpm v${pnpm_ver} found but >= ${REQUIRED_PNPM_MAJOR} is required"
+    fi
+  fi
+
+  info "Installing pnpm …"
+  if command -v corepack &>/dev/null; then
+    corepack enable
+    corepack prepare "pnpm@latest" --activate
+  else
+    npm install -g pnpm
+  fi
+
+  command -v pnpm &>/dev/null || die "pnpm installation failed"
+  local final_ver
+  final_ver="$(pnpm -v)"
+  ok "pnpm v${final_ver} ready"
+}
+
+# ── Install dependencies ───────────────────────────────────────────
+install_deps() {
+  info "Installing project dependencies …"
+  cd "$SCRIPT_DIR"
+  pnpm install --frozen-lockfile 2>/dev/null || pnpm install
+  ok "Dependencies installed"
+}
+
+# ── Build ───────────────────────────────────────────────────────────
+build_project() {
+  info "Building all packages …"
+  cd "$SCRIPT_DIR"
+  pnpm build
+  ok "Build complete"
+}
+
+# ── Register commands ───────────────────────────────────────────────
+register_commands() {
+  info "Registering adit and adit-hook commands …"
+  cd "$SCRIPT_DIR"
+
+  # Determine a bin directory on the user's PATH
+  local bin_dir=""
+  if [[ -d "$HOME/.local/bin" ]] && echo "$PATH" | tr ':' '\n' | grep -q "$HOME/.local/bin"; then
+    bin_dir="$HOME/.local/bin"
+  elif [[ -d "$HOME/.local/bin" ]]; then
+    bin_dir="$HOME/.local/bin"
+  else
+    bin_dir="$HOME/.local/bin"
+    mkdir -p "$bin_dir"
+  fi
+
+  # Resolve absolute paths to the built entry points
+  local adit_bin="$SCRIPT_DIR/packages/cli/dist/index.js"
+  local hook_bin="$SCRIPT_DIR/packages/hooks/dist/index.js"
+
+  # Verify the built files exist
+  [[ -f "$adit_bin" ]] || die "CLI entry point not found at $adit_bin — build may have failed"
+  [[ -f "$hook_bin" ]] || die "Hook entry point not found at $hook_bin — build may have failed"
+
+  # Ensure they are executable
+  chmod +x "$adit_bin"
+  chmod +x "$hook_bin"
+
+  # Create wrapper scripts (avoids symlink issues with Node ESM resolution)
+  cat > "$bin_dir/adit" <<EOF
+#!/usr/bin/env bash
+exec node "$adit_bin" "\$@"
+EOF
+  chmod +x "$bin_dir/adit"
+
+  cat > "$bin_dir/adit-hook" <<EOF
+#!/usr/bin/env bash
+exec node "$hook_bin" "\$@"
+EOF
+  chmod +x "$bin_dir/adit-hook"
+
+  ok "adit     → $bin_dir/adit"
+  ok "adit-hook → $bin_dir/adit-hook"
+
+  # Check if bin_dir is on PATH
+  if ! echo "$PATH" | tr ':' '\n' | grep -q "^${bin_dir}$"; then
+    echo
+    warn "$bin_dir is not in your PATH"
+    printf "  Add the following to your shell profile (~/.bashrc, ~/.zshrc, etc.):\n"
+    printf "    ${BOLD}export PATH=\"%s:\$PATH\"${NC}\n" "$bin_dir"
+    echo
+  fi
+}
+
+# ── Verify installation ────────────────────────────────────────────
+verify() {
+  echo
+  printf "${BOLD}Verifying installation …${NC}\n"
+  local all_ok=true
+
+  if command -v adit &>/dev/null; then
+    ok "adit command available: $(command -v adit)"
+  else
+    warn "adit command not found in PATH (you may need to restart your shell)"
+    all_ok=false
+  fi
+
+  if command -v adit-hook &>/dev/null; then
+    ok "adit-hook command available: $(command -v adit-hook)"
+  else
+    warn "adit-hook command not found in PATH (you may need to restart your shell)"
+    all_ok=false
+  fi
+
+  echo
+  if [[ "$all_ok" == "true" ]]; then
+    printf "${GREEN}${BOLD}ADIT Core installed successfully!${NC}\n"
+  else
+    printf "${YELLOW}${BOLD}ADIT Core built and registered.${NC}\n"
+    printf "Restart your shell or run:  ${BOLD}export PATH=\"\$HOME/.local/bin:\$PATH\"${NC}\n"
+  fi
+
+  echo
+  printf "Quick start:\n"
+  printf "  ${BOLD}cd <your-project>${NC}\n"
+  printf "  ${BOLD}adit init${NC}            # initialize ADIT in a git repo\n"
+  printf "  ${BOLD}adit doctor${NC}          # verify the setup\n"
+  printf "  ${BOLD}adit list${NC}            # view the timeline\n"
+  echo
+}
+
+# ── Main ────────────────────────────────────────────────────────────
+main() {
+  printf "\n${BOLD}╔══════════════════════════════════════════════╗${NC}\n"
+  printf "${BOLD}║     ADIT Core — Installer                    ║${NC}\n"
+  printf "${BOLD}║     AI Development Intent Tracker             ║${NC}\n"
+  printf "${BOLD}╚══════════════════════════════════════════════╝${NC}\n\n"
+
+  detect_platform
+  ensure_git
+  ensure_build_tools
+  ensure_node
+  ensure_pnpm
+  install_deps
+  build_project
+  register_commands
+  verify
+}
+
+main "$@"
