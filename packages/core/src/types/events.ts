@@ -19,7 +19,10 @@ export type EventType =
   | "env_snapshot" // Environment captured
   | "env_drift" // Environment changed between snapshots
   | "plan_update" // SpecFlow plan modified
-  | "task_completed"; // Agent marked a task as done
+  | "task_completed" // Agent marked a task as done
+  | "notification" // Claude Code notification fired
+  | "subagent_start" // Subagent spawned by the AI
+  | "subagent_stop"; // Subagent finished execution
 
 /** Who performed the action */
 export type Actor = "assistant" | "user" | "tool" | "system";

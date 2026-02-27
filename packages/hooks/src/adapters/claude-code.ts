@@ -24,6 +24,9 @@ const HOOK_MAPPINGS: HookMapping[] = [
   { platformEvent: "SessionStart", aditHandler: "session-start" },
   { platformEvent: "SessionEnd", aditHandler: "session-end" },
   { platformEvent: "TaskCompleted", aditHandler: "task-completed" },
+  { platformEvent: "Notification", aditHandler: "notification" },
+  { platformEvent: "SubagentStart", aditHandler: "subagent-start" },
+  { platformEvent: "SubagentStop", aditHandler: "subagent-stop" },
 ];
 
 /** Map Claude Code platform events to ADIT hook types */
@@ -34,6 +37,9 @@ const PLATFORM_TO_ADIT: Record<string, AditHookType> = {
   SessionStart: "session-start",
   SessionEnd: "session-end",
   TaskCompleted: "task-completed",
+  Notification: "notification",
+  SubagentStart: "subagent-start",
+  SubagentStop: "subagent-stop",
 };
 
 export const claudeCodeAdapter: PlatformAdapter = {
@@ -58,6 +64,13 @@ export const claudeCodeAdapter: PlatformAdapter = {
       taskDescription: raw.task_description as string | undefined,
       teammateName: raw.teammate_name as string | undefined,
       teamName: raw.team_name as string | undefined,
+      notificationMessage: raw.message as string | undefined,
+      notificationTitle: raw.title as string | undefined,
+      notificationType: raw.notification_type as string | undefined,
+      agentId: raw.agent_id as string | undefined,
+      agentType: raw.agent_type as string | undefined,
+      agentTranscriptPath: raw.agent_transcript_path as string | undefined,
+      lastAssistantMessage: raw.last_assistant_message as string | undefined,
       rawPlatformData: raw,
     };
   },
@@ -77,6 +90,9 @@ export const claudeCodeAdapter: PlatformAdapter = {
           SessionStart: makeHookEntry(`${aditBinaryPath} session-start`),
           SessionEnd: makeHookEntry(`${aditBinaryPath} session-end`),
           TaskCompleted: makeHookEntry(`${aditBinaryPath} task-completed`),
+          Notification: makeHookEntry(`${aditBinaryPath} notification`),
+          SubagentStart: makeHookEntry(`${aditBinaryPath} subagent-start`),
+          SubagentStop: makeHookEntry(`${aditBinaryPath} subagent-stop`),
         },
       },
     };

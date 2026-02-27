@@ -61,6 +61,13 @@ export interface NormalizedHookInput {
   taskDescription?: string;
   teammateName?: string;
   teamName?: string;
+  notificationMessage?: string;
+  notificationTitle?: string;
+  notificationType?: string;
+  agentId?: string;
+  agentType?: string;
+  agentTranscriptPath?: string;
+  lastAssistantMessage?: string;
   rawPlatformData?: Record<string, unknown>;
 }
 
@@ -91,4 +98,7 @@ export type AditHookType =
   | "stop"
   | "session-start"
   | "session-end"
-  | "task-completed";
+  | "task-completed"
+  | "notification"
+  | "subagent-start"
+  | "subagent-stop";
