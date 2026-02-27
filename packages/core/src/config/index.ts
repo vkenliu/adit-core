@@ -7,7 +7,7 @@
 
 import { resolve, join } from "node:path";
 import { homedir } from "node:os";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 
 export interface AditConfig {
@@ -41,6 +41,14 @@ function getClientId(): string {
     .update(`${homedir()}-${process.pid}-${Date.now()}`)
     .digest("hex")
     .substring(0, 16);
+
+  // Persist so every process on this machine gets the same client ID
+  try {
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(idFile, id, "utf-8");
+  } catch {
+    // Best-effort — if we can't write, the ID still works for this process
+  }
 
   return id;
 }

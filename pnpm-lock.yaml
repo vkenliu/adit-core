@@ -102,6 +102,9 @@ importers:
 
   packages/hooks:
     dependencies:
+      '@adit/cloud':
+        specifier: workspace:*
+        version: link:../cloud
       '@adit/core':
         specifier: workspace:*
         version: link:../core

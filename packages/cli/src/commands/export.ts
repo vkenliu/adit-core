@@ -235,7 +235,7 @@ function generateMarkdownReport(
   lines.push("");
 
   for (const event of events) {
-    const time = event.startedAt.substring(11, 19);
+    const time = event.startedAt.substring(5, 19).replace("T", " ");
     const actor = event.actor[0].toUpperCase();
     const checkpoint = event.checkpointSha ? " [checkpoint]" : "";
     lines.push(`### ${time} [${actor}] ${event.eventType}${checkpoint}`);

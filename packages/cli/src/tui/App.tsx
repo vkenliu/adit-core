@@ -28,7 +28,7 @@ export function App(): React.ReactElement {
   const [envSnapshot, setEnvSnapshot] = useState<EnvSnapshot | null>(null);
   const [sortField, setSortField] = useState<SortField>("TIME");
 
-  const SORT_CYCLE: SortField[] = ["TIME", "SEQ", "ACTOR"];
+  const SORT_CYCLE: SortField[] = ["TIME", "ACTOR"];
 
   const {
     state,
@@ -197,7 +197,7 @@ export function App(): React.ReactElement {
     case "diff":
       content = (
         <DiffScreen
-          event={state.selectedEvent ?? selectedEvent}
+          event={selectedEvent}
           getDiff={getEventDiff}
         />
       );
@@ -222,15 +222,14 @@ export function App(): React.ReactElement {
         <Box flexDirection="column" paddingX={1}>
           <Text bold>Keybindings</Text>
           <Text dimColor>{"─".repeat(30)}</Text>
-          <Text>j/k or ↑/↓{"   "}Navigate events</Text>
-          <Text>Enter{"        "}Expand event detail</Text>
+          <Text>j/k or ↑/↓{"   "}Navigate events (detail updates live)</Text>
           <Text>d{"            "}Show diff for checkpoint</Text>
           <Text>p{"            "}Show prompt text</Text>
           <Text>e{"            "}Show environment snapshot</Text>
           <Text>l{"            "}Add label</Text>
           <Text>/{"            "}Open search</Text>
           <Text>f{"            "}Toggle filter panel</Text>
-          <Text>s{"            "}Cycle sort (TIME→SEQ→ACTOR)</Text>
+          <Text>s{"            "}Cycle sort (TIME→ACTOR)</Text>
           <Text>Esc / b{"      "}Go back</Text>
           <Text>q{"            "}Quit</Text>
           <Text>?{"            "}Toggle this help</Text>
@@ -247,7 +246,7 @@ export function App(): React.ReactElement {
         <TimelineScreen
           events={events}
           selectedIndex={safeIndex}
-          selectedEvent={state.selectedEvent ?? selectedEvent}
+          selectedEvent={selectedEvent}
           filters={filters}
           showFilters={showFilters}
           sortField={sortField}

@@ -51,6 +51,8 @@ export interface AditSession {
   metadataJson: string | null;
   /** Vector clock for sync */
   vclockJson: string;
+  /** Platform-provided session ID (e.g., Claude Code session_id) */
+  platformSessionId?: string | null;
   /** Soft delete timestamp */
   deletedAt: string | null;
 }

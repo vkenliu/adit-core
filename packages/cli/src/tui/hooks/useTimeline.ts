@@ -49,7 +49,7 @@ export interface UseTimelineResult {
 }
 
 const POLL_INTERVAL = 2000;
-const DEFAULT_LIMIT = 50;
+const DEFAULT_LIMIT = 200;
 
 export function useTimeline(): UseTimelineResult {
   const [state, setState] = useState<TimelineState>({
@@ -86,7 +86,6 @@ export function useTimeline(): UseTimelineResult {
         events = searchEvents(db, filters.searchQuery, DEFAULT_LIMIT);
       } else {
         events = queryEvents(db, {
-          sessionId: session?.id,
           eventType: filters.eventType,
           actor: filters.actor,
           hasCheckpoint: filters.hasCheckpoint,

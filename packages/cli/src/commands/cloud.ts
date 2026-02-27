@@ -250,6 +250,31 @@ export async function cloudStatusCommand(opts?: {
     status.tokenExpired = isTokenExpired(credentials);
   }
 
+  // Check server reachability
+  const serverUrl = cloudConfig.serverUrl ?? credentials?.serverUrl;
+  if (serverUrl && credentials) {
+    try {
+      const client = new CloudClient(serverUrl, credentials);
+      const remoteStatus = await client.get<{
+        lastSyncedEventId: string | null;
+        syncVersion: number;
+        lastSyncedAt: string | null;
+      }>("/api/sync/status");
+      status.serverOnline = true;
+      status.remoteStatus = remoteStatus;
+    } catch (error) {
+      status.serverOnline = false;
+      status.serverError =
+        error instanceof CloudNetworkError
+          ? `unreachable — ${error.cause?.message ?? error.message}`
+          : error instanceof CloudAuthError
+            ? `auth failed — ${error.message}`
+            : error instanceof CloudApiError
+              ? `server error — ${error.status} ${error.message}`
+              : `error — ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
   // Count unsynced records
   try {
     const db = openDatabase(config.dbPath);
@@ -302,6 +327,13 @@ export async function cloudStatusCommand(opts?: {
     );
   }
 
+  // Server reachability
+  if (status.serverOnline === true) {
+    console.log(`Server:       \x1b[32monline\x1b[0m`);
+  } else if (status.serverOnline === false) {
+    console.log(`Server:       \x1b[31moffline\x1b[0m (${status.serverError})`);
+  }
+
   const syncState = status.syncState as {
     lastSyncedEventId: string | null;
     lastSyncedAt: string | null;
@@ -313,14 +345,48 @@ export async function cloudStatusCommand(opts?: {
       `Last sync:    ${syncState.lastSyncedAt ?? "never"}`,
     );
     console.log(
-      `Cursor:       ${syncState.lastSyncedEventId?.substring(0, 10) ?? "none"}...`,
+      `Cursor:       ${syncState.lastSyncedEventId ?? "none"}`,
     );
     console.log(`Sync version: ${syncState.syncVersion}`);
   } else {
     console.log("Last sync:    never");
   }
 
+  // Show remote cursor comparison when server is online
+  const remoteStatus = status.remoteStatus as {
+    lastSyncedEventId: string | null;
+    syncVersion: number;
+    lastSyncedAt: string | null;
+  } | undefined;
+  if (remoteStatus) {
+    const localCursor = syncState?.lastSyncedEventId ?? null;
+    const remoteCursor = remoteStatus.lastSyncedEventId;
+    if (localCursor !== remoteCursor) {
+      console.log(
+        `Remote cursor: ${remoteCursor ?? "none"} (differs from local)`,
+      );
+    }
+  }
+
   console.log(`Unsynced:     ${status.unsyncedRecords} records`);
+
+  // Actionable hints
+  if (status.serverOnline === false) {
+    console.log();
+    console.log(
+      "The cloud server is not reachable. Auto-sync will resume when the server is back online.",
+    );
+    console.log("To retry manually: adit cloud sync");
+  } else if (
+    status.serverOnline === true &&
+    typeof status.unsyncedRecords === "number" &&
+    status.unsyncedRecords > 0
+  ) {
+    console.log();
+    console.log(
+      `${status.unsyncedRecords} records pending. Run 'adit cloud sync' to push now.`,
+    );
+  }
 }
 
 /**

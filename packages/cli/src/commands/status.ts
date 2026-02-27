@@ -15,6 +15,7 @@ import {
   countEvents,
   queryEvents,
   getLatestCheckpointEvent,
+  getSyncState,
   findGitRoot,
 } from "@adit/core";
 import {
@@ -109,6 +110,30 @@ export async function statusCommand(opts?: { json?: boolean }): Promise<void> {
       checkpoints: checkpointEvents.length,
     };
 
+    // Unsynced events — count events after the last sync cursor.
+    // Resolve server URL the same way auto-sync does: env var → credentials.
+    let syncServerUrl = process.env.ADIT_CLOUD_URL ?? null;
+    if (!syncServerUrl) {
+      try {
+        const { loadCredentials } = await import("@adit/cloud");
+        syncServerUrl = loadCredentials()?.serverUrl ?? null;
+      } catch {
+        // @adit/cloud not available
+      }
+    }
+    const syncState = getSyncState(db, syncServerUrl ?? "");
+    if (syncState?.lastSyncedEventId) {
+      const row = db.prepare(
+        `SELECT COUNT(*) as cnt FROM events e
+         JOIN sessions s ON e.session_id = s.id
+         WHERE e.id > ? AND s.project_id = ?`,
+      ).get(syncState.lastSyncedEventId, config.projectId) as { cnt: number };
+      (status.events as Record<string, unknown>).unsynced = row.cnt;
+    } else {
+      // Never synced — all events are unsynced
+      (status.events as Record<string, unknown>).unsynced = totalEvents;
+    }
+
     // Latest checkpoint
     const latest = getLatestCheckpointEvent(db);
     status.latestCheckpoint = latest
@@ -150,7 +175,7 @@ export async function statusCommand(opts?: { json?: boolean }): Promise<void> {
     platform: string;
     startedAt: string;
   } | null;
-  const events = status.events as { total: number; checkpoints: number };
+  const events = status.events as { total: number; checkpoints: number; unsynced: number };
   const latestCp = status.latestCheckpoint as {
     eventId: string;
     sha: string;
@@ -181,7 +206,7 @@ export async function statusCommand(opts?: { json?: boolean }): Promise<void> {
   }
 
   // Events
-  console.log(`Events:       ${events.total} total, ${events.checkpoints} checkpoints`);
+  console.log(`Events:       ${events.total} total, ${events.checkpoints} checkpoints, ${events.unsynced} unsynced`);
 
   // Latest checkpoint
   if (latestCp) {

@@ -211,4 +211,14 @@ export const migrations: Migration[] = [
         ON events(started_at) WHERE deleted_at IS NULL;
     `,
   },
+  {
+    id: 10,
+    name: "add_sessions_platform_session_id",
+    sql: `
+      ALTER TABLE sessions ADD COLUMN platform_session_id TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_sessions_platform_session_id
+        ON sessions(platform_session_id) WHERE platform_session_id IS NOT NULL;
+    `,
+  },
 ];

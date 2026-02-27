@@ -5,6 +5,7 @@ export {
   insertSession,
   getSessionById,
   getActiveSession,
+  getSessionByPlatformSessionId,
   endSession,
   listSessions,
   type CreateSessionInput,
