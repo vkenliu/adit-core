@@ -17,6 +17,8 @@ export type Platform =
   | "claude-code"
   | "cursor"
   | "copilot"
+  | "opencode"
+  | "codex"
   | "other";
 
 /** Session type */

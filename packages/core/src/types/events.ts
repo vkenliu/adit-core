@@ -118,6 +118,8 @@ export interface AditEvent {
   planTaskId: string | null;
 
   // -- Sync --
+  /** Client that created this event (for multi-client provenance) */
+  clientId: string | null;
   /** Vector clock for conflict resolution */
   vclockJson: string;
   /** Soft delete timestamp */

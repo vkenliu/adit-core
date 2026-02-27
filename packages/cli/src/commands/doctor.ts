@@ -22,7 +22,7 @@ import {
   endSession,
 } from "@adit/core";
 import { isGitRepo, listCheckpointRefs, deleteCheckpointRef } from "@adit/engine";
-import { getAdapter } from "@adit/hooks/adapters";
+import { detectPlatform, getAdapter } from "@adit/hooks/adapters";
 
 interface Check {
   name: string;
@@ -161,9 +161,10 @@ export async function doctorCommand(
     fixable: orphanedRefs > 0,
   });
 
-  // 8. Claude Code settings — verify all required hooks are registered
-  const claudeAdapter = getAdapter("claude-code");
-  const requiredHooks = claudeAdapter.hookMappings.map((m) => m.platformEvent);
+  // 8. Platform hooks — verify all required hooks are registered
+  const detectedPlatform = detectPlatform();
+  const platformAdapter = getAdapter(detectedPlatform);
+  const requiredHooks = platformAdapter.hookMappings.map((m) => m.platformEvent);
   const hookSettingsLocations = [
     join(config.projectRoot, ".claude", "settings.local.json"),
     join(config.projectRoot, ".claude", "settings.json"),
@@ -171,7 +172,7 @@ export async function doctorCommand(
   ];
 
   let claudeSettingsOk = false;
-  let claudeSettingsDetail = "No Claude Code settings found";
+  let claudeSettingsDetail = `No ${platformAdapter.displayName} settings found`;
   const missingHooks: string[] = [];
 
   for (const hookSettingsPath of hookSettingsLocations) {
@@ -216,7 +217,7 @@ export async function doctorCommand(
   }
 
   checks.push({
-    name: "Claude Code settings",
+    name: `${platformAdapter.displayName} settings`,
     ok: claudeSettingsOk,
     detail: claudeSettingsDetail,
     fixable: !claudeSettingsOk,
@@ -294,10 +295,8 @@ export async function doctorCommand(
     // Fix missing hooks via plugin install
     if (!hooksOk) {
       try {
-        const { getAdapter } = await import("@adit/hooks/adapters");
-        const adapter = getAdapter("claude-code");
-        await adapter.installHooks(config.projectRoot, "npx adit-hook");
-        fixes.push("Installed ADIT hooks for Claude Code");
+        await platformAdapter.installHooks(config.projectRoot, "npx adit-hook");
+        fixes.push(`Installed ADIT hooks for ${platformAdapter.displayName}`);
       } catch {
         // ignore
       }

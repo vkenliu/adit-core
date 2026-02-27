@@ -345,9 +345,11 @@ The adapter's `parseInput()` preserves the complete original input as `rawPlatfo
 
 **Fix:** Store `rawPlatformData` in a new column or in an existing JSON column (like `toolInputJson` for non-tool events).
 
-### 7.6 No `PreToolUse` hook — missing permission decision recording
+### ~~7.6 No `PreToolUse` hook — missing permission decision recording~~ [DEPRECATED]
 
-Claude Code's `PreToolUse` hook allows recording tool permission decisions (allow/deny/ask). ADIT doesn't capture this, losing valuable context about what the AI was permitted to do.
+~~Claude Code's `PreToolUse` hook allows recording tool permission decisions (allow/deny/ask). ADIT doesn't capture this, losing valuable context about what the AI was permitted to do.~~
+
+**Status:** Deprecated — Tool-use hooks (PreToolUse/PostToolUse) have been removed from ADIT scope.
 
 ### 7.7 Adapter interface lacks `getSessionId()` method
 
@@ -427,8 +429,8 @@ Each platform identifies sessions differently. Claude Code uses `session_id`, Cu
 |---|---|---|---|
 | 17 | Add platform stubs for Cursor, Copilot, OpenCode, Codex | `packages/hooks/src/adapters/` | M |
 | 18 | Make `adit init` platform-agnostic (delegate to adapter) | `packages/cli/src/commands/init.ts` | M |
-| 19 | Add `adit upgrade` command for hook migration | `packages/cli/src/commands/` | M |
-| 20 | Add PreToolUse hook support | `packages/hooks/` | L |
+| ~~19~~ | ~~Add `adit upgrade` command for hook migration~~ | ~~`packages/cli/src/commands/`~~ | ~~M~~ | **DELETED — Deprecated: `adit init` re-run + `adit plugin install` covers hook migration** |
+| ~~20~~ | ~~Add PreToolUse hook support~~ | ~~`packages/hooks/`~~ | ~~L~~ | **DELETED — Deprecated: Tool-use hooks removed from ADIT scope** |
 | 21 | Add `client_id` column to local events table | `packages/core/src/db/migrations.ts` | M |
 | 22 | Cache environment capture results within session | `packages/engine/src/environment/capture.ts` | M |
 | 23 | Add `started_at` index on events table | `packages/core/src/db/migrations.ts` | S |
@@ -443,9 +445,9 @@ Each platform identifies sessions differently. Claude Code uses `session_id`, Cu
 | 27 | Add runtime validation for EventType values | `packages/core/src/types/events.ts` | M |
 | 28 | Support standalone binary distribution (no npm) | Build config | L |
 | 29 | Add advisory locking for concurrent hook writes | `packages/hooks/` | L |
-| 30 | Implement `captureToolIO` setting | `packages/hooks/src/handlers/unified.ts` | S |
-| 31 | Increase stdin timeout (3s → 10s) or make configurable | `packages/hooks/src/common/context.ts` | S |
-| 32 | Add vclock NOT NULL consistency between local and cloud schemas | `packages/cloud/src/sync/serializer.ts` | S |
+| ~~30~~ | ~~Implement `captureToolIO` setting~~ | ~~`packages/hooks/src/handlers/unified.ts`~~ | ~~S~~ | **DELETED — Deprecated: `captureToolIO` removed along with tool-use hooks** |
+| ~~31~~ | ~~Increase stdin timeout (3s → 10s) or make configurable~~ | ~~`packages/hooks/src/common/context.ts`~~ | ~~S~~ | **DELETED — Deprecated: 3s timeout is adequate; Claude Code pipes stdin synchronously** |
+| ~~32~~ | ~~Add vclock NOT NULL consistency between local and cloud schemas~~ | ~~`packages/cloud/src/sync/serializer.ts`~~ | ~~S~~ | **DELETED — Deprecated: Cloud schema intentionally more permissive for forward compatibility** |
 
 **Effort Key:** S = Small (< 1 hour), M = Medium (1-4 hours), L = Large (> 4 hours)
 

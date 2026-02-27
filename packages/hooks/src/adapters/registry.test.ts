@@ -17,16 +17,39 @@ describe("Adapter Registry", () => {
     );
   });
 
-  it("lists all registered adapters", () => {
+  it("lists all registered adapters including stubs", () => {
     const adapters = listAdapters();
-    expect(adapters.length).toBeGreaterThanOrEqual(1);
+    expect(adapters.length).toBeGreaterThanOrEqual(5);
     expect(adapters.find((a) => a.platform === "claude-code")).toBeDefined();
+    expect(adapters.find((a) => a.platform === "cursor")).toBeDefined();
+    expect(adapters.find((a) => a.platform === "copilot")).toBeDefined();
+    expect(adapters.find((a) => a.platform === "opencode")).toBeDefined();
+    expect(adapters.find((a) => a.platform === "codex")).toBeDefined();
   });
 
   it("detects platform from environment", () => {
     // Default should be claude-code
     const platform = detectPlatform();
-    expect(["claude-code", "cursor", "copilot", "other"]).toContain(platform);
+    expect(["claude-code", "cursor", "copilot", "opencode", "codex", "other"]).toContain(platform);
+  });
+
+  it("returns stub adapters for unimplemented platforms", () => {
+    const cursor = getAdapter("cursor");
+    expect(cursor.displayName).toBe("Cursor");
+    expect(cursor.hookMappings).toHaveLength(0);
+
+    const opencode = getAdapter("opencode");
+    expect(opencode.displayName).toBe("OpenCode");
+
+    const codex = getAdapter("codex");
+    expect(codex.displayName).toBe("Codex");
+  });
+
+  it("stub adapters report not implemented in validation", async () => {
+    const cursor = getAdapter("cursor");
+    const result = await cursor.validateInstallation("/test");
+    expect(result.valid).toBe(false);
+    expect(result.checks[0].detail).toContain("not yet implemented");
   });
 
   it("allows registering custom adapters", () => {

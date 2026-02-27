@@ -25,6 +25,23 @@ import { getChangedFiles } from "../detector/working-tree.js";
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * Cache for slow version-detection results that rarely change within a session.
+ * Keyed by session ID, expires after 5 minutes to pick up mid-session changes.
+ */
+interface CachedVersions {
+  nodeVersion: string | null;
+  pythonVersion: string | null;
+  containerInfo: { inDocker: boolean; image?: string } | null;
+  runtimeVersions: Record<string, string> | null;
+  shellInfo: { shell: string; version?: string } | null;
+  packageManagerInfo: { name: string; version: string } | null;
+  cachedAt: number;
+}
+
+const ENV_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const versionCache = new Map<string, CachedVersions>();
+
 /** Known lockfile names and their paths */
 const LOCKFILES = [
   "package-lock.json",
@@ -61,27 +78,40 @@ export async function captureEnvironment(
   const cwd = config.projectRoot;
   const id = generateId();
 
-  // Run all version checks in parallel for speed
-  const [
-    branch,
-    headSha,
-    changes,
-    nodeVersion,
-    pythonVersion,
-    containerInfo,
-    runtimeVersions,
-    shellInfo,
-    packageManagerInfo,
-  ] = await Promise.all([
+  // Use cached version data if available and fresh (within TTL).
+  // Version detections (node, python, runtimes, shell, package manager, container)
+  // rarely change within a session, so we cache them to avoid spawning
+  // multiple child processes on every hook event.
+  const now = Date.now();
+  let cached = versionCache.get(sessionId);
+  if (!cached || now - cached.cachedAt > ENV_CACHE_TTL_MS) {
+    // Cache miss or expired — run all version detections in parallel
+    const [nodeV, pythonV, container, runtimes, shell, pkgMgr] = await Promise.all([
+      getVersion("node", ["--version"]),
+      getVersion("python3", ["--version"]),
+      detectContainer(),
+      detectRuntimeVersions(),
+      detectShellInfo(),
+      detectPackageManager(cwd),
+    ]);
+
+    cached = {
+      nodeVersion: nodeV,
+      pythonVersion: pythonV,
+      containerInfo: container,
+      runtimeVersions: runtimes,
+      shellInfo: shell,
+      packageManagerInfo: pkgMgr,
+      cachedAt: now,
+    };
+    versionCache.set(sessionId, cached);
+  }
+
+  // Always capture fresh git state and working tree (these change between events)
+  const [branch, headSha, changes] = await Promise.all([
     getCurrentBranch(cwd),
     getHeadSha(cwd),
     getChangedFiles(cwd),
-    getVersion("node", ["--version"]),
-    getVersion("python3", ["--version"]),
-    detectContainer(),
-    detectRuntimeVersions(),
-    detectShellInfo(),
-    detectPackageManager(cwd),
   ]);
 
   const modifiedFiles = changes.map((c) => c.path);
@@ -98,14 +128,14 @@ export async function captureEnvironment(
     depLockHash: lockfile ? hashFile(join(cwd, lockfile)) : null,
     depLockPath: lockfile,
     envVarsJson: JSON.stringify(safeEnvVars),
-    nodeVersion,
-    pythonVersion,
+    nodeVersion: cached.nodeVersion,
+    pythonVersion: cached.pythonVersion,
     osInfo: `${platform()} ${release()}`,
-    containerInfo: containerInfo ? JSON.stringify(containerInfo) : null,
-    runtimeVersionsJson: runtimeVersions ? JSON.stringify(runtimeVersions) : null,
-    shellInfo: shellInfo ? JSON.stringify(shellInfo) : null,
+    containerInfo: cached.containerInfo ? JSON.stringify(cached.containerInfo) : null,
+    runtimeVersionsJson: cached.runtimeVersions ? JSON.stringify(cached.runtimeVersions) : null,
+    shellInfo: cached.shellInfo ? JSON.stringify(cached.shellInfo) : null,
     systemResourcesJson: JSON.stringify(systemResources),
-    packageManagerJson: packageManagerInfo ? JSON.stringify(packageManagerInfo) : null,
+    packageManagerJson: cached.packageManagerInfo ? JSON.stringify(cached.packageManagerInfo) : null,
     vclockJson: serialize(createClock(config.clientId)),
   });
 

@@ -22,7 +22,7 @@ import {
   getCurrentBranch,
   getHeadSha,
 } from "@adit/engine";
-import { getAdapter } from "@adit/hooks/adapters";
+import { detectPlatform, getAdapter } from "@adit/hooks/adapters";
 
 export async function statusCommand(opts?: { json?: boolean }): Promise<void> {
   const config = loadConfig();
@@ -47,7 +47,8 @@ export async function statusCommand(opts?: { json?: boolean }): Promise<void> {
   }
 
   // 2. Check hook configuration — derive required hooks from adapter
-  const adapter = getAdapter("claude-code");
+  const platform = detectPlatform();
+  const adapter = getAdapter(platform);
   const requiredHooks = adapter.hookMappings.map((m) => m.platformEvent);
   const installedHooks: string[] = [];
 
