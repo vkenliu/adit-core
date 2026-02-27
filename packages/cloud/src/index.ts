@@ -46,15 +46,20 @@ export {
 } from "./sync/serializer.js";
 export { triggerAutoSync } from "./sync/auto-sync.js";
 
-// Transcript upload
+// Transcript / file upload
 export {
   triggerTranscriptUpload,
   registerTranscript,
   processTranscriptUploads,
+  uploadChunk,
+  uploadFull,
+  checkUploadStatus,
+  getUploadStatus,
   type TranscriptManagerOptions,
   type TranscriptProcessResult,
-  type TranscriptUploadResponse,
-  type TranscriptInitResponse,
+  type SyncUploadType,
+  type SyncUploadResponse,
+  type SyncUploadStatusResponse,
   type UploadChunkParams,
 } from "./transcript/index.js";
 

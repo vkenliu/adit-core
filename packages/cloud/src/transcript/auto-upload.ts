@@ -14,6 +14,7 @@ import { loadCredentials, isTokenExpired } from "../auth/credentials.js";
 import { CloudClient } from "../http/client.js";
 import { CloudNetworkError, CloudAuthError } from "../http/errors.js";
 import { registerTranscript, processTranscriptUploads } from "./manager.js";
+import type { SyncUploadType } from "./uploader.js";
 
 /**
  * Register a transcript and trigger pending uploads.
@@ -25,11 +26,15 @@ import { registerTranscript, processTranscriptUploads } from "./manager.js";
  * @param db - Open database connection
  * @param sessionId - Current session ID
  * @param transcriptPath - Absolute path to the transcript JSONL file
+ * @param cli - CLI identifier (e.g. "claude-code", "cursor", "windsurf")
+ * @param type - Upload type (default: "transcript")
  */
 export async function triggerTranscriptUpload(
   db: Database.Database,
   sessionId: string,
   transcriptPath: string,
+  cli: string = "claude-code",
+  type: SyncUploadType = "transcript",
 ): Promise<void> {
   const cloudConfig = loadCloudConfig();
 
@@ -69,6 +74,8 @@ export async function triggerTranscriptUpload(
       client,
       config: cloudConfig.transcriptUpload,
       serverUrl: cloudConfig.serverUrl,
+      type,
+      cli,
     });
   } catch (error) {
     // Fail silently — this is fire-and-forget

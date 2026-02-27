@@ -1,33 +1,39 @@
 openapi: "3.1.0"
 info:
-  title: ADIT Cloud — Transcript Upload API
+  title: ADIT Cloud — Sync Upload API
   version: "1.0.0"
   description: |
-    Server API specification for the ADIT transcript incremental upload feature.
+    Server API specification for ADIT's incremental file upload feature.
 
     ## Overview
 
-    The transcript upload system allows ADIT clients to incrementally upload
-    Claude Code session transcripts (JSONL files) to the cloud server. The
-    design minimizes bandwidth by only sending new data since the last upload.
+    The sync upload system allows ADIT clients to incrementally upload
+    files (transcripts, plans, logs, etc.) from any supported AI coding
+    tool (Claude Code, Cursor, Windsurf, etc.) to the cloud server.
+
+    The API is generic — the `type` field tells the server what kind of
+    file is being uploaded (e.g. "transcript"), and the `cli` field tells
+    it which tool produced it (e.g. "claude-code"). This lets the server
+    handle different file formats and tool-specific logic without
+    requiring separate endpoints per tool.
 
     ## Protocol Flow
 
-    1. Client discovers a transcript file via Claude Code hook events
+    1. Client discovers a file to upload (e.g. transcript_path from a hook event)
     2. Client reads new bytes from the file (since last confirmed offset)
-    3. Client snaps to the nearest complete JSONL line boundary
+    3. Client snaps to the nearest complete line boundary (for JSONL files)
     4. Client compresses the increment with gzip
-    5. Client POSTs the compressed chunk with metadata to the server
-    6. Server validates, decompresses, and appends to stored transcript
-    7. Server responds with the confirmed byte offset and a version token
+    5. Client POSTs the compressed chunk to `POST /api/sync/upload`
+    6. Server validates, decompresses, and appends to stored file
+    7. Server responds with confirmed byte offset, upload ID, and version token
     8. Client persists the confirmed offset locally for next upload
 
-    ## Incremental Upload
+    ## Status Checking
 
-    Transcripts grow over time as the coding session progresses. Each upload
-    sends only the bytes between the last confirmed offset and the current
-    end of file (snapped to complete JSONL lines). The server assembles the
-    full transcript from these increments.
+    - `HEAD /api/sync/upload/{uploadId}` — Lightweight check returning
+      offset and version in response headers (no body, low cost)
+    - `GET /api/sync/upload/{uploadId}` — Full status with JSON body
+    - `GET /api/sync/upload/by-path` — Lookup by original file path
 
     ## Error Recovery
 
@@ -37,7 +43,7 @@ info:
 
     ## Retry Policy
 
-    The client retries up to 3 times per transcript file. After 3 consecutive
+    The client retries up to 3 times per file. After 3 consecutive
     failures, the file is marked as "failed" and no further uploads are
     attempted unless manually reset by the user.
 
@@ -46,20 +52,24 @@ servers:
     description: Production server
 
 paths:
-  /api/transcripts/upload:
+  /api/sync/upload:
     post:
-      operationId: uploadTranscriptChunk
-      summary: Upload an incremental transcript chunk
+      operationId: uploadChunk
+      summary: Upload an incremental file chunk
       description: |
-        Upload a gzip-compressed chunk of a JSONL transcript file.
-        The chunk starts at the given byte offset and contains only
-        complete JSONL lines.
+        Upload a gzip-compressed chunk of a file. The `type` field identifies
+        what kind of file this is (e.g. "transcript") and the `cli` field
+        identifies which AI coding tool produced it (e.g. "claude-code").
+
+        The chunk starts at the given byte offset and (for JSONL files)
+        contains only complete lines. The server assembles the full file
+        from these increments.
 
         **Idempotency**: If the server already has data at the given
         offset, it validates the overlap and ignores duplicate data.
 
         **Conflict detection**: The `serverVersion` token prevents
-        concurrent uploads from corrupting the stored transcript.
+        concurrent uploads from corrupting the stored file.
         If the token doesn't match, the server returns 409.
       security:
         - bearerAuth: []
@@ -68,14 +78,14 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/TranscriptUploadRequest"
+              $ref: "#/components/schemas/SyncUploadRequest"
       responses:
         "200":
           description: Chunk accepted and appended successfully
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/TranscriptUploadResponse"
+                $ref: "#/components/schemas/SyncUploadResponse"
         "400":
           description: Invalid request (missing fields, invalid offset, etc.)
           content:
@@ -95,7 +105,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/TranscriptConflictResponse"
+                $ref: "#/components/schemas/SyncUploadConflictResponse"
         "413":
           description: Chunk too large (server limit exceeded)
           content:
@@ -110,54 +120,117 @@ paths:
                 type: integer
               description: Seconds to wait before retrying
 
-  /api/transcripts/{transcriptId}/status:
-    get:
-      operationId: getTranscriptStatus
-      summary: Get server-side status for a transcript
+  /api/sync/upload/{uploadId}:
+    head:
+      operationId: checkUploadStatus
+      summary: Quick status check via headers
       description: |
-        Returns the server's current state for a tracked transcript,
-        including confirmed byte offset and version token. Useful for
-        resuming uploads after client restarts.
+        Lightweight status check that returns the upload state in
+        response headers only — no JSON body. Use this for periodic
+        polling without consuming bandwidth.
+
+        Response headers:
+        - `X-Upload-Id`: Server-assigned upload ID
+        - `X-Confirmed-Offset`: Byte offset confirmed by server
+        - `X-Server-Version`: Current version token
+        - `X-Upload-Type`: File type (e.g. "transcript")
+        - `X-Upload-Cli`: CLI identifier (e.g. "claude-code")
       security:
         - bearerAuth: []
       parameters:
-        - name: transcriptId
+        - name: uploadId
           in: path
           required: true
           schema:
             type: string
-          description: Server-side transcript ID (from upload response or init)
+          description: Server-assigned upload ID
       responses:
         "200":
-          description: Transcript status
+          description: Upload found
+          headers:
+            X-Upload-Id:
+              schema:
+                type: string
+              description: Server-assigned upload ID
+            X-Confirmed-Offset:
+              schema:
+                type: integer
+              description: Byte offset confirmed by server
+            X-Server-Version:
+              schema:
+                type: string
+              description: Current version token
+            X-Upload-Type:
+              schema:
+                type: string
+              description: File type (e.g. "transcript")
+            X-Upload-Cli:
+              schema:
+                type: string
+              description: CLI identifier (e.g. "claude-code")
+        "404":
+          description: Upload not found
+
+    get:
+      operationId: getUploadStatus
+      summary: Get full upload status
+      description: |
+        Returns the server's current state for a tracked upload,
+        including confirmed byte offset, version token, and metadata.
+        Useful for resuming uploads after client restarts.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: uploadId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Server-assigned upload ID
+      responses:
+        "200":
+          description: Upload status
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/TranscriptStatusResponse"
+                $ref: "#/components/schemas/SyncUploadStatusResponse"
         "404":
-          description: Transcript not found
+          description: Upload not found
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
 
-  /api/transcripts/by-path:
+  /api/sync/upload/by-path:
     get:
-      operationId: getTranscriptByPath
-      summary: Look up a transcript by its original file path
+      operationId: getUploadByPath
+      summary: Look up an upload by original file path
       description: |
-        Find a server-side transcript record by the client-reported
-        file path and session ID. Returns the current upload state.
+        Find a server-side upload record by the client-reported file path,
+        session ID, type, and CLI. Returns the current upload state.
       security:
         - bearerAuth: []
       parameters:
+        - name: type
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [transcript, plan, log]
+          description: Upload type
+        - name: cli
+          in: query
+          required: true
+          schema:
+            type: string
+          description: CLI identifier (e.g. "claude-code")
         - name: sessionId
           in: query
           required: true
           schema:
             type: string
           description: Client session ID
-        - name: transcriptPath
+        - name: filePath
           in: query
           required: true
           schema:
@@ -165,13 +238,13 @@ paths:
           description: Absolute file path on the client machine
       responses:
         "200":
-          description: Transcript found
+          description: Upload found
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/TranscriptStatusResponse"
+                $ref: "#/components/schemas/SyncUploadStatusResponse"
         "404":
-          description: No transcript found for the given path and session
+          description: No upload found for the given parameters
           content:
             application/json:
               schema:
@@ -185,11 +258,13 @@ components:
       bearerFormat: JWT
 
   schemas:
-    TranscriptUploadRequest:
+    SyncUploadRequest:
       type: object
       required:
+        - type
+        - cli
         - sessionId
-        - transcriptPath
+        - filePath
         - offsetBytes
         - newOffsetBytes
         - fileSizeBytes
@@ -198,17 +273,34 @@ components:
         - rawBytes
         - compressedBytes
       properties:
+        type:
+          type: string
+          enum: [transcript, plan, log]
+          description: |
+            What kind of file is being uploaded. The server uses this
+            to route to the appropriate storage and processing logic.
+            - `transcript` — AI coding session transcript (JSONL)
+            - `plan` — SpecFlow plan artifact (Markdown)
+            - `log` — General log file
+          example: "transcript"
+        cli:
+          type: string
+          description: |
+            Which AI coding tool produced this file. Allows the server
+            to handle tool-specific format differences.
+            Known values: "claude-code", "cursor", "windsurf", "copilot"
+          example: "claude-code"
         sessionId:
           type: string
           description: |
-            ADIT session ID that owns this transcript.
-            Used to group transcripts by coding session.
+            ADIT session ID that owns this file.
+            Used to group uploads by coding session.
           example: "01JNAB3X4Y5Z6W7V8U9T0S"
-        transcriptPath:
+        filePath:
           type: string
           description: |
-            Absolute path to the transcript file on the client.
-            Used as a deduplication key (per session + server).
+            Absolute path to the file on the client machine.
+            Used as a deduplication key (per session + server + type + cli).
           example: "/home/user/.claude/projects/.../abc123.jsonl"
         offsetBytes:
           type: integer
@@ -222,16 +314,15 @@ components:
           type: integer
           minimum: 0
           description: |
-            Ending byte offset after this chunk. Always falls on a
-            newline boundary to preserve JSONL line integrity.
+            Ending byte offset after this chunk. For JSONL files, this
+            always falls on a newline boundary to preserve line integrity.
           example: 4096
         fileSizeBytes:
           type: integer
           minimum: 0
           description: |
-            Current total size of the transcript file on the client.
-            Informational only — the server does not rely on this for
-            correctness, but it helps track upload progress.
+            Current total size of the file on the client.
+            Informational only — helps track upload progress.
           example: 8192
         serverVersion:
           type: string
@@ -251,8 +342,8 @@ components:
           type: string
           format: byte
           description: |
-            Base64-encoded gzip-compressed transcript data.
-            Contains complete JSONL lines only (no partial lines).
+            Base64-encoded gzip-compressed file data.
+            For JSONL files, contains complete lines only (no partial lines).
           example: "H4sIAAAAAAAA..."
         rawBytes:
           type: integer
@@ -269,13 +360,20 @@ components:
             Used for bandwidth tracking and metrics.
           example: 1200
 
-    TranscriptUploadResponse:
+    SyncUploadResponse:
       type: object
       required:
+        - uploadId
         - confirmedOffset
         - serverVersion
         - resyncRequired
       properties:
+        uploadId:
+          type: string
+          description: |
+            Server-assigned upload ID (stable across increments).
+            Use this for subsequent HEAD/GET status checks.
+          example: "up_01JNAB3X4Y5Z6W7V8U9T0S"
         confirmedOffset:
           type: integer
           minimum: 0
@@ -295,10 +393,10 @@ components:
           description: |
             If true, the server has detected data corruption or
             inconsistency. The client must re-upload the entire
-            transcript from offset 0 with serverVersion=null.
+            file from offset 0 with serverVersion=null.
           example: false
 
-    TranscriptConflictResponse:
+    SyncUploadConflictResponse:
       type: object
       required:
         - resyncRequired
@@ -318,27 +416,38 @@ components:
           type: integer
           description: |
             The server's last known good offset. May be 0 if the
-            server has discarded all data for this transcript.
+            server has discarded all data for this upload.
           example: 0
 
-    TranscriptStatusResponse:
+    SyncUploadStatusResponse:
       type: object
       required:
-        - transcriptId
+        - uploadId
+        - type
+        - cli
         - confirmedOffset
         - serverVersion
         - createdAt
         - updatedAt
       properties:
-        transcriptId:
+        uploadId:
           type: string
-          description: Server-side unique identifier for this transcript.
-          example: "tr_01JNAB3X4Y5Z6W7V8U9T0S"
+          description: Server-side unique identifier for this upload.
+          example: "up_01JNAB3X4Y5Z6W7V8U9T0S"
+        type:
+          type: string
+          enum: [transcript, plan, log]
+          description: Upload type.
+          example: "transcript"
+        cli:
+          type: string
+          description: CLI that produced this file.
+          example: "claude-code"
         sessionId:
           type: string
           description: ADIT session ID.
           example: "01JNAB3X4Y5Z6W7V8U9T0S"
-        transcriptPath:
+        filePath:
           type: string
           description: Original file path from the client.
           example: "/home/user/.claude/projects/.../abc123.jsonl"
@@ -350,7 +459,7 @@ components:
         totalStoredBytes:
           type: integer
           minimum: 0
-          description: Total bytes stored on the server for this transcript.
+          description: Total bytes stored on the server for this upload.
           example: 4096
         serverVersion:
           type: string
@@ -359,11 +468,11 @@ components:
         createdAt:
           type: string
           format: date-time
-          description: When the transcript was first registered on the server.
+          description: When the upload was first registered on the server.
         updatedAt:
           type: string
           format: date-time
-          description: When the transcript was last updated.
+          description: When the upload was last updated.
 
     ErrorResponse:
       type: object

@@ -310,6 +310,9 @@ async function handleSubagentStop(input: NormalizedHookInput): Promise<void> {
  *
  * Uses dynamic import so @adit/cloud is not a build-time dependency.
  * Fully fail-open: errors are silently swallowed.
+ *
+ * Passes `cli` identifier (e.g. "claude-code") from the platform adapter
+ * so the server knows which tool produced this file.
  */
 async function triggerTranscriptUploadIfEnabled(
   input: NormalizedHookInput,
@@ -325,12 +328,14 @@ async function triggerTranscriptUploadIfEnabled(
           db: unknown,
           sessionId: string,
           transcriptPath: string,
+          cli?: string,
         ) => Promise<void>;
       };
       await cloudModule.triggerTranscriptUpload(
         ctx.db,
         ctx.session.id,
         input.transcriptPath,
+        input.platformCli,
       );
     } finally {
       ctx.db.close();

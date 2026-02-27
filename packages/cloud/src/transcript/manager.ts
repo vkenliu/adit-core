@@ -26,8 +26,9 @@ import {
 import type { CloudClient } from "../http/client.js";
 import type { TranscriptUploadConfig } from "../config.js";
 import {
-  uploadTranscriptChunk,
-  getTranscriptFileSize,
+  uploadChunk,
+  getFileSize,
+  type SyncUploadType,
 } from "./uploader.js";
 
 export interface TranscriptManagerOptions {
@@ -35,6 +36,10 @@ export interface TranscriptManagerOptions {
   client: CloudClient;
   config: TranscriptUploadConfig;
   serverUrl: string;
+  /** Upload type discriminator (default: "transcript") */
+  type?: SyncUploadType;
+  /** CLI identifier (default: "claude-code") */
+  cli?: string;
 }
 
 export interface TranscriptProcessResult {
@@ -92,7 +97,14 @@ export function registerTranscript(
 export async function processTranscriptUploads(
   opts: TranscriptManagerOptions,
 ): Promise<TranscriptProcessResult> {
-  const { db, client, config, serverUrl } = opts;
+  const {
+    db,
+    client,
+    config,
+    serverUrl,
+    type = "transcript",
+    cli = "claude-code",
+  } = opts;
 
   const result: TranscriptProcessResult = {
     processed: 0,
@@ -121,7 +133,7 @@ export async function processTranscriptUploads(
     result.processed++;
 
     // Check if the file has new data
-    const currentSize = getTranscriptFileSize(upload.transcriptPath);
+    const currentSize = getFileSize(upload.transcriptPath);
     if (currentSize === 0) {
       result.skipped++;
       continue;
@@ -143,9 +155,11 @@ export async function processTranscriptUploads(
     activeCount++;
 
     try {
-      const response = await uploadTranscriptChunk(client, {
+      const response = await uploadChunk(client, {
+        type,
+        cli,
         sessionId: upload.sessionId,
-        transcriptPath: upload.transcriptPath,
+        filePath: upload.transcriptPath,
         offsetBytes: upload.uploadedBytes,
         fileSizeBytes: currentSize,
         serverVersion: upload.serverVersion,
@@ -157,9 +171,11 @@ export async function processTranscriptUploads(
         result.resynced++;
 
         // Immediately re-upload from offset 0
-        const fullResponse = await uploadTranscriptChunk(client, {
+        const fullResponse = await uploadChunk(client, {
+          type,
+          cli,
           sessionId: upload.sessionId,
-          transcriptPath: upload.transcriptPath,
+          filePath: upload.transcriptPath,
           offsetBytes: 0,
           fileSizeBytes: currentSize,
           serverVersion: null,

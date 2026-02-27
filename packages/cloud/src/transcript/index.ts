@@ -10,12 +10,15 @@ export {
 } from "./auto-upload.js";
 
 export {
-  uploadTranscriptChunk,
-  uploadTranscriptFull,
+  uploadChunk,
+  uploadFull,
   readIncrement,
   compressGzip,
-  getTranscriptFileSize,
-  type TranscriptUploadResponse,
-  type TranscriptInitResponse,
+  getFileSize,
+  checkUploadStatus,
+  getUploadStatus,
+  type SyncUploadType,
+  type SyncUploadResponse,
+  type SyncUploadStatusResponse,
   type UploadChunkParams,
 } from "./uploader.js";

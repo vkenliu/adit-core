@@ -26,6 +26,48 @@ export class CloudClient {
     return this.request<T>("GET", path);
   }
 
+  /** HEAD request with auth — returns headers only */
+  async head(path: string): Promise<Record<string, string>> {
+    // Refresh token if expired before making the request
+    if (isTokenExpired(this.credentials)) {
+      await this.refreshToken();
+    }
+
+    const url = `${this.serverUrl}${path}`;
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${this.credentials.accessToken}`,
+    };
+
+    const response = await fetch(url, { method: "HEAD", headers });
+
+    if (response.status === 401) {
+      await this.refreshToken();
+      // Retry once with new token
+      const retry = await fetch(url, {
+        method: "HEAD",
+        headers: {
+          Authorization: `Bearer ${this.credentials.accessToken}`,
+        },
+      });
+      if (!retry.ok) {
+        throw new CloudApiError(
+          `HEAD ${path}: ${retry.status} ${retry.statusText}`,
+          retry.status,
+        );
+      }
+      return headersToRecord(retry.headers);
+    }
+
+    if (!response.ok) {
+      throw new CloudApiError(
+        `HEAD ${path}: ${response.status} ${response.statusText}`,
+        response.status,
+      );
+    }
+
+    return headersToRecord(response.headers);
+  }
+
   /** POST request with auth and JSON body */
   async post<T>(path: string, body: unknown): Promise<T> {
     return this.request<T>("POST", path, body);
@@ -187,4 +229,12 @@ export class CloudClient {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function headersToRecord(headers: Headers): Record<string, string> {
+  const result: Record<string, string> = {};
+  headers.forEach((value, key) => {
+    result[key] = value;
+  });
+  return result;
 }
