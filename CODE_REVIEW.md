@@ -441,10 +441,10 @@ Each platform identifies sessions differently. Claude Code uses `session_id`, Cu
 
 | # | Issue | File(s) | Effort |
 |---|---|---|---|
-| 26 | Add connection pooling for hook handlers | `packages/hooks/src/common/context.ts` | L |
-| 27 | Add runtime validation for EventType values | `packages/core/src/types/events.ts` | M |
-| 28 | Support standalone binary distribution (no npm) | Build config | L |
-| 29 | Add advisory locking for concurrent hook writes | `packages/hooks/` | L |
+| ~~26~~ | ~~Add connection pooling for hook handlers~~ | ~~`packages/hooks/src/common/context.ts`~~ | ~~L~~ | **DELETED — Process-per-hook model makes pooling impossible; single connection already achieved in Phase 1** |
+| ~~27~~ | ~~Add runtime validation for EventType values~~ | ~~`packages/core/src/types/events.ts`~~ | ~~M~~ | **DELETED — TypeScript compile-time checks sufficient; all callers are internal code with literal strings** |
+| ~~28~~ | ~~Support standalone binary distribution (no npm)~~ | ~~Build config~~ | ~~L~~ | **DELETED — Premature; no non-Node platform adapter is implemented yet. Revisit when needed** |
+| 29 | ~~Add advisory locking for concurrent hook writes~~ → Add `busy_timeout` pragma | `packages/core/src/db/connection.ts` | S | **DONE — Simplified to `busy_timeout = 3000` pragma instead of full advisory locking** |
 | ~~30~~ | ~~Implement `captureToolIO` setting~~ | ~~`packages/hooks/src/handlers/unified.ts`~~ | ~~S~~ | **DELETED — Deprecated: `captureToolIO` removed along with tool-use hooks** |
 | ~~31~~ | ~~Increase stdin timeout (3s → 10s) or make configurable~~ | ~~`packages/hooks/src/common/context.ts`~~ | ~~S~~ | **DELETED — Deprecated: 3s timeout is adequate; Claude Code pipes stdin synchronously** |
 | ~~32~~ | ~~Add vclock NOT NULL consistency between local and cloud schemas~~ | ~~`packages/cloud/src/sync/serializer.ts`~~ | ~~S~~ | **DELETED — Deprecated: Cloud schema intentionally more permissive for forward compatibility** |
