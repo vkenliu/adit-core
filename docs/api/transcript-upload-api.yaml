@@ -1,51 +1,52 @@
 openapi: "3.1.0"
 info:
   title: ADIT Cloud — Sync Upload API
-  version: "1.0.0"
+  version: "1.1.0"
   description: |
-    Server API specification for ADIT's incremental file upload feature.
+    Server API for ADIT's incremental file upload.
 
-    ## Overview
+    ## Endpoints
 
-    The sync upload system allows ADIT clients to incrementally upload
-    files (transcripts, plans, logs, etc.) from any supported AI coding
-    tool (Claude Code, Cursor, Windsurf, etc.) to the cloud server.
+    | Method | Path                          | Purpose                      |
+    |--------|-------------------------------|------------------------------|
+    | POST   | /api/sync/upload              | Upload a compressed chunk    |
+    | HEAD   | /api/sync/upload/{uploadId}   | Status check (headers only)  |
+    | GET    | /api/sync/upload?lookup=by-path&... | Lookup by file path (headers only) |
 
-    The API is generic — the `type` field tells the server what kind of
-    file is being uploaded (e.g. "transcript"), and the `cli` field tells
-    it which tool produced it (e.g. "claude-code"). This lets the server
-    handle different file formats and tool-specific logic without
-    requiring separate endpoints per tool.
+    The API is generic — the `type` field identifies the file kind
+    (transcript, plan, log) and the `cli` field identifies the tool
+    that produced it (claude-code, cursor, windsurf, etc.).
 
-    ## Protocol Flow
+    ## Protocol
 
-    1. Client discovers a file to upload (e.g. transcript_path from a hook event)
-    2. Client reads new bytes from the file (since last confirmed offset)
-    3. Client snaps to the nearest complete line boundary (for JSONL files)
-    4. Client compresses the increment with gzip
-    5. Client POSTs the compressed chunk to `POST /api/sync/upload`
-    6. Server validates, decompresses, and appends to stored file
-    7. Server responds with confirmed byte offset, upload ID, and version token
-    8. Client persists the confirmed offset locally for next upload
+    1. Client reads new bytes since last confirmed offset
+    2. Snaps to the nearest complete line boundary (JSONL)
+    3. Compresses with gzip, base64-encodes
+    4. POSTs to `/api/sync/upload` with `type` + `cli` metadata
+    5. Server responds with `uploadId`, `confirmedOffset`, `serverVersion`
+    6. Client stores `confirmedOffset` locally for next increment
 
     ## Status Checking
 
-    - `HEAD /api/sync/upload/{uploadId}` — Lightweight check returning
-      offset and version in response headers (no body, low cost)
-    - `GET /api/sync/upload/{uploadId}` — Full status with JSON body
-    - `GET /api/sync/upload/by-path` — Lookup by original file path
+    Status is always returned via HTTP headers — never JSON bodies.
+    This keeps polling cheap and consistent across HEAD and GET.
+
+    Standard headers used:
+    - `ETag` — server version token (for conflict detection)
+    - `Content-Length` — total bytes stored on server
+    - `Last-Modified` — when the upload was last updated
+
+    Custom headers:
+    - `X-Upload-Id` — server-assigned upload ID
+    - `X-Confirmed-Offset` — byte offset server has confirmed
+    - `X-Upload-Type` — file type (e.g. "transcript")
+    - `X-Upload-Cli` — CLI identifier (e.g. "claude-code")
 
     ## Error Recovery
 
-    If the server detects data corruption (e.g., incomplete lines, checksum
-    mismatch), it responds with `resyncRequired: true` and the client must
-    re-upload the entire file from offset 0.
-
-    ## Retry Policy
-
-    The client retries up to 3 times per file. After 3 consecutive
-    failures, the file is marked as "failed" and no further uploads are
-    attempted unless manually reset by the user.
+    Server returns 409 with `resyncRequired: true` if it detects
+    corruption. Client must re-upload from offset 0.
+    Max 3 retries per file before the client gives up.
 
 servers:
   - url: https://cloud.adit.dev
@@ -57,20 +58,14 @@ paths:
       operationId: uploadChunk
       summary: Upload an incremental file chunk
       description: |
-        Upload a gzip-compressed chunk of a file. The `type` field identifies
-        what kind of file this is (e.g. "transcript") and the `cli` field
-        identifies which AI coding tool produced it (e.g. "claude-code").
+        Upload a gzip-compressed chunk. The `type` and `cli` fields let the
+        server route to the correct handler for any CLI/file-type combination.
 
-        The chunk starts at the given byte offset and (for JSONL files)
-        contains only complete lines. The server assembles the full file
-        from these increments.
+        **Idempotency**: Duplicate data at the same offset is validated
+        and ignored.
 
-        **Idempotency**: If the server already has data at the given
-        offset, it validates the overlap and ignores duplicate data.
-
-        **Conflict detection**: The `serverVersion` token prevents
-        concurrent uploads from corrupting the stored file.
-        If the token doesn't match, the server returns 409.
+        **Conflict detection**: Pass the `serverVersion` from the previous
+        response. Mismatch → 409.
       security:
         - bearerAuth: []
       requestBody:
@@ -81,136 +76,66 @@ paths:
               $ref: "#/components/schemas/SyncUploadRequest"
       responses:
         "200":
-          description: Chunk accepted and appended successfully
+          description: Chunk accepted
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/SyncUploadResponse"
         "400":
-          description: Invalid request (missing fields, invalid offset, etc.)
+          description: Invalid request
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "401":
-          description: Authentication required or token expired
+          description: Authentication required
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "409":
-          description: |
-            Conflict — server version mismatch or data corruption detected.
-            Client should check `resyncRequired` in the response body.
+          description: Conflict — resync required
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/SyncUploadConflictResponse"
         "413":
-          description: Chunk too large (server limit exceeded)
+          description: Chunk too large
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
         "429":
-          description: Rate limited — check Retry-After header
+          description: Rate limited
           headers:
             Retry-After:
               schema:
                 type: integer
               description: Seconds to wait before retrying
 
-  /api/sync/upload/{uploadId}:
-    head:
-      operationId: checkUploadStatus
-      summary: Quick status check via headers
+    get:
+      operationId: lookupUpload
+      summary: Look up an upload by file path (headers-only response)
       description: |
-        Lightweight status check that returns the upload state in
-        response headers only — no JSON body. Use this for periodic
-        polling without consuming bandwidth.
+        Find a server-side upload by its original file path.
+        Requires `lookup=by-path` plus `type`, `cli`, `sessionId`,
+        and `filePath` query parameters.
 
-        Response headers:
-        - `X-Upload-Id`: Server-assigned upload ID
-        - `X-Confirmed-Offset`: Byte offset confirmed by server
-        - `X-Server-Version`: Current version token
-        - `X-Upload-Type`: File type (e.g. "transcript")
-        - `X-Upload-Cli`: CLI identifier (e.g. "claude-code")
+        The response has **no JSON body** — all status is returned
+        in the same HTTP headers as HEAD. This keeps the lookup
+        lightweight and consistent with status checks.
+
+        Returns 404 if no matching upload exists.
       security:
         - bearerAuth: []
       parameters:
-        - name: uploadId
-          in: path
+        - name: lookup
+          in: query
           required: true
           schema:
             type: string
-          description: Server-assigned upload ID
-      responses:
-        "200":
-          description: Upload found
-          headers:
-            X-Upload-Id:
-              schema:
-                type: string
-              description: Server-assigned upload ID
-            X-Confirmed-Offset:
-              schema:
-                type: integer
-              description: Byte offset confirmed by server
-            X-Server-Version:
-              schema:
-                type: string
-              description: Current version token
-            X-Upload-Type:
-              schema:
-                type: string
-              description: File type (e.g. "transcript")
-            X-Upload-Cli:
-              schema:
-                type: string
-              description: CLI identifier (e.g. "claude-code")
-        "404":
-          description: Upload not found
-
-    get:
-      operationId: getUploadStatus
-      summary: Get full upload status
-      description: |
-        Returns the server's current state for a tracked upload,
-        including confirmed byte offset, version token, and metadata.
-        Useful for resuming uploads after client restarts.
-      security:
-        - bearerAuth: []
-      parameters:
-        - name: uploadId
-          in: path
-          required: true
-          schema:
-            type: string
-          description: Server-assigned upload ID
-      responses:
-        "200":
-          description: Upload status
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SyncUploadStatusResponse"
-        "404":
-          description: Upload not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-
-  /api/sync/upload/by-path:
-    get:
-      operationId: getUploadByPath
-      summary: Look up an upload by original file path
-      description: |
-        Find a server-side upload record by the client-reported file path,
-        session ID, type, and CLI. Returns the current upload state.
-      security:
-        - bearerAuth: []
-      parameters:
+            enum: [by-path]
+          description: Lookup mode (currently only "by-path")
         - name: type
           in: query
           required: true
@@ -235,20 +160,109 @@ paths:
           required: true
           schema:
             type: string
-          description: Absolute file path on the client machine
+          description: Absolute file path on the client
       responses:
-        "200":
-          description: Upload found
-          content:
-            application/json:
+        "204":
+          description: Upload found (status in headers, no body)
+          headers:
+            X-Upload-Id:
               schema:
-                $ref: "#/components/schemas/SyncUploadStatusResponse"
-        "404":
-          description: No upload found for the given parameters
+                type: string
+              description: Server-assigned upload ID
+            X-Confirmed-Offset:
+              schema:
+                type: integer
+              description: Byte offset confirmed by server
+            ETag:
+              schema:
+                type: string
+              description: Server version token
+            X-Upload-Type:
+              schema:
+                type: string
+              description: File type
+            X-Upload-Cli:
+              schema:
+                type: string
+              description: CLI identifier
+            Content-Length:
+              schema:
+                type: integer
+              description: Total bytes stored on server
+            Last-Modified:
+              schema:
+                type: string
+              description: When the upload was last updated (RFC 7231)
+        "400":
+          description: Missing required query parameters
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: No upload found for the given parameters
+
+  /api/sync/upload/{uploadId}:
+    head:
+      operationId: checkUploadStatus
+      summary: Status check (headers only)
+      description: |
+        Lightweight status check. All state is returned in HTTP headers
+        — no JSON body is ever sent. Use this for periodic polling.
+
+        **Standard headers:**
+        - `ETag` — server version token (pass back as `serverVersion`)
+        - `Content-Length` — total bytes stored on server
+        - `Last-Modified` — last update time (RFC 7231)
+
+        **Custom headers:**
+        - `X-Upload-Id` — server-assigned upload ID
+        - `X-Confirmed-Offset` — confirmed byte offset
+        - `X-Upload-Type` — file type (e.g. "transcript")
+        - `X-Upload-Cli` — CLI identifier (e.g. "claude-code")
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: uploadId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Server-assigned upload ID
+      responses:
+        "200":
+          description: Upload found (status in headers)
+          headers:
+            X-Upload-Id:
+              schema:
+                type: string
+              description: Server-assigned upload ID
+            X-Confirmed-Offset:
+              schema:
+                type: integer
+              description: Byte offset confirmed by server
+            ETag:
+              schema:
+                type: string
+              description: Server version token
+            X-Upload-Type:
+              schema:
+                type: string
+              description: File type
+            X-Upload-Cli:
+              schema:
+                type: string
+              description: CLI identifier
+            Content-Length:
+              schema:
+                type: integer
+              description: Total bytes stored on server
+            Last-Modified:
+              schema:
+                type: string
+              description: When the upload was last updated (RFC 7231)
+        "404":
+          description: Upload not found
 
 components:
   securitySchemes:
@@ -277,87 +291,71 @@ components:
           type: string
           enum: [transcript, plan, log]
           description: |
-            What kind of file is being uploaded. The server uses this
-            to route to the appropriate storage and processing logic.
-            - `transcript` — AI coding session transcript (JSONL)
+            File kind. The server uses this to route storage/processing.
+            - `transcript` — AI session transcript (JSONL)
             - `plan` — SpecFlow plan artifact (Markdown)
             - `log` — General log file
           example: "transcript"
         cli:
           type: string
           description: |
-            Which AI coding tool produced this file. Allows the server
-            to handle tool-specific format differences.
+            Which AI coding tool produced this file.
             Known values: "claude-code", "cursor", "windsurf", "copilot"
           example: "claude-code"
         sessionId:
           type: string
-          description: |
-            ADIT session ID that owns this file.
-            Used to group uploads by coding session.
+          description: ADIT session ID that owns this file.
           example: "01JNAB3X4Y5Z6W7V8U9T0S"
         filePath:
           type: string
           description: |
-            Absolute path to the file on the client machine.
-            Used as a deduplication key (per session + server + type + cli).
+            Absolute path on the client. Deduplication key
+            (per session + server + type + cli).
           example: "/home/user/.claude/projects/.../abc123.jsonl"
         offsetBytes:
           type: integer
           minimum: 0
           description: |
-            Starting byte offset of this chunk in the original file.
-            Must match the server's `confirmedOffset` from the previous
-            upload (or 0 for initial upload).
+            Start offset of this chunk. Must match the server's
+            `confirmedOffset` from the previous upload (or 0).
           example: 0
         newOffsetBytes:
           type: integer
           minimum: 0
           description: |
-            Ending byte offset after this chunk. For JSONL files, this
-            always falls on a newline boundary to preserve line integrity.
+            End offset after this chunk. For JSONL, always on a
+            newline boundary.
           example: 4096
         fileSizeBytes:
           type: integer
           minimum: 0
-          description: |
-            Current total size of the file on the client.
-            Informational only — helps track upload progress.
+          description: Current total file size on client (informational).
           example: 8192
         serverVersion:
           type: string
           nullable: true
           description: |
-            Opaque version token from the server's previous response.
-            Used for optimistic concurrency control. Send null for
-            the initial upload.
+            Version token from previous response. Used for optimistic
+            concurrency. Null for initial upload.
           example: "v1-abc123-1709123456"
         encoding:
           type: string
           enum: [gzip]
-          description: |
-            Compression encoding of the `data` field. Currently
-            only "gzip" is supported.
+          description: Compression of the `data` field.
         data:
           type: string
           format: byte
-          description: |
-            Base64-encoded gzip-compressed file data.
-            For JSONL files, contains complete lines only (no partial lines).
+          description: Base64-encoded gzip-compressed file data.
           example: "H4sIAAAAAAAA..."
         rawBytes:
           type: integer
           minimum: 0
-          description: |
-            Size of the data before compression (in bytes).
-            Used to validate decompression and for metrics.
+          description: Bytes before compression (for validation).
           example: 3500
         compressedBytes:
           type: integer
           minimum: 0
-          description: |
-            Size of the data after compression (in bytes).
-            Used for bandwidth tracking and metrics.
+          description: Bytes after compression (for metrics).
           example: 1200
 
     SyncUploadResponse:
@@ -372,28 +370,25 @@ components:
           type: string
           description: |
             Server-assigned upload ID (stable across increments).
-            Use this for subsequent HEAD/GET status checks.
+            Use for subsequent HEAD status checks.
           example: "up_01JNAB3X4Y5Z6W7V8U9T0S"
         confirmedOffset:
           type: integer
           minimum: 0
           description: |
-            The byte offset that the server has confirmed receiving up to.
-            The client should store this and use it as `offsetBytes` in
-            the next upload request.
+            Byte offset confirmed by server. Use as `offsetBytes`
+            in the next upload.
           example: 4096
         serverVersion:
           type: string
           description: |
-            Opaque version token. The client must send this back in the
-            next upload's `serverVersion` field for conflict detection.
+            Version token. Pass back as `serverVersion` next time.
           example: "v1-abc123-1709123456"
         resyncRequired:
           type: boolean
           description: |
-            If true, the server has detected data corruption or
-            inconsistency. The client must re-upload the entire
-            file from offset 0 with serverVersion=null.
+            If true, data is corrupted. Re-upload from offset 0
+            with serverVersion=null.
           example: false
 
     SyncUploadConflictResponse:
@@ -404,75 +399,16 @@ components:
       properties:
         resyncRequired:
           type: boolean
-          description: |
-            Always true for conflict responses. Signals the client
-            to reset its upload state and re-upload from offset 0.
+          description: Always true for 409 responses.
           example: true
         message:
           type: string
-          description: Human-readable explanation of the conflict.
-          example: "Server version mismatch — data may be corrupted. Full re-upload required."
+          description: Human-readable conflict explanation.
+          example: "Server version mismatch. Full re-upload required."
         confirmedOffset:
           type: integer
-          description: |
-            The server's last known good offset. May be 0 if the
-            server has discarded all data for this upload.
+          description: Server's last known good offset (may be 0).
           example: 0
-
-    SyncUploadStatusResponse:
-      type: object
-      required:
-        - uploadId
-        - type
-        - cli
-        - confirmedOffset
-        - serverVersion
-        - createdAt
-        - updatedAt
-      properties:
-        uploadId:
-          type: string
-          description: Server-side unique identifier for this upload.
-          example: "up_01JNAB3X4Y5Z6W7V8U9T0S"
-        type:
-          type: string
-          enum: [transcript, plan, log]
-          description: Upload type.
-          example: "transcript"
-        cli:
-          type: string
-          description: CLI that produced this file.
-          example: "claude-code"
-        sessionId:
-          type: string
-          description: ADIT session ID.
-          example: "01JNAB3X4Y5Z6W7V8U9T0S"
-        filePath:
-          type: string
-          description: Original file path from the client.
-          example: "/home/user/.claude/projects/.../abc123.jsonl"
-        confirmedOffset:
-          type: integer
-          minimum: 0
-          description: Byte offset confirmed by the server.
-          example: 4096
-        totalStoredBytes:
-          type: integer
-          minimum: 0
-          description: Total bytes stored on the server for this upload.
-          example: 4096
-        serverVersion:
-          type: string
-          description: Current version token.
-          example: "v1-abc123-1709123456"
-        createdAt:
-          type: string
-          format: date-time
-          description: When the upload was first registered on the server.
-        updatedAt:
-          type: string
-          format: date-time
-          description: When the upload was last updated.
 
     ErrorResponse:
       type: object
@@ -485,7 +421,5 @@ components:
           example: "Invalid request: offsetBytes must be non-negative"
         code:
           type: string
-          description: |
-            Machine-readable error code for programmatic handling.
-            Optional — not all errors have a code.
+          description: Machine-readable error code (optional).
           example: "INVALID_OFFSET"

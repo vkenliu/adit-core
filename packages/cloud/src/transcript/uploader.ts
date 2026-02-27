@@ -39,18 +39,20 @@ export interface SyncUploadResponse {
   resyncRequired: boolean;
 }
 
-/** Response from GET /api/sync/upload/{uploadId} */
-export interface SyncUploadStatusResponse {
+/**
+ * Upload status parsed from HEAD response headers.
+ *
+ * All status is conveyed via standard + custom HTTP headers,
+ * with no JSON body — keeping status checks as cheap as possible.
+ */
+export interface SyncUploadStatus {
   uploadId: string;
-  type: SyncUploadType;
-  cli: string;
-  sessionId: string;
-  filePath: string;
   confirmedOffset: number;
-  totalStoredBytes: number;
   serverVersion: string;
-  createdAt: string;
-  updatedAt: string;
+  type: string;
+  cli: string;
+  totalStoredBytes: number;
+  lastModified: string | null;
 }
 
 /** Parameters for uploading a chunk */
@@ -229,23 +231,31 @@ export async function uploadFull(
 // ── Status check ─────────────────────────────────────────────────────────
 
 /**
- * Quick status check via HEAD /api/sync/upload/{uploadId}.
+ * Check upload status via HEAD /api/sync/upload/{uploadId}.
  *
- * Returns confirmed offset and server version from response headers,
- * or null if the upload is not found (404).
+ * All status is returned in standard HTTP headers — no JSON body.
+ * This is the only status check method; there is no GET-by-ID endpoint.
  *
- * Much cheaper than a GET — useful for polling without fetching
- * the full response body.
+ * Header mapping:
+ *   X-Upload-Id          → uploadId
+ *   X-Confirmed-Offset   → confirmedOffset
+ *   ETag                 → serverVersion
+ *   X-Upload-Type        → type
+ *   X-Upload-Cli         → cli
+ *   Content-Length        → totalStoredBytes
+ *   Last-Modified         → lastModified
+ *
+ * Returns null if the upload is not found (404).
  */
 export async function checkUploadStatus(
   client: CloudClient,
   uploadId: string,
-): Promise<{ confirmedOffset: number; serverVersion: string } | null> {
+): Promise<SyncUploadStatus | null> {
   try {
-    const headers = await client.head(`/api/sync/upload/${encodeURIComponent(uploadId)}`);
-    const offset = parseInt(headers["x-confirmed-offset"] ?? "0", 10);
-    const version = headers["x-server-version"] ?? "";
-    return { confirmedOffset: offset, serverVersion: version };
+    const h = await client.head(
+      `/api/sync/upload/${encodeURIComponent(uploadId)}`,
+    );
+    return parseStatusHeaders(h);
   } catch (error) {
     if (error instanceof CloudApiError && error.status === 404) {
       return null;
@@ -255,22 +265,57 @@ export async function checkUploadStatus(
 }
 
 /**
- * Full status check via GET /api/sync/upload/{uploadId}.
+ * Look up an upload by its original file path.
+ *
+ * Uses GET /api/sync/upload?lookup=by-path&type=...&cli=...&...
+ * The response has no JSON body — status comes from headers only,
+ * same as HEAD.
+ *
+ * Returns null if not found (404).
  */
-export async function getUploadStatus(
+export async function lookupUploadByPath(
   client: CloudClient,
-  uploadId: string,
-): Promise<SyncUploadStatusResponse | null> {
+  params: {
+    type: SyncUploadType;
+    cli: string;
+    sessionId: string;
+    filePath: string;
+  },
+): Promise<SyncUploadStatus | null> {
+  const qs = new URLSearchParams({
+    lookup: "by-path",
+    type: params.type,
+    cli: params.cli,
+    sessionId: params.sessionId,
+    filePath: params.filePath,
+  });
   try {
-    return await client.get<SyncUploadStatusResponse>(
-      `/api/sync/upload/${encodeURIComponent(uploadId)}`,
-    );
+    // We use head() here because the GET response also has no JSON body —
+    // it returns the same headers. The server treats GET and HEAD
+    // identically for this lookup route (both return headers-only).
+    const h = await client.head(`/api/sync/upload?${qs.toString()}`);
+    return parseStatusHeaders(h);
   } catch (error) {
     if (error instanceof CloudApiError && error.status === 404) {
       return null;
     }
     throw error;
   }
+}
+
+/** Parse upload status from HTTP response headers. */
+function parseStatusHeaders(
+  h: Record<string, string>,
+): SyncUploadStatus {
+  return {
+    uploadId: h["x-upload-id"] ?? "",
+    confirmedOffset: parseInt(h["x-confirmed-offset"] ?? "0", 10),
+    serverVersion: h["etag"] ?? "",
+    type: h["x-upload-type"] ?? "",
+    cli: h["x-upload-cli"] ?? "",
+    totalStoredBytes: parseInt(h["content-length"] ?? "0", 10),
+    lastModified: h["last-modified"] ?? null,
+  };
 }
 
 // ── Utilities ────────────────────────────────────────────────────────────

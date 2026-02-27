@@ -16,9 +16,9 @@ export {
   compressGzip,
   getFileSize,
   checkUploadStatus,
-  getUploadStatus,
+  lookupUploadByPath,
   type SyncUploadType,
   type SyncUploadResponse,
-  type SyncUploadStatusResponse,
+  type SyncUploadStatus,
   type UploadChunkParams,
 } from "./uploader.js";

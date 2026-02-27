@@ -54,12 +54,12 @@ export {
   uploadChunk,
   uploadFull,
   checkUploadStatus,
-  getUploadStatus,
+  lookupUploadByPath,
   type TranscriptManagerOptions,
   type TranscriptProcessResult,
   type SyncUploadType,
   type SyncUploadResponse,
-  type SyncUploadStatusResponse,
+  type SyncUploadStatus,
   type UploadChunkParams,
 } from "./transcript/index.js";
 
