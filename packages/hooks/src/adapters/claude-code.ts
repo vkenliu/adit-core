@@ -52,6 +52,9 @@ export const claudeCodeAdapter: PlatformAdapter = {
     return {
       cwd,
       hookType: aditHookType,
+      platformCli: "claude-code",
+      platformSessionId: raw.session_id as string | undefined,
+      transcriptPath: raw.transcript_path as string | undefined,
       prompt: raw.prompt as string | undefined,
       toolName: raw.tool_name as string | undefined,
       toolInput: raw.tool_input as Record<string, unknown> | undefined,
