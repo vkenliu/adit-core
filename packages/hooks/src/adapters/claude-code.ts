@@ -19,7 +19,6 @@ import type {
 
 const HOOK_MAPPINGS: HookMapping[] = [
   { platformEvent: "UserPromptSubmit", aditHandler: "prompt-submit" },
-  { platformEvent: "PostToolUse", aditHandler: "tool-use" },
   { platformEvent: "Stop", aditHandler: "stop" },
   { platformEvent: "SessionStart", aditHandler: "session-start" },
   { platformEvent: "SessionEnd", aditHandler: "session-end" },
@@ -32,7 +31,6 @@ const HOOK_MAPPINGS: HookMapping[] = [
 /** Map Claude Code platform events to ADIT hook types */
 const PLATFORM_TO_ADIT: Record<string, AditHookType> = {
   UserPromptSubmit: "prompt-submit",
-  PostToolUse: "tool-use",
   Stop: "stop",
   SessionStart: "session-start",
   SessionEnd: "session-end",
@@ -85,7 +83,6 @@ export const claudeCodeAdapter: PlatformAdapter = {
       content: {
         hooks: {
           UserPromptSubmit: makeHookEntry(`${aditBinaryPath} prompt-submit`),
-          PostToolUse: makeHookEntry(`${aditBinaryPath} tool-use`),
           Stop: makeHookEntry(`${aditBinaryPath} stop`),
           SessionStart: makeHookEntry(`${aditBinaryPath} session-start`),
           SessionEnd: makeHookEntry(`${aditBinaryPath} session-end`),
@@ -118,7 +115,7 @@ export const claudeCodeAdapter: PlatformAdapter = {
 
     let hooksFound = false;
     let hooksDetail = "No hook configuration found";
-    const requiredHooks = ["UserPromptSubmit", "PostToolUse", "Stop"];
+    const requiredHooks = ["UserPromptSubmit", "Stop"];
     const missingHooks: string[] = [];
 
     for (const settingsPath of settingsFiles) {

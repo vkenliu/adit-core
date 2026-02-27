@@ -49,11 +49,10 @@ describe("Adapter Registry", () => {
 
 describe("Claude Code Adapter", () => {
   it("has correct hook mappings", () => {
-    expect(claudeCodeAdapter.hookMappings).toHaveLength(9);
+    expect(claudeCodeAdapter.hookMappings).toHaveLength(8);
 
     const mappings = claudeCodeAdapter.hookMappings.map((m) => m.platformEvent);
     expect(mappings).toContain("UserPromptSubmit");
-    expect(mappings).toContain("PostToolUse");
     expect(mappings).toContain("Stop");
     expect(mappings).toContain("SessionStart");
     expect(mappings).toContain("SessionEnd");
@@ -61,6 +60,7 @@ describe("Claude Code Adapter", () => {
     expect(mappings).toContain("Notification");
     expect(mappings).toContain("SubagentStart");
     expect(mappings).toContain("SubagentStop");
+    expect(mappings).not.toContain("PostToolUse");
   });
 
   it("parseInput normalizes prompt-submit", () => {
@@ -71,16 +71,6 @@ describe("Claude Code Adapter", () => {
     expect(input.hookType).toBe("prompt-submit");
     expect(input.prompt).toBe("hello world");
     expect(input.cwd).toBe("/project");
-  });
-
-  it("parseInput normalizes tool-use", () => {
-    const input = claudeCodeAdapter.parseInput(
-      { cwd: "/project", tool_name: "Write", tool_input: { path: "/a.ts" } },
-      "PostToolUse",
-    );
-    expect(input.hookType).toBe("tool-use");
-    expect(input.toolName).toBe("Write");
-    expect(input.toolInput).toEqual({ path: "/a.ts" });
   });
 
   it("parseInput normalizes stop", () => {
@@ -175,7 +165,6 @@ describe("Claude Code Adapter", () => {
 
     const hooks = config.content.hooks as Record<string, unknown>;
     expect(hooks.UserPromptSubmit).toBeDefined();
-    expect(hooks.PostToolUse).toBeDefined();
     expect(hooks.Stop).toBeDefined();
     expect(hooks.SessionStart).toBeDefined();
     expect(hooks.SessionEnd).toBeDefined();

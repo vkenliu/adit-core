@@ -5,7 +5,7 @@
  * and delegates to the appropriate ADIT handler.
  */
 
-import { redactSensitiveKeys, getLatestEnvSnapshot } from "@adit/core";
+import { getLatestEnvSnapshot } from "@adit/core";
 import {
   hasUncommittedChanges,
   getChangedFiles,
@@ -24,9 +24,6 @@ export async function dispatchHook(input: NormalizedHookInput): Promise<void> {
   switch (input.hookType) {
     case "prompt-submit":
       await handlePromptSubmitUnified(input);
-      break;
-    case "tool-use":
-      await handleToolUseUnified(input);
       break;
     case "stop":
       await handleStopUnified(input);
@@ -82,43 +79,6 @@ async function handlePromptSubmitUnified(input: NormalizedHookInput): Promise<vo
       eventType: "prompt_submit",
       actor: "user",
       promptText: input.prompt,
-    });
-  } finally {
-    ctx.db.close();
-  }
-}
-
-/** Handle tool use */
-async function handleToolUseUnified(input: NormalizedHookInput): Promise<void> {
-  if (!input.toolName) return;
-
-  const ctx = await initHookContext(input.cwd);
-  const timeline = createTimelineManager(ctx.db, ctx.config);
-
-  try {
-    const safeInput = input.toolInput
-      ? redactSensitiveKeys(input.toolInput, ctx.config.redactKeys)
-      : null;
-    const safeOutput = input.toolOutput
-      ? redactSensitiveKeys(input.toolOutput, ctx.config.redactKeys)
-      : null;
-
-    let eventType: "tool_call" | "mcp_call" | "subagent_call" | "skill_call" = "tool_call";
-    if (input.toolName.includes("/")) {
-      eventType = "mcp_call";
-    } else if (input.toolName === "Task" || input.toolName === "task") {
-      eventType = "subagent_call";
-    } else if (input.toolName === "Skill" || input.toolName === "skill") {
-      eventType = "skill_call";
-    }
-
-    await timeline.recordEvent({
-      sessionId: ctx.session.id,
-      eventType,
-      actor: "tool",
-      toolName: input.toolName,
-      toolInputJson: safeInput ? JSON.stringify(safeInput) : null,
-      toolOutputJson: safeOutput ? JSON.stringify(safeOutput) : null,
     });
   } finally {
     ctx.db.close();

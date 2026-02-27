@@ -94,7 +94,6 @@ export interface ValidationCheck {
 /** All ADIT hook types */
 export type AditHookType =
   | "prompt-submit"
-  | "tool-use"
   | "stop"
   | "session-start"
   | "session-end"
