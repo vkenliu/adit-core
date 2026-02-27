@@ -257,6 +257,70 @@ export function getLatestCheckpointEvent(
   return row ? rowToEvent(row) : null;
 }
 
+/**
+ * Delete all events and associated diffs for a project.
+ * Respects foreign key order: diffs → events.
+ * Returns the number of events deleted.
+ */
+export function clearEvents(
+  db: Database.Database,
+  projectId: string,
+): number {
+  const deleteAll = db.transaction(() => {
+    // Delete diffs that belong to events in this project's sessions
+    db.prepare(
+      `DELETE FROM diffs WHERE event_id IN (
+         SELECT e.id FROM events e
+         JOIN sessions s ON e.session_id = s.id
+         WHERE s.project_id = ?
+       )`,
+    ).run(projectId);
+
+    // Delete env_snapshots that belong to this project's sessions
+    db.prepare(
+      `DELETE FROM env_snapshots WHERE session_id IN (
+         SELECT id FROM sessions WHERE project_id = ?
+       )`,
+    ).run(projectId);
+
+    // Delete events
+    const result = db
+      .prepare(
+        `DELETE FROM events WHERE session_id IN (
+           SELECT id FROM sessions WHERE project_id = ?
+         )`,
+      )
+      .run(projectId);
+
+    // Delete sessions
+    db.prepare(`DELETE FROM sessions WHERE project_id = ?`).run(projectId);
+
+    // Clear sync state (cursors are invalid after clearing events)
+    db.prepare(`DELETE FROM sync_state`).run();
+
+    return result.changes;
+  });
+
+  return deleteAll();
+}
+
+/**
+ * Count total events for a project.
+ */
+export function countEvents(
+  db: Database.Database,
+  projectId: string,
+): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) as cnt FROM events e
+       JOIN sessions s ON e.session_id = s.id
+       WHERE s.project_id = ?`,
+    )
+    .get(projectId) as { cnt: number };
+  return row.cnt;
+}
+
 function rowToEvent(row: Record<string, unknown>): AditEvent {
   return {
     id: row.id as string,

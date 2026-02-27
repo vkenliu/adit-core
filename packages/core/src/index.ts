@@ -51,6 +51,8 @@ export {
   allocateSequence,
   searchEvents,
   getLatestCheckpointEvent,
+  clearEvents,
+  countEvents,
   insertDiff,
   getDiffByEventId,
   getDiffText,
