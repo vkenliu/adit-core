@@ -15,6 +15,7 @@ import { DiffScreen } from "./screens/DiffScreen.js";
 import { SearchScreen } from "./screens/SearchScreen.js";
 import { EnvScreen } from "./screens/EnvScreen.js";
 import type { EnvSnapshot } from "@adit/core";
+import { type SortField, sortEvents } from "../commands/list.js";
 
 export function App(): React.ReactElement {
   const { exit } = useApp();
@@ -25,6 +26,9 @@ export function App(): React.ReactElement {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [showFilters, setShowFilters] = useState(false);
   const [envSnapshot, setEnvSnapshot] = useState<EnvSnapshot | null>(null);
+  const [sortField, setSortField] = useState<SortField>("TIME");
+
+  const SORT_CYCLE: SortField[] = ["TIME", "SEQ", "ACTOR"];
 
   const {
     state,
@@ -35,7 +39,10 @@ export function App(): React.ReactElement {
     getEnvSnapshot,
   } = useTimeline();
 
-  const events = state.events;
+  const events = useMemo(
+    () => sortEvents(state.events, sortField),
+    [state.events, sortField],
+  );
 
   // Ensure selectedIndex stays in bounds
   const safeIndex = useMemo(
@@ -80,6 +87,13 @@ export function App(): React.ReactElement {
     setShowFilters((v) => !v);
   }, []);
 
+  const handleSort = useCallback(() => {
+    setSortField((current) => {
+      const idx = SORT_CYCLE.indexOf(current);
+      return SORT_CYCLE[(idx + 1) % SORT_CYCLE.length];
+    });
+  }, []);
+
   const handleBack = useCallback(() => {
     if (screen !== "timeline") {
       setScreen("timeline");
@@ -115,6 +129,7 @@ export function App(): React.ReactElement {
       onShowEnv: handleShowEnv,
       onSearch: handleSearch,
       onFilter: handleFilter,
+      onSort: handleSort,
       onLabel: () => {},
       onHelp: handleHelp,
       onBack: handleBack,
@@ -215,6 +230,7 @@ export function App(): React.ReactElement {
           <Text>l{"            "}Add label</Text>
           <Text>/{"            "}Open search</Text>
           <Text>f{"            "}Toggle filter panel</Text>
+          <Text>s{"            "}Cycle sort (TIME→SEQ→ACTOR)</Text>
           <Text>Esc / b{"      "}Go back</Text>
           <Text>q{"            "}Quit</Text>
           <Text>?{"            "}Toggle this help</Text>
@@ -234,6 +250,7 @@ export function App(): React.ReactElement {
           selectedEvent={state.selectedEvent ?? selectedEvent}
           filters={filters}
           showFilters={showFilters}
+          sortField={sortField}
           height={contentHeight}
         />
       );
@@ -250,6 +267,7 @@ export function App(): React.ReactElement {
         session={state.session}
         eventCount={state.totalCount}
         screen={screen}
+        sortField={sortField}
       />
     </Box>
   );

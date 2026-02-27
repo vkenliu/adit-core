@@ -9,6 +9,7 @@ import { EventDetail } from "../components/EventDetail.js";
 import { FilterBar } from "../components/FilterBar.js";
 import type { AditEvent } from "@adit/core";
 import type { TimelineFilters } from "../hooks/useTimeline.js";
+import type { SortField } from "../../commands/list.js";
 
 interface TimelineScreenProps {
   events: AditEvent[];
@@ -16,6 +17,7 @@ interface TimelineScreenProps {
   selectedEvent: AditEvent | null;
   filters: TimelineFilters;
   showFilters: boolean;
+  sortField: SortField;
   height: number;
 }
 
@@ -25,6 +27,7 @@ export function TimelineScreen({
   selectedEvent,
   filters,
   showFilters,
+  sortField,
   height,
 }: TimelineScreenProps): React.ReactElement {
   const listHeight = showFilters ? height - 4 : height - 1;
@@ -38,6 +41,7 @@ export function TimelineScreen({
             events={events}
             selectedIndex={selectedIndex}
             height={listHeight}
+            sortField={sortField}
           />
         </Box>
         <Box width="45%" flexDirection="column" borderStyle="single" borderLeft borderTop={false} borderRight={false} borderBottom={false}>

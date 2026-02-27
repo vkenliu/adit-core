@@ -17,6 +17,7 @@ export interface KeyboardActions {
   onShowEnv: () => void;
   onSearch: () => void;
   onFilter: () => void;
+  onSort: () => void;
   onLabel: () => void;
   onHelp: () => void;
   onBack: () => void;
@@ -61,6 +62,10 @@ export function useKeyboard(actions: KeyboardActions, enabled = true): void {
       }
       if (input === "f") {
         actions.onFilter();
+        return;
+      }
+      if (input === "s") {
+        actions.onSort();
         return;
       }
       if (input === "l") {
