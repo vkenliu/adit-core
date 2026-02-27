@@ -69,11 +69,19 @@ const SAFE_ENV_PREFIXES = [
   "PATH",
 ];
 
+/** Pre-computed git state to avoid duplicate git calls within the same hook */
+export interface PreComputedGitState {
+  branch?: string | null;
+  headSha?: string | null;
+  changedFiles?: { path: string }[];
+}
+
 /** Capture a full environment snapshot */
 export async function captureEnvironment(
   db: Database.Database,
   config: AditConfig,
   sessionId: string,
+  preComputedGit?: PreComputedGitState,
 ): Promise<string> {
   const cwd = config.projectRoot;
   const id = generateId();
@@ -107,11 +115,16 @@ export async function captureEnvironment(
     versionCache.set(sessionId, cached);
   }
 
-  // Always capture fresh git state and working tree (these change between events)
+  // Use pre-computed git state when available to avoid duplicate git calls
+  // within the same hook event. Only fetch what wasn't pre-computed.
+  const needBranch = preComputedGit?.branch === undefined;
+  const needHeadSha = preComputedGit?.headSha === undefined;
+  const needChanges = preComputedGit?.changedFiles === undefined;
+
   const [branch, headSha, changes] = await Promise.all([
-    getCurrentBranch(cwd),
-    getHeadSha(cwd),
-    getChangedFiles(cwd),
+    needBranch ? getCurrentBranch(cwd) : Promise.resolve(preComputedGit!.branch!),
+    needHeadSha ? getHeadSha(cwd) : Promise.resolve(preComputedGit!.headSha!),
+    needChanges ? getChangedFiles(cwd) : Promise.resolve(preComputedGit!.changedFiles!),
   ]);
 
   const modifiedFiles = changes.map((c) => c.path);

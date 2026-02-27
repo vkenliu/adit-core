@@ -20,6 +20,7 @@ describe("loadCloudConfig", () => {
     delete process.env.ADIT_CLOUD_AUTO_SYNC;
     delete process.env.ADIT_CLOUD_BATCH_SIZE;
     delete process.env.ADIT_CLOUD_SYNC_THRESHOLD;
+    delete process.env.ADIT_CLOUD_SYNC_TIMEOUT_HOURS;
 
     const config = loadCloudConfig();
     expect(config.serverUrl).toBeNull();
@@ -27,6 +28,7 @@ describe("loadCloudConfig", () => {
     expect(config.autoSync).toBe(false);
     expect(config.batchSize).toBe(500);
     expect(config.syncThreshold).toBe(50);
+    expect(config.syncTimeoutHours).toBe(12);
   });
 
   it("reads syncThreshold from ADIT_CLOUD_SYNC_THRESHOLD", () => {
@@ -58,5 +60,29 @@ describe("loadCloudConfig", () => {
     process.env.ADIT_CLOUD_BATCH_SIZE = "1000";
     const config = loadCloudConfig();
     expect(config.batchSize).toBe(500);
+  });
+
+  it("reads syncTimeoutHours from ADIT_CLOUD_SYNC_TIMEOUT_HOURS", () => {
+    process.env.ADIT_CLOUD_SYNC_TIMEOUT_HOURS = "6";
+    const config = loadCloudConfig();
+    expect(config.syncTimeoutHours).toBe(6);
+  });
+
+  it("supports fractional syncTimeoutHours", () => {
+    process.env.ADIT_CLOUD_SYNC_TIMEOUT_HOURS = "0.5";
+    const config = loadCloudConfig();
+    expect(config.syncTimeoutHours).toBe(0.5);
+  });
+
+  it("falls back to 12 for invalid syncTimeoutHours", () => {
+    process.env.ADIT_CLOUD_SYNC_TIMEOUT_HOURS = "not-a-number";
+    const config = loadCloudConfig();
+    expect(config.syncTimeoutHours).toBe(12);
+  });
+
+  it("falls back to 12 for non-positive syncTimeoutHours", () => {
+    process.env.ADIT_CLOUD_SYNC_TIMEOUT_HOURS = "0";
+    const config = loadCloudConfig();
+    expect(config.syncTimeoutHours).toBe(12);
   });
 });

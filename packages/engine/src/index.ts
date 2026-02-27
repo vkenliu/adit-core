@@ -50,5 +50,5 @@ export {
 } from "./timeline/manager.js";
 
 // Environment capture & diffing
-export { captureEnvironment } from "./environment/capture.js";
+export { captureEnvironment, type PreComputedGitState } from "./environment/capture.js";
 export { diffEnvironments } from "./environment/differ.js";

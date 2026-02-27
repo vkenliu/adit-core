@@ -10,7 +10,6 @@ import {
   endSession,
 } from "@adit/core";
 import {
-  hasUncommittedChanges,
   getChangedFiles,
   createTimelineManager,
   captureEnvironment,
@@ -73,10 +72,11 @@ async function handlePromptSubmitUnified(ctx: HookContext, input: NormalizedHook
 
   const timeline = createTimelineManager(ctx.db, ctx.config);
 
-  // Check if user made manual edits since last checkpoint
-  const dirty = await hasUncommittedChanges(input.cwd);
-  if (dirty) {
-    const changes = await getChangedFiles(input.cwd);
+  // Check if user made manual edits since last checkpoint.
+  // Uses getChangedFiles directly instead of hasUncommittedChanges + getChangedFiles
+  // to avoid running `git status` twice.
+  const changes = await getChangedFiles(input.cwd);
+  if (changes.length > 0) {
     const userEditEvent = await timeline.recordEvent({
       sessionId: ctx.session.id,
       eventType: "user_edit",
@@ -102,7 +102,10 @@ async function handlePromptSubmitUnified(ctx: HookContext, input: NormalizedHook
 async function handleStopUnified(ctx: HookContext, input: NormalizedHookInput): Promise<void> {
   const timeline = createTimelineManager(ctx.db, ctx.config);
 
-  const dirty = await hasUncommittedChanges(input.cwd);
+  // Use getChangedFiles directly so the result can be reused by captureEnvironment,
+  // avoiding a duplicate `git status` call.
+  const changedFiles = await getChangedFiles(input.cwd);
+  const dirty = changedFiles.length > 0;
 
   const recentPrompts = await timeline.list({
     sessionId: ctx.session.id,
@@ -135,7 +138,10 @@ async function handleStopUnified(ctx: HookContext, input: NormalizedHookInput): 
     try {
       // Get previous snapshot before capturing new one
       const prevSnapshot = getLatestEnvSnapshot(ctx.db, ctx.session.id);
-      await captureEnvironment(ctx.db, ctx.config, ctx.session.id);
+      // Pass pre-computed changed files to avoid duplicate git status call
+      await captureEnvironment(ctx.db, ctx.config, ctx.session.id, {
+        changedFiles,
+      });
 
       // Detect env drift if we have a previous snapshot
       if (prevSnapshot) {
