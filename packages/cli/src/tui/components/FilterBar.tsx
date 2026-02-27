@@ -19,6 +19,10 @@ const EVENT_TYPES: EventType[] = [
   "tool_call",
   "checkpoint",
   "env_snapshot",
+  "task_completed",
+  "notification",
+  "subagent_start",
+  "subagent_stop",
 ];
 
 export function FilterBar({

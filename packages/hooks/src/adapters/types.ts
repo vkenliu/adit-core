@@ -56,6 +56,18 @@ export interface NormalizedHookInput {
   toolInput?: Record<string, unknown>;
   toolOutput?: Record<string, unknown>;
   stopReason?: string;
+  taskId?: string;
+  taskSubject?: string;
+  taskDescription?: string;
+  teammateName?: string;
+  teamName?: string;
+  notificationMessage?: string;
+  notificationTitle?: string;
+  notificationType?: string;
+  agentId?: string;
+  agentType?: string;
+  agentTranscriptPath?: string;
+  lastAssistantMessage?: string;
   rawPlatformData?: Record<string, unknown>;
 }
 
@@ -82,7 +94,10 @@ export interface ValidationCheck {
 /** All ADIT hook types */
 export type AditHookType =
   | "prompt-submit"
-  | "tool-use"
   | "stop"
   | "session-start"
-  | "session-end";
+  | "session-end"
+  | "task-completed"
+  | "notification"
+  | "subagent-start"
+  | "subagent-stop";

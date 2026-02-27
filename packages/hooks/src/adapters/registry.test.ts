@@ -49,14 +49,18 @@ describe("Adapter Registry", () => {
 
 describe("Claude Code Adapter", () => {
   it("has correct hook mappings", () => {
-    expect(claudeCodeAdapter.hookMappings).toHaveLength(5);
+    expect(claudeCodeAdapter.hookMappings).toHaveLength(8);
 
     const mappings = claudeCodeAdapter.hookMappings.map((m) => m.platformEvent);
     expect(mappings).toContain("UserPromptSubmit");
-    expect(mappings).toContain("PostToolUse");
     expect(mappings).toContain("Stop");
     expect(mappings).toContain("SessionStart");
     expect(mappings).toContain("SessionEnd");
+    expect(mappings).toContain("TaskCompleted");
+    expect(mappings).toContain("Notification");
+    expect(mappings).toContain("SubagentStart");
+    expect(mappings).toContain("SubagentStop");
+    expect(mappings).not.toContain("PostToolUse");
   });
 
   it("parseInput normalizes prompt-submit", () => {
@@ -67,16 +71,6 @@ describe("Claude Code Adapter", () => {
     expect(input.hookType).toBe("prompt-submit");
     expect(input.prompt).toBe("hello world");
     expect(input.cwd).toBe("/project");
-  });
-
-  it("parseInput normalizes tool-use", () => {
-    const input = claudeCodeAdapter.parseInput(
-      { cwd: "/project", tool_name: "Write", tool_input: { path: "/a.ts" } },
-      "PostToolUse",
-    );
-    expect(input.hookType).toBe("tool-use");
-    expect(input.toolName).toBe("Write");
-    expect(input.toolInput).toEqual({ path: "/a.ts" });
   });
 
   it("parseInput normalizes stop", () => {
@@ -96,16 +90,95 @@ describe("Claude Code Adapter", () => {
     expect(input.hookType).toBe("session-start");
   });
 
-  it("generateHookConfig produces valid structure", () => {
+  it("parseInput normalizes task-completed with task fields", () => {
+    const input = claudeCodeAdapter.parseInput(
+      {
+        cwd: "/project",
+        task_id: "task-001",
+        task_subject: "Implement auth",
+        task_description: "Add login endpoint",
+        teammate_name: "implementer",
+        team_name: "my-team",
+      },
+      "TaskCompleted",
+    );
+    expect(input.hookType).toBe("task-completed");
+    expect(input.taskId).toBe("task-001");
+    expect(input.taskSubject).toBe("Implement auth");
+    expect(input.taskDescription).toBe("Add login endpoint");
+    expect(input.teammateName).toBe("implementer");
+    expect(input.teamName).toBe("my-team");
+  });
+
+  it("parseInput normalizes notification with notification fields", () => {
+    const input = claudeCodeAdapter.parseInput(
+      {
+        cwd: "/project",
+        message: "Claude needs your permission",
+        title: "Permission needed",
+        notification_type: "permission_prompt",
+      },
+      "Notification",
+    );
+    expect(input.hookType).toBe("notification");
+    expect(input.notificationMessage).toBe("Claude needs your permission");
+    expect(input.notificationTitle).toBe("Permission needed");
+    expect(input.notificationType).toBe("permission_prompt");
+  });
+
+  it("parseInput normalizes subagent-start with agent fields", () => {
+    const input = claudeCodeAdapter.parseInput(
+      {
+        cwd: "/project",
+        agent_id: "agent-abc123",
+        agent_type: "Explore",
+      },
+      "SubagentStart",
+    );
+    expect(input.hookType).toBe("subagent-start");
+    expect(input.agentId).toBe("agent-abc123");
+    expect(input.agentType).toBe("Explore");
+  });
+
+  it("parseInput normalizes subagent-stop with agent fields", () => {
+    const input = claudeCodeAdapter.parseInput(
+      {
+        cwd: "/project",
+        agent_id: "agent-def456",
+        agent_type: "Plan",
+        agent_transcript_path: "/path/to/transcript.jsonl",
+        last_assistant_message: "Analysis complete.",
+      },
+      "SubagentStop",
+    );
+    expect(input.hookType).toBe("subagent-stop");
+    expect(input.agentId).toBe("agent-def456");
+    expect(input.agentType).toBe("Plan");
+    expect(input.agentTranscriptPath).toBe("/path/to/transcript.jsonl");
+    expect(input.lastAssistantMessage).toBe("Analysis complete.");
+  });
+
+  it("generateHookConfig produces valid structure with async hooks", () => {
     const config = claudeCodeAdapter.generateHookConfig("npx adit-hook");
     expect(config.configPath).toBe(".claude/settings.local.json");
     expect(config.content.hooks).toBeDefined();
 
     const hooks = config.content.hooks as Record<string, unknown>;
     expect(hooks.UserPromptSubmit).toBeDefined();
-    expect(hooks.PostToolUse).toBeDefined();
     expect(hooks.Stop).toBeDefined();
     expect(hooks.SessionStart).toBeDefined();
     expect(hooks.SessionEnd).toBeDefined();
+    expect(hooks.TaskCompleted).toBeDefined();
+    expect(hooks.Notification).toBeDefined();
+    expect(hooks.SubagentStart).toBeDefined();
+    expect(hooks.SubagentStop).toBeDefined();
+
+    // Verify async: true is set on all hooks
+    for (const hookName of Object.keys(hooks)) {
+      const entries = hooks[hookName] as Array<{
+        hooks: Array<{ type: string; command: string; async: boolean }>;
+      }>;
+      expect(entries[0].hooks[0].async).toBe(true);
+    }
   });
 });

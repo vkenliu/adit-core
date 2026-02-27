@@ -5,7 +5,7 @@
  * and delegates to the appropriate ADIT handler.
  */
 
-import { redactSensitiveKeys, getLatestEnvSnapshot } from "@adit/core";
+import { getLatestEnvSnapshot } from "@adit/core";
 import {
   hasUncommittedChanges,
   getChangedFiles,
@@ -25,9 +25,6 @@ export async function dispatchHook(input: NormalizedHookInput): Promise<void> {
     case "prompt-submit":
       await handlePromptSubmitUnified(input);
       break;
-    case "tool-use":
-      await handleToolUseUnified(input);
-      break;
     case "stop":
       await handleStopUnified(input);
       break;
@@ -36,6 +33,18 @@ export async function dispatchHook(input: NormalizedHookInput): Promise<void> {
       break;
     case "session-end":
       await handleSessionEnd(input);
+      break;
+    case "task-completed":
+      await handleTaskCompleted(input);
+      break;
+    case "notification":
+      await handleNotification(input);
+      break;
+    case "subagent-start":
+      await handleSubagentStart(input);
+      break;
+    case "subagent-stop":
+      await handleSubagentStop(input);
       break;
   }
 }
@@ -70,43 +79,6 @@ async function handlePromptSubmitUnified(input: NormalizedHookInput): Promise<vo
       eventType: "prompt_submit",
       actor: "user",
       promptText: input.prompt,
-    });
-  } finally {
-    ctx.db.close();
-  }
-}
-
-/** Handle tool use */
-async function handleToolUseUnified(input: NormalizedHookInput): Promise<void> {
-  if (!input.toolName) return;
-
-  const ctx = await initHookContext(input.cwd);
-  const timeline = createTimelineManager(ctx.db, ctx.config);
-
-  try {
-    const safeInput = input.toolInput
-      ? redactSensitiveKeys(input.toolInput, ctx.config.redactKeys)
-      : null;
-    const safeOutput = input.toolOutput
-      ? redactSensitiveKeys(input.toolOutput, ctx.config.redactKeys)
-      : null;
-
-    let eventType: "tool_call" | "mcp_call" | "subagent_call" | "skill_call" = "tool_call";
-    if (input.toolName.includes("/")) {
-      eventType = "mcp_call";
-    } else if (input.toolName === "Task" || input.toolName === "task") {
-      eventType = "subagent_call";
-    } else if (input.toolName === "Skill" || input.toolName === "skill") {
-      eventType = "skill_call";
-    }
-
-    await timeline.recordEvent({
-      sessionId: ctx.session.id,
-      eventType,
-      actor: "tool",
-      toolName: input.toolName,
-      toolInputJson: safeInput ? JSON.stringify(safeInput) : null,
-      toolOutputJson: safeOutput ? JSON.stringify(safeOutput) : null,
     });
   } finally {
     ctx.db.close();
@@ -222,6 +194,104 @@ async function handleSessionEnd(input: NormalizedHookInput): Promise<void> {
     // Mark session as completed
     const { endSession } = await import("@adit/core");
     endSession(ctx.db, ctx.session.id, "completed");
+  } finally {
+    ctx.db.close();
+  }
+}
+
+/** Handle task completed — record semantic milestone in timeline */
+async function handleTaskCompleted(input: NormalizedHookInput): Promise<void> {
+  const ctx = await initHookContext(input.cwd);
+  const timeline = createTimelineManager(ctx.db, ctx.config);
+
+  try {
+    await timeline.recordEvent({
+      sessionId: ctx.session.id,
+      eventType: "task_completed",
+      actor: "assistant",
+      responseText: input.taskSubject ?? "Task completed",
+      toolName: input.taskId ?? null,
+      toolInputJson: JSON.stringify({
+        taskId: input.taskId,
+        taskSubject: input.taskSubject,
+        taskDescription: input.taskDescription,
+        teammateName: input.teammateName,
+        teamName: input.teamName,
+      }),
+    });
+  } finally {
+    ctx.db.close();
+  }
+}
+
+/** Handle notification — record Claude Code notification event */
+async function handleNotification(input: NormalizedHookInput): Promise<void> {
+  const ctx = await initHookContext(input.cwd);
+  const timeline = createTimelineManager(ctx.db, ctx.config);
+
+  try {
+    await timeline.recordEvent({
+      sessionId: ctx.session.id,
+      eventType: "notification",
+      actor: "system",
+      responseText: input.notificationMessage ?? "Notification",
+      toolName: input.notificationType ?? null,
+      toolInputJson: JSON.stringify({
+        message: input.notificationMessage,
+        title: input.notificationTitle,
+        notificationType: input.notificationType,
+      }),
+    });
+  } finally {
+    ctx.db.close();
+  }
+}
+
+/** Handle subagent start — record when a subagent is spawned */
+async function handleSubagentStart(input: NormalizedHookInput): Promise<void> {
+  const ctx = await initHookContext(input.cwd);
+  const timeline = createTimelineManager(ctx.db, ctx.config);
+
+  try {
+    await timeline.recordEvent({
+      sessionId: ctx.session.id,
+      eventType: "subagent_start",
+      actor: "assistant",
+      responseText: `Subagent started: ${input.agentType ?? "unknown"}`,
+      toolName: input.agentType ?? null,
+      toolInputJson: JSON.stringify({
+        agentId: input.agentId,
+        agentType: input.agentType,
+      }),
+    });
+  } finally {
+    ctx.db.close();
+  }
+}
+
+/** Handle subagent stop — record when a subagent finishes */
+async function handleSubagentStop(input: NormalizedHookInput): Promise<void> {
+  const ctx = await initHookContext(input.cwd);
+  const timeline = createTimelineManager(ctx.db, ctx.config);
+
+  try {
+    await timeline.recordEvent({
+      sessionId: ctx.session.id,
+      eventType: "subagent_stop",
+      actor: "assistant",
+      responseText: input.lastAssistantMessage
+        ? `Subagent finished: ${input.agentType ?? "unknown"}`
+        : `Subagent stopped: ${input.agentType ?? "unknown"}`,
+      toolName: input.agentType ?? null,
+      toolInputJson: JSON.stringify({
+        agentId: input.agentId,
+        agentType: input.agentType,
+        agentTranscriptPath: input.agentTranscriptPath,
+      }),
+      toolOutputJson: input.lastAssistantMessage
+        ? JSON.stringify({ lastAssistantMessage: input.lastAssistantMessage })
+        : null,
+    });
   } finally {
     ctx.db.close();
   }
