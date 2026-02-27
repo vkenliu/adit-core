@@ -23,32 +23,9 @@ export interface AditConfig {
   projectId: string;
   /** Git ref prefix for checkpoints */
   refPrefix: string;
-  /** Max prompt chars to store (0 = unlimited) */
-  maxPromptChars: number;
-  /** Max diff lines to store (0 = unlimited) */
-  maxDiffLines: number;
   /** Whether to capture environment snapshots */
   captureEnv: boolean;
-  /** Whether to create checkpoints on Stop events */
-  checkpointOnStop: boolean;
-  /** Whether to auto-label events */
-  autoLabel: boolean;
-  /** Keys to redact from tool I/O */
-  redactKeys: string[];
 }
-
-/** Default sensitive keys to redact from recorded payloads */
-const DEFAULT_REDACT_KEYS = [
-  "authorization",
-  "api_key",
-  "apiKey",
-  "token",
-  "password",
-  "secret",
-  "credential",
-  "private_key",
-  "privateKey",
-];
 
 /** Get or create a persistent client ID */
 function getClientId(): string {
@@ -123,13 +100,6 @@ export function loadConfig(cwd?: string): AditConfig {
   // Load file-based settings (lowest priority — env vars override)
   const fileSettings = loadSettingsFile(projectRoot);
 
-  const redactKeysEnv = process.env.ADIT_REDACT_KEYS;
-  const redactKeys = redactKeysEnv
-    ? redactKeysEnv.split(",").map((k) => k.trim())
-    : Array.isArray(fileSettings.redactKeys)
-      ? (fileSettings.redactKeys as string[])
-      : DEFAULT_REDACT_KEYS;
-
   return {
     projectRoot,
     dataDir,
@@ -137,18 +107,9 @@ export function loadConfig(cwd?: string): AditConfig {
     clientId,
     projectId,
     refPrefix: "refs/adit/checkpoints",
-    maxPromptChars: parseInt(process.env.ADIT_MAX_PROMPT_CHARS ?? String(fileSettings.maxPromptChars ?? 0), 10),
-    maxDiffLines: parseInt(process.env.ADIT_MAX_DIFF_LINES ?? String(fileSettings.maxDiffLines ?? 0), 10),
     captureEnv: process.env.ADIT_CAPTURE_ENV !== undefined
       ? process.env.ADIT_CAPTURE_ENV !== "false"
       : (fileSettings.captureEnv as boolean) ?? true,
-    checkpointOnStop: process.env.ADIT_CHECKPOINT_ON_STOP !== undefined
-      ? process.env.ADIT_CHECKPOINT_ON_STOP !== "false"
-      : (fileSettings.checkpointOnStop as boolean) ?? true,
-    autoLabel: process.env.ADIT_AUTO_LABEL !== undefined
-      ? process.env.ADIT_AUTO_LABEL === "true"
-      : (fileSettings.autoLabel as boolean) ?? false,
-    redactKeys,
   };
 }
 

@@ -16,13 +16,12 @@ export async function configCommand(
   }
 
   console.log("ADIT Configuration\n");
-  console.log(`  Project root:   ${config.projectRoot}`);
+  console.log(`  Project root:    ${config.projectRoot}`);
   console.log(`  Data directory:  ${config.dataDir}`);
   console.log(`  Database:        ${config.dbPath}`);
   console.log(`  Project ID:      ${config.projectId}`);
   console.log(`  Client ID:       ${config.clientId}`);
   console.log(`  Capture env:     ${config.captureEnv}`);
-  console.log(`  Redact keys:     ${config.redactKeys.join(", ")}`);
 }
 
 function configToPlain(config: AditConfig): Record<string, unknown> {
@@ -33,6 +32,5 @@ function configToPlain(config: AditConfig): Record<string, unknown> {
     projectId: config.projectId,
     clientId: config.clientId,
     captureEnv: config.captureEnv,
-    redactKeys: config.redactKeys,
   };
 }
