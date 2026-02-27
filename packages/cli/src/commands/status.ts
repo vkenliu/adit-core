@@ -12,6 +12,7 @@ import {
   openDatabase,
   closeDatabase,
   getActiveSession,
+  countEvents,
   queryEvents,
   getLatestCheckpointEvent,
   findGitRoot,
@@ -21,6 +22,7 @@ import {
   getCurrentBranch,
   getHeadSha,
 } from "@adit/engine";
+import { getAdapter } from "@adit/hooks/adapters";
 
 export async function statusCommand(opts?: { json?: boolean }): Promise<void> {
   const config = loadConfig();
@@ -44,11 +46,12 @@ export async function statusCommand(opts?: { json?: boolean }): Promise<void> {
     return;
   }
 
-  // 2. Check hook configuration
-  const settingsPath = join(gitRoot, ".claude", "settings.local.json");
-  const requiredHooks = ["UserPromptSubmit", "PostToolUse", "Stop"];
+  // 2. Check hook configuration — derive required hooks from adapter
+  const adapter = getAdapter("claude-code");
+  const requiredHooks = adapter.hookMappings.map((m) => m.platformEvent);
   const installedHooks: string[] = [];
 
+  const settingsPath = join(gitRoot, ".claude", "settings.local.json");
   if (existsSync(settingsPath)) {
     try {
       const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
@@ -97,11 +100,11 @@ export async function statusCommand(opts?: { json?: boolean }): Promise<void> {
         }
       : null;
 
-    // Event counts
-    const recentEvents = queryEvents(db, { limit: 1000 });
-    const checkpointEvents = recentEvents.filter((e) => e.checkpointSha);
+    // Event counts — use countEvents() for accurate total
+    const totalEvents = countEvents(db, config.projectId);
+    const checkpointEvents = queryEvents(db, { hasCheckpoint: true, limit: 10000 });
     status.events = {
-      total: recentEvents.length,
+      total: totalEvents,
       checkpoints: checkpointEvents.length,
     };
 
@@ -138,6 +141,7 @@ export async function statusCommand(opts?: { json?: boolean }): Promise<void> {
 
   const hooksStatus = status.hooks as {
     allInstalled: boolean;
+    installed: string[];
     missing: string[];
   };
   const session = status.session as {
@@ -163,9 +167,9 @@ export async function statusCommand(opts?: { json?: boolean }): Promise<void> {
 
   // Hooks
   if (hooksStatus.allInstalled) {
-    console.log("Hooks:        All 3 installed");
+    console.log(`Hooks:        All ${requiredHooks.length} installed`);
   } else {
-    console.log(`Hooks:        ${hooksStatus.missing.length} missing: ${hooksStatus.missing.join(", ")}`);
+    console.log(`Hooks:        ${hooksStatus.installed.length}/${requiredHooks.length} installed, missing: ${hooksStatus.missing.join(", ")}`);
   }
 
   // Session

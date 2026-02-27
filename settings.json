@@ -1,6 +1,5 @@
 {
   "captureEnv": true,
-  "captureToolIO": true,
   "maxDiffLines": 5000,
   "checkpointOnStop": true,
   "autoLabel": false,

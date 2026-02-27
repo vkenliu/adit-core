@@ -22,6 +22,7 @@ import {
   endSession,
 } from "@adit/core";
 import { isGitRepo, listCheckpointRefs, deleteCheckpointRef } from "@adit/engine";
+import { getAdapter } from "@adit/hooks/adapters";
 
 interface Check {
   name: string;
@@ -161,7 +162,8 @@ export async function doctorCommand(
   });
 
   // 8. Claude Code settings — verify all required hooks are registered
-  const requiredHooks = ["UserPromptSubmit", "PostToolUse", "Stop"] as const;
+  const claudeAdapter = getAdapter("claude-code");
+  const requiredHooks = claudeAdapter.hookMappings.map((m) => m.platformEvent);
   const hookSettingsLocations = [
     join(config.projectRoot, ".claude", "settings.local.json"),
     join(config.projectRoot, ".claude", "settings.json"),

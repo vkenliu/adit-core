@@ -29,6 +29,10 @@ export interface AditConfig {
   maxDiffLines: number;
   /** Whether to capture environment snapshots */
   captureEnv: boolean;
+  /** Whether to create checkpoints on Stop events */
+  checkpointOnStop: boolean;
+  /** Whether to auto-label events */
+  autoLabel: boolean;
   /** Keys to redact from tool I/O */
   redactKeys: string[];
 }
@@ -86,7 +90,18 @@ export function findGitRoot(startDir?: string): string | null {
   return null;
 }
 
-/** Load configuration from environment + defaults */
+/** Load file-based settings from settings.json in project root */
+function loadSettingsFile(projectRoot: string): Record<string, unknown> {
+  const settingsPath = join(projectRoot, "settings.json");
+  if (!existsSync(settingsPath)) return {};
+  try {
+    return JSON.parse(readFileSync(settingsPath, "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+/** Load configuration from settings.json + environment overrides */
 export function loadConfig(cwd?: string): AditConfig {
   const projectRoot =
     process.env.ADIT_PROJECT_ROOT ??
@@ -105,10 +120,15 @@ export function loadConfig(cwd?: string): AditConfig {
   const remoteUrl = process.env.ADIT_REMOTE_URL;
   const projectId = computeProjectId(projectRoot, remoteUrl);
 
+  // Load file-based settings (lowest priority — env vars override)
+  const fileSettings = loadSettingsFile(projectRoot);
+
   const redactKeysEnv = process.env.ADIT_REDACT_KEYS;
   const redactKeys = redactKeysEnv
     ? redactKeysEnv.split(",").map((k) => k.trim())
-    : DEFAULT_REDACT_KEYS;
+    : Array.isArray(fileSettings.redactKeys)
+      ? (fileSettings.redactKeys as string[])
+      : DEFAULT_REDACT_KEYS;
 
   return {
     projectRoot,
@@ -117,9 +137,17 @@ export function loadConfig(cwd?: string): AditConfig {
     clientId,
     projectId,
     refPrefix: "refs/adit/checkpoints",
-    maxPromptChars: parseInt(process.env.ADIT_MAX_PROMPT_CHARS ?? "0", 10),
-    maxDiffLines: parseInt(process.env.ADIT_MAX_DIFF_LINES ?? "0", 10),
-    captureEnv: process.env.ADIT_CAPTURE_ENV !== "false",
+    maxPromptChars: parseInt(process.env.ADIT_MAX_PROMPT_CHARS ?? String(fileSettings.maxPromptChars ?? 0), 10),
+    maxDiffLines: parseInt(process.env.ADIT_MAX_DIFF_LINES ?? String(fileSettings.maxDiffLines ?? 0), 10),
+    captureEnv: process.env.ADIT_CAPTURE_ENV !== undefined
+      ? process.env.ADIT_CAPTURE_ENV !== "false"
+      : (fileSettings.captureEnv as boolean) ?? true,
+    checkpointOnStop: process.env.ADIT_CHECKPOINT_ON_STOP !== undefined
+      ? process.env.ADIT_CHECKPOINT_ON_STOP !== "false"
+      : (fileSettings.checkpointOnStop as boolean) ?? true,
+    autoLabel: process.env.ADIT_AUTO_LABEL !== undefined
+      ? process.env.ADIT_AUTO_LABEL === "true"
+      : (fileSettings.autoLabel as boolean) ?? false,
     redactKeys,
   };
 }
