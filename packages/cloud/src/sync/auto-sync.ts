@@ -4,13 +4,18 @@
  * Called from the hooks system via dynamic import. Fully fail-open:
  * any error is swallowed so it never blocks the AI agent.
  *
- * Sync is only triggered when the number of unsynced records meets
- * the configured threshold (ADIT_CLOUD_SYNC_THRESHOLD, default 50).
- * This avoids excessive HTTP calls for every single event while
- * ensuring data reaches the cloud regularly.
+ * Sync is triggered when either:
+ * - The number of unsynced records meets the configured threshold
+ *   (ADIT_CLOUD_SYNC_THRESHOLD, default 50), OR
+ * - More than syncTimeoutHours (default 12h) have elapsed since
+ *   the last successful sync (ADIT_CLOUD_SYNC_TIMEOUT_HOURS).
+ *
+ * The time-based trigger is checked first using the already-loaded
+ * sync_state row (single PK lookup), skipping the more expensive
+ * multi-table COUNT queries when the timeout has elapsed.
  *
  * Failed syncs are not retried immediately — they will be picked up
- * on the next trigger when the threshold is still met.
+ * on the next trigger when conditions are still met.
  */
 
 import type Database from "better-sqlite3";
@@ -33,8 +38,9 @@ import { countUnsyncedRecords } from "./serializer.js";
  * 1. Cloud URL configured and auto-sync enabled
  * 2. Valid credentials present (client is authenticated)
  * 3. Credentials belong to the configured server (single-server binding)
- * 4. Unsynced record count >= syncThreshold
- * 5. Server is reachable (tested via sync status endpoint)
+ * 4. Time-based trigger: >syncTimeoutHours since last sync (skips count)
+ * 5. Count-based trigger: unsynced record count >= syncThreshold
+ * 6. Server is reachable (tested via sync status endpoint)
  *
  * If any check fails, the function returns silently. Failed events
  * remain unsynced and will be retried on the next trigger.
@@ -59,17 +65,29 @@ export async function triggerAutoSync(
     return;
   }
 
-  // 4. Check unsynced record count against threshold
+  // 4. Check sync triggers: time-based first (cheap), then count-based (expensive)
   const syncState = getSyncState(db, cloudConfig.serverUrl);
-  const unsyncedCount = countUnsyncedRecords(
-    db,
-    syncState?.lastSyncedEventId ?? null,
-    syncState?.lastSyncedAt ?? null,
-    projectId,
-  );
 
-  if (unsyncedCount < cloudConfig.syncThreshold) {
-    return;
+  // 4a. Time-based trigger: if more than syncTimeoutHours since last successful sync,
+  //     skip the expensive multi-table COUNT and trigger sync directly.
+  //     Only applies when we have a previous sync timestamp (first sync uses count-based).
+  const timeoutMs = cloudConfig.syncTimeoutHours * 60 * 60 * 1000;
+  const timeTriggered =
+    syncState?.lastSyncedAt != null &&
+    Date.now() - new Date(syncState.lastSyncedAt).getTime() > timeoutMs;
+
+  // 4b. Count-based trigger: only run the expensive count if time didn't trigger
+  if (!timeTriggered) {
+    const unsyncedCount = countUnsyncedRecords(
+      db,
+      syncState?.lastSyncedEventId ?? null,
+      syncState?.lastSyncedAt ?? null,
+      projectId,
+    );
+
+    if (unsyncedCount < cloudConfig.syncThreshold) {
+      return;
+    }
   }
 
   // 5. Attempt sync — CloudClient handles token refresh, retries,

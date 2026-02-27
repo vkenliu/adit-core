@@ -17,6 +17,8 @@ export interface CloudConfig {
   batchSize: number;
   /** Minimum unsynced events before auto-sync triggers (default: 50) */
   syncThreshold: number;
+  /** Hours since last successful sync before auto-sync triggers regardless of count (default: 12) */
+  syncTimeoutHours: number;
   /** Transcript upload configuration */
   transcriptUpload: TranscriptUploadConfig;
 }
@@ -53,6 +55,9 @@ export function loadCloudConfig(): CloudConfig {
     syncThreshold: parseSyncThreshold(
       process.env.ADIT_CLOUD_SYNC_THRESHOLD,
     ),
+    syncTimeoutHours: parseSyncTimeoutHours(
+      process.env.ADIT_CLOUD_SYNC_TIMEOUT_HOURS,
+    ),
     transcriptUpload: loadTranscriptUploadConfig(),
   };
 }
@@ -77,6 +82,14 @@ function loadTranscriptUploadConfig(): TranscriptUploadConfig {
       1024,
     ),
   };
+}
+
+function parseSyncTimeoutHours(raw: string | undefined): number {
+  const DEFAULT = 12;
+  if (raw === undefined) return DEFAULT;
+  const parsed = parseFloat(raw);
+  if (Number.isNaN(parsed) || parsed <= 0) return DEFAULT;
+  return parsed;
 }
 
 function parseSyncThreshold(raw: string | undefined): number {
