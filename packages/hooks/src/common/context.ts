@@ -10,6 +10,7 @@ import {
   loadConfig,
   openDatabase,
   getActiveSession,
+  getSessionByPlatformSessionId,
   insertSession,
   generateId,
   createClock,
@@ -30,12 +31,19 @@ export interface HookContext {
 export async function initHookContext(
   cwd: string,
   platform: string = "claude-code",
+  platformSessionId?: string,
 ): Promise<HookContext> {
   const config = loadConfig(cwd);
   const db = openDatabase(config.dbPath);
 
-  // Get or create session
-  let session = getActiveSession(db, config.projectId, config.clientId);
+  // Get or create session — prefer platform session ID lookup
+  let session: AditSession | null = null;
+  if (platformSessionId) {
+    session = getSessionByPlatformSessionId(db, platformSessionId);
+  }
+  if (!session) {
+    session = getActiveSession(db, config.projectId, config.clientId);
+  }
   if (!session) {
     const id = generateId();
     const now = new Date().toISOString();
@@ -55,9 +63,15 @@ export async function initHookContext(
         workingDirectory: cwd,
       }),
       vclockJson: serialize(createClock(config.clientId)),
+      platformSessionId: platformSessionId ?? null,
     });
 
-    session = getActiveSession(db, config.projectId, config.clientId)!;
+    // Re-fetch via platform session ID if available, else fall back
+    if (platformSessionId) {
+      session = getSessionByPlatformSessionId(db, platformSessionId)!;
+    } else {
+      session = getActiveSession(db, config.projectId, config.clientId)!;
+    }
   }
 
   return { db, config, session };

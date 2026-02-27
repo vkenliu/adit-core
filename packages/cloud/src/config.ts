@@ -15,9 +15,9 @@ export interface CloudConfig {
   autoSync: boolean;
   /** Max records per sync batch (server limit: 500) */
   batchSize: number;
-  /** Minimum unsynced events before auto-sync triggers (default: 50) */
+  /** Minimum unsynced events before auto-sync triggers (default: 20) */
   syncThreshold: number;
-  /** Hours since last successful sync before auto-sync triggers regardless of count (default: 12) */
+  /** Hours since last successful sync before auto-sync triggers regardless of count (default: 2) */
   syncTimeoutHours: number;
   /** Transcript upload configuration */
   transcriptUpload: TranscriptUploadConfig;
@@ -85,7 +85,7 @@ function loadTranscriptUploadConfig(): TranscriptUploadConfig {
 }
 
 function parseSyncTimeoutHours(raw: string | undefined): number {
-  const DEFAULT = 12;
+  const DEFAULT = 2;
   if (raw === undefined) return DEFAULT;
   const parsed = parseFloat(raw);
   if (Number.isNaN(parsed) || parsed <= 0) return DEFAULT;
@@ -93,7 +93,7 @@ function parseSyncTimeoutHours(raw: string | undefined): number {
 }
 
 function parseSyncThreshold(raw: string | undefined): number {
-  const DEFAULT = 50;
+  const DEFAULT = 20;
   if (raw === undefined) return DEFAULT;
   const parsed = parseInt(raw, 10);
   if (Number.isNaN(parsed)) return DEFAULT;

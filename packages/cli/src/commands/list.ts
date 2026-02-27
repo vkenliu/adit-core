@@ -8,7 +8,7 @@ import { loadConfig, openDatabase, closeDatabase, type AditEvent, type Actor, ty
 import { createTimelineManager } from "@adit/engine";
 import pc from "picocolors";
 
-export type SortField = "SEQ" | "ACTOR" | "TIME";
+export type SortField = "ACTOR" | "TIME";
 
 export interface ListCommandOptions {
   limit?: number;
@@ -36,7 +36,7 @@ export async function listCommand(opts: ListCommandOptions): Promise<void> {
         actor: opts.actor as Actor | undefined,
         eventType: opts.type as EventType | undefined,
         hasCheckpoint: opts.checkpoints,
-        limit: opts.limit ?? 20,
+        limit: opts.limit ?? 50,
       });
     }
 
@@ -59,14 +59,13 @@ export async function listCommand(opts: ListCommandOptions): Promise<void> {
     console.log(
       pc.bold(
         padRight("ID", 12) +
-          padRight("SEQ", 5) +
           padRight("ACTOR", 6) +
           padRight("TYPE", 20) +
           padRight("TIME", 20) +
           "SUMMARY",
       ),
     );
-    console.log(pc.dim("-".repeat(90)));
+    console.log(pc.dim("-".repeat(85)));
 
     for (const event of events) {
       const actor = actorSymbol(event.actor);
@@ -77,7 +76,6 @@ export async function listCommand(opts: ListCommandOptions): Promise<void> {
 
       console.log(
         pc.dim(padRight(idShort, 12)) +
-          padRight(String(event.sequence), 5) +
           colorActor(padRight(actor, 6), event.actor) +
           padRight(event.eventType, 20) +
           pc.dim(padRight(time, 20)) +
@@ -125,9 +123,12 @@ function colorActor(text: string, actor: string): string {
 function formatTime(iso: string): string {
   try {
     const d = new Date(iso);
-    return d.toLocaleTimeString("en-US", { hour12: false });
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    const time = d.toLocaleTimeString("en-US", { hour12: false });
+    return `${month}/${day} ${time}`;
   } catch {
-    return iso.substring(11, 19);
+    return iso.substring(5, 19).replace("T", " ");
   }
 }
 
@@ -168,9 +169,6 @@ function padRight(s: string, len: number): string {
 export function sortEvents(events: AditEvent[], field: SortField): AditEvent[] {
   const sorted = [...events];
   switch (field) {
-    case "SEQ":
-      sorted.sort((a, b) => b.sequence - a.sequence);
-      break;
     case "ACTOR":
       sorted.sort((a, b) => a.actor.localeCompare(b.actor));
       break;

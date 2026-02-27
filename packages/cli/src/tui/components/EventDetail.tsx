@@ -14,6 +14,25 @@ function truncate(s: string, max: number): string {
   return s.length > max ? s.substring(0, max - 3) + "..." : s;
 }
 
+function formatDuration(startedAt: string, endedAt: string): string {
+  const ms = new Date(endedAt).getTime() - new Date(startedAt).getTime();
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  const mins = Math.floor(ms / 60_000);
+  const secs = Math.round((ms % 60_000) / 1000);
+  return `${mins}m ${secs}s`;
+}
+
+function prettyJson(json: string, maxLen: number): string {
+  try {
+    const parsed = JSON.parse(json);
+    const pretty = JSON.stringify(parsed, null, 2);
+    return truncate(pretty.replace(/\n/g, " "), maxLen);
+  } catch {
+    return truncate(json.replace(/\n/g, " "), maxLen);
+  }
+}
+
 export function EventDetail({
   event,
 }: EventDetailProps): React.ReactElement {
@@ -35,35 +54,62 @@ export function EventDetail({
       <Text dimColor>{"─".repeat(30)}</Text>
 
       <Box flexDirection="row">
-        <Text dimColor>ID:{"       "}</Text>
-        <Text>{event.id.substring(0, 16)}</Text>
+        <Text dimColor>ID:{"        "}</Text>
+        <Text>{event.id}</Text>
       </Box>
       <Box flexDirection="row">
-        <Text dimColor>Type:{"     "}</Text>
+        <Text dimColor>Type:{"      "}</Text>
         <Text>{event.eventType}</Text>
       </Box>
       <Box flexDirection="row">
-        <Text dimColor>Actor:{"    "}</Text>
+        <Text dimColor>Actor:{"     "}</Text>
         <Text>{event.actor}</Text>
       </Box>
       <Box flexDirection="row">
-        <Text dimColor>Seq:{"      "}</Text>
+        <Text dimColor>Seq:{"       "}</Text>
         <Text>{String(event.sequence)}</Text>
       </Box>
       <Box flexDirection="row">
-        <Text dimColor>Status:{"   "}</Text>
+        <Text dimColor>Status:{"    "}</Text>
         <Text color={event.status === "error" ? "red" : "green"}>
           {event.status}
         </Text>
       </Box>
       <Box flexDirection="row">
-        <Text dimColor>Time:{"     "}</Text>
+        <Text dimColor>Started:{"   "}</Text>
         <Text>{event.startedAt}</Text>
       </Box>
 
+      {event.endedAt && (
+        <Box flexDirection="row">
+          <Text dimColor>Ended:{"     "}</Text>
+          <Text>{event.endedAt}</Text>
+          <Text dimColor> ({formatDuration(event.startedAt, event.endedAt)})</Text>
+        </Box>
+      )}
+
+      <Box flexDirection="row">
+        <Text dimColor>Session:{"   "}</Text>
+        <Text>{event.sessionId}</Text>
+      </Box>
+
+      {event.parentEventId && (
+        <Box flexDirection="row">
+          <Text dimColor>Parent:{"    "}</Text>
+          <Text>{event.parentEventId}</Text>
+        </Box>
+      )}
+
+      {event.clientId && (
+        <Box flexDirection="row">
+          <Text dimColor>Client:{"    "}</Text>
+          <Text>{event.clientId}</Text>
+        </Box>
+      )}
+
       {event.gitBranch && (
         <Box flexDirection="row">
-          <Text dimColor>Branch:{"   "}</Text>
+          <Text dimColor>Branch:{"    "}</Text>
           <Text>{event.gitBranch}</Text>
           {event.gitHeadSha && (
             <Text dimColor> @ {event.gitHeadSha.substring(0, 8)}</Text>
@@ -78,9 +124,30 @@ export function EventDetail({
         </Box>
       )}
 
+      {event.checkpointRef && (
+        <Box flexDirection="row">
+          <Text dimColor>Ref:{"       "}</Text>
+          <Text>{event.checkpointRef}</Text>
+        </Box>
+      )}
+
+      {event.envSnapshotId && (
+        <Box flexDirection="row">
+          <Text dimColor>Env Snap:{"  "}</Text>
+          <Text>{event.envSnapshotId}</Text>
+        </Box>
+      )}
+
+      {event.planTaskId && (
+        <Box flexDirection="row">
+          <Text dimColor>Plan Task:{" "}</Text>
+          <Text>{event.planTaskId}</Text>
+        </Box>
+      )}
+
       {event.toolName && (
         <Box flexDirection="row">
-          <Text dimColor>Tool:{"     "}</Text>
+          <Text dimColor>Tool:{"      "}</Text>
           <Text color="yellow">{event.toolName}</Text>
         </Box>
       )}
@@ -94,12 +161,35 @@ export function EventDetail({
         </Box>
       )}
 
+      {event.cotText && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text bold dimColor>Chain of Thought:</Text>
+          <Text wrap="truncate">
+            {truncate(event.cotText.replace(/\n/g, " "), 200)}
+          </Text>
+        </Box>
+      )}
+
       {event.responseText && (
         <Box flexDirection="column" marginTop={1}>
           <Text bold dimColor>Response:</Text>
           <Text wrap="truncate">
             {truncate(event.responseText.replace(/\n/g, " "), 200)}
           </Text>
+        </Box>
+      )}
+
+      {event.toolInputJson && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text bold dimColor>Tool Input:</Text>
+          <Text wrap="truncate">{prettyJson(event.toolInputJson, 200)}</Text>
+        </Box>
+      )}
+
+      {event.toolOutputJson && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text bold dimColor>Tool Output:</Text>
+          <Text wrap="truncate">{prettyJson(event.toolOutputJson, 200)}</Text>
         </Box>
       )}
 

@@ -14,6 +14,7 @@ export interface CreateSessionInput {
   startedAt: string;
   metadataJson?: string | null;
   vclockJson: string;
+  platformSessionId?: string | null;
 }
 
 export function insertSession(
@@ -21,8 +22,8 @@ export function insertSession(
   input: CreateSessionInput,
 ): void {
   db.prepare(`
-    INSERT INTO sessions (id, project_id, client_id, session_type, platform, started_at, metadata_json, vclock_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions (id, project_id, client_id, session_type, platform, started_at, metadata_json, vclock_json, platform_session_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     input.id,
     input.projectId,
@@ -32,6 +33,7 @@ export function insertSession(
     input.startedAt,
     input.metadataJson ?? null,
     input.vclockJson,
+    input.platformSessionId ?? null,
   );
 }
 
@@ -55,6 +57,18 @@ export function getActiveSession(
       "SELECT * FROM sessions WHERE project_id = ? AND client_id = ? AND status = 'active' AND deleted_at IS NULL ORDER BY started_at DESC LIMIT 1",
     )
     .get(projectId, clientId) as Record<string, unknown> | undefined;
+  return row ? rowToSession(row) : null;
+}
+
+export function getSessionByPlatformSessionId(
+  db: Database.Database,
+  platformSessionId: string,
+): AditSession | null {
+  const row = db
+    .prepare(
+      "SELECT * FROM sessions WHERE platform_session_id = ? AND status = 'active' AND deleted_at IS NULL ORDER BY started_at DESC LIMIT 1",
+    )
+    .get(platformSessionId) as Record<string, unknown> | undefined;
   return row ? rowToSession(row) : null;
 }
 
@@ -101,6 +115,7 @@ function rowToSession(row: Record<string, unknown>): AditSession {
     status: row.status as SessionStatus,
     metadataJson: (row.metadata_json as string) ?? null,
     vclockJson: row.vclock_json as string,
+    platformSessionId: (row.platform_session_id as string) ?? null,
     deletedAt: (row.deleted_at as string) ?? null,
   };
 }

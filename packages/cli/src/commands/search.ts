@@ -77,7 +77,7 @@ export async function searchCommand(
 
 function printEventLine(event: AditEvent): void {
   const idShort = event.id.substring(0, 10);
-  const time = event.startedAt.substring(11, 19);
+  const time = event.startedAt.substring(5, 19).replace("T", " ");
   const labels = event.labelsJson ? ` ${JSON.parse(event.labelsJson).map((l: string) => `[${l}]`).join("")}` : "";
   const checkpoint = event.checkpointSha ? " *" : "";
   const snippet =

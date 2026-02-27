@@ -75,7 +75,7 @@ program
   .option("-c, --checkpoints", "Only show checkpoint events")
   .option("-q, --query <text>", "Search by text")
   .option("-e, --expand", "Show expanded summaries")
-  .option("-s, --sort <field>", "Sort by field: SEQ, ACTOR, or TIME (default: TIME)")
+  .option("-s, --sort <field>", "Sort by field: ACTOR or TIME (default: TIME)")
   .option("--json", "Output as JSON")
   .action((opts) =>
     listCommand({

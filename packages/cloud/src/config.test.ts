@@ -27,8 +27,8 @@ describe("loadCloudConfig", () => {
     expect(config.enabled).toBe(false);
     expect(config.autoSync).toBe(false);
     expect(config.batchSize).toBe(500);
-    expect(config.syncThreshold).toBe(50);
-    expect(config.syncTimeoutHours).toBe(12);
+    expect(config.syncThreshold).toBe(20);
+    expect(config.syncTimeoutHours).toBe(2);
   });
 
   it("reads syncThreshold from ADIT_CLOUD_SYNC_THRESHOLD", () => {
@@ -43,10 +43,10 @@ describe("loadCloudConfig", () => {
     expect(config.syncThreshold).toBe(1);
   });
 
-  it("falls back to 50 for invalid syncThreshold", () => {
+  it("falls back to 20 for invalid syncThreshold", () => {
     process.env.ADIT_CLOUD_SYNC_THRESHOLD = "not-a-number";
     const config = loadCloudConfig();
-    expect(config.syncThreshold).toBe(50);
+    expect(config.syncThreshold).toBe(20);
   });
 
   it("enables cloud when server URL is set", () => {
@@ -74,15 +74,15 @@ describe("loadCloudConfig", () => {
     expect(config.syncTimeoutHours).toBe(0.5);
   });
 
-  it("falls back to 12 for invalid syncTimeoutHours", () => {
+  it("falls back to 2 for invalid syncTimeoutHours", () => {
     process.env.ADIT_CLOUD_SYNC_TIMEOUT_HOURS = "not-a-number";
     const config = loadCloudConfig();
-    expect(config.syncTimeoutHours).toBe(12);
+    expect(config.syncTimeoutHours).toBe(2);
   });
 
-  it("falls back to 12 for non-positive syncTimeoutHours", () => {
+  it("falls back to 2 for non-positive syncTimeoutHours", () => {
     process.env.ADIT_CLOUD_SYNC_TIMEOUT_HOURS = "0";
     const config = loadCloudConfig();
-    expect(config.syncTimeoutHours).toBe(12);
+    expect(config.syncTimeoutHours).toBe(2);
   });
 });

@@ -196,12 +196,12 @@ describe("Claude Code Adapter", () => {
     expect(hooks.SubagentStart).toBeDefined();
     expect(hooks.SubagentStop).toBeDefined();
 
-    // Verify async: true is set on all hooks
+    // Verify hooks run synchronously (no async flag)
     for (const hookName of Object.keys(hooks)) {
       const entries = hooks[hookName] as Array<{
-        hooks: Array<{ type: string; command: string; async: boolean }>;
+        hooks: Array<{ type: string; command: string; async?: boolean }>;
       }>;
-      expect(entries[0].hooks[0].async).toBe(true);
+      expect(entries[0].hooks[0].async).toBeUndefined();
     }
   });
 });

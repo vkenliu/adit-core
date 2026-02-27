@@ -23,7 +23,7 @@ import type { NormalizedHookInput } from "../adapters/types.js";
  * This is the single entry point for all platform hook events.
  */
 export async function dispatchHook(input: NormalizedHookInput): Promise<void> {
-  const ctx = await initHookContext(input.cwd);
+  const ctx = await initHookContext(input.cwd, "claude-code", input.platformSessionId);
 
   try {
     switch (input.hookType) {
@@ -60,6 +60,21 @@ export async function dispatchHook(input: NormalizedHookInput): Promise<void> {
       triggerTranscriptUploadIfEnabled(ctx, input).catch(() => {
         /* fail-open */
       });
+    }
+
+    // Auto-sync to cloud on every hook event (fire-and-forget, fail-open).
+    // Uses dynamic import so @adit/cloud is not a build-time dependency.
+    // The module name is constructed to prevent TypeScript from resolving it.
+    try {
+      const cloudModuleName = ["@adit", "cloud"].join("/");
+      const cloudModule = await import(cloudModuleName) as {
+        triggerAutoSync: (db: unknown, projectId: string) => Promise<void>;
+      };
+      // Awaited so db stays open until it finishes querying.
+      // The actual network push happens inside triggerAutoSync's own fire-and-forget.
+      await cloudModule.triggerAutoSync(ctx.db, ctx.config.projectId);
+    } catch {
+      // @adit/cloud not installed — silently skip
     }
   } finally {
     ctx.db.close();
@@ -164,20 +179,6 @@ async function handleStopUnified(ctx: HookContext, input: NormalizedHookInput): 
     }
   }
 
-  // Auto-sync to cloud (fire-and-forget, fail-open)
-  // Uses dynamic import so @adit/cloud is not a build-time dependency.
-  // The module name is constructed to prevent TypeScript from resolving it.
-  try {
-    const cloudModuleName = ["@adit", "cloud"].join("/");
-    const cloudModule = await import(cloudModuleName) as {
-      triggerAutoSync: (db: unknown, projectId: string) => Promise<void>;
-    };
-    // Note: auto-sync is awaited so db stays open until it finishes querying.
-    // The actual network push happens inside triggerAutoSync's own fire-and-forget.
-    await cloudModule.triggerAutoSync(ctx.db, ctx.config.projectId);
-  } catch {
-    // @adit/cloud not installed — silently skip
-  }
 }
 
 /** Handle session start — capture initial env snapshot and record metadata */

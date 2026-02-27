@@ -28,19 +28,18 @@ import { SyncEngine } from "./engine.js";
 import { countUnsyncedRecords } from "./serializer.js";
 
 /**
- * Trigger a background sync if auto-sync is enabled, credentials exist,
- * the server is reachable, and the unsynced record count meets the threshold.
+ * Trigger a background sync if credentials exist and the unsynced record
+ * count meets the threshold (or the time trigger fires).
  *
  * This function is designed to be called as fire-and-forget:
  *   triggerAutoSync(db, projectId).catch(() => {})
  *
  * Precondition checks (in order):
- * 1. Cloud URL configured and auto-sync enabled
- * 2. Valid credentials present (client is authenticated)
- * 3. Credentials belong to the configured server (single-server binding)
+ * 1. Valid credentials present (client is authenticated)
+ * 2. Resolve server URL: env var takes priority, falls back to credentials
+ * 3. Auto-sync not explicitly disabled (ADIT_CLOUD_AUTO_SYNC !== "false")
  * 4. Time-based trigger: >syncTimeoutHours since last sync (skips count)
  * 5. Count-based trigger: unsynced record count >= syncThreshold
- * 6. Server is reachable (tested via sync status endpoint)
  *
  * If any check fails, the function returns silently. Failed events
  * remain unsynced and will be retried on the next trigger.
@@ -51,22 +50,28 @@ export async function triggerAutoSync(
 ): Promise<void> {
   const cloudConfig = loadCloudConfig();
 
-  // 1. Check cloud is configured and auto-sync is enabled
-  if (!cloudConfig.serverUrl || !cloudConfig.enabled || !cloudConfig.autoSync) {
-    return;
-  }
-
-  // 2. Check credentials exist
+  // 1. Check credentials exist — credentials are the implicit opt-in
   const credentials = loadCredentials();
   if (!credentials) return;
 
-  // 3. Verify credentials belong to the configured server
-  if (credentials.serverUrl !== cloudConfig.serverUrl) {
+  // 2. Resolve server URL: env var takes priority, fall back to credentials
+  const serverUrl = cloudConfig.serverUrl ?? credentials.serverUrl;
+  if (!serverUrl) return;
+
+  // 2a. If env var specifies a different server than credentials, skip
+  //     (single-server binding: don't send credentials to wrong server)
+  if (cloudConfig.serverUrl && credentials.serverUrl !== cloudConfig.serverUrl) {
     return;
   }
 
+  // 3. Auto-sync is enabled by default when credentials exist.
+  //    Only skip if explicitly disabled via ADIT_CLOUD_AUTO_SYNC=false
+  //    or ADIT_CLOUD_ENABLED=false.
+  if (process.env.ADIT_CLOUD_AUTO_SYNC === "false") return;
+  if (process.env.ADIT_CLOUD_ENABLED === "false") return;
+
   // 4. Check sync triggers: time-based first (cheap), then count-based (expensive)
-  const syncState = getSyncState(db, cloudConfig.serverUrl);
+  const syncState = getSyncState(db, serverUrl);
 
   // 4a. Time-based trigger: if more than syncTimeoutHours since last successful sync,
   //     skip the expensive multi-table COUNT and trigger sync directly.
@@ -97,11 +102,11 @@ export async function triggerAutoSync(
   }
 
   try {
-    const client = new CloudClient(cloudConfig.serverUrl, credentials);
+    const client = new CloudClient(serverUrl, credentials);
     const engine = new SyncEngine(db, client, {
       projectId,
       batchSize: cloudConfig.batchSize,
-      serverUrl: cloudConfig.serverUrl,
+      serverUrl,
       cloudClientId: credentials.clientId,
     });
 

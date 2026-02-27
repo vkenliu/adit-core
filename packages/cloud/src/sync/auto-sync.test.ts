@@ -74,8 +74,8 @@ function setupDefaults() {
     enabled: true,
     autoSync: true,
     batchSize: 500,
-    syncThreshold: 50,
-    syncTimeoutHours: 12,
+    syncThreshold: 20,
+    syncTimeoutHours: 2,
     transcriptUpload: {
       enabled: false,
       pollIntervalSec: 30,
@@ -123,21 +123,21 @@ describe("triggerAutoSync", () => {
   });
 
   it("syncs when count meets threshold", async () => {
-    mockCountUnsyncedRecords.mockReturnValue(50);
+    mockCountUnsyncedRecords.mockReturnValue(20);
     await triggerAutoSync(fakeDb, PROJECT_ID);
 
     expect(mockCountUnsyncedRecords).toHaveBeenCalled();
     expect(syncFn).toHaveBeenCalled();
   });
 
-  it("syncs via time trigger when >12h since last sync, skipping count check", async () => {
-    // Last sync was 13 hours ago
-    const thirteenHoursAgo = new Date(Date.now() - 13 * 60 * 60 * 1000).toISOString();
+  it("syncs via time trigger when >2h since last sync, skipping count check", async () => {
+    // Last sync was 3 hours ago
+    const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
     mockGetSyncState.mockReturnValue({
       serverUrl: SERVER_URL,
       clientId: "client-1",
       lastSyncedEventId: "01H000000000000000000000",
-      lastSyncedAt: thirteenHoursAgo,
+      lastSyncedAt: threeHoursAgo,
       syncVersion: 1,
     });
 
@@ -149,13 +149,13 @@ describe("triggerAutoSync", () => {
   });
 
   it("falls through to count check when last sync is within timeout", async () => {
-    // Last sync was 6 hours ago (within 12h timeout)
-    const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+    // Last sync was 1 hour ago (within 2h timeout)
+    const oneHourAgo = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
     mockGetSyncState.mockReturnValue({
       serverUrl: SERVER_URL,
       clientId: "client-1",
       lastSyncedEventId: "01H000000000000000000000",
-      lastSyncedAt: sixHoursAgo,
+      lastSyncedAt: oneHourAgo,
       syncVersion: 1,
     });
     mockCountUnsyncedRecords.mockReturnValue(10);
@@ -184,7 +184,7 @@ describe("triggerAutoSync", () => {
       enabled: true,
       autoSync: true,
       batchSize: 500,
-      syncThreshold: 50,
+      syncThreshold: 20,
       syncTimeoutHours: 1, // 1 hour
       transcriptUpload: {
         enabled: false,
@@ -211,14 +211,24 @@ describe("triggerAutoSync", () => {
     expect(syncFn).toHaveBeenCalled();
   });
 
-  it("does not sync when auto-sync is disabled", async () => {
+  it("does not sync when auto-sync is explicitly disabled via env var", async () => {
+    process.env.ADIT_CLOUD_AUTO_SYNC = "false";
+
+    await triggerAutoSync(fakeDb, PROJECT_ID);
+
+    expect(syncFn).not.toHaveBeenCalled();
+    delete process.env.ADIT_CLOUD_AUTO_SYNC;
+  });
+
+  it("syncs when credentials exist even without ADIT_CLOUD_URL env var", async () => {
+    // No server URL in config — falls back to credentials
     mockLoadCloudConfig.mockReturnValue({
-      serverUrl: SERVER_URL,
-      enabled: true,
+      serverUrl: null,
+      enabled: false,
       autoSync: false,
       batchSize: 500,
-      syncThreshold: 50,
-      syncTimeoutHours: 12,
+      syncThreshold: 20,
+      syncTimeoutHours: 2,
       transcriptUpload: {
         enabled: false,
         pollIntervalSec: 30,
@@ -227,10 +237,11 @@ describe("triggerAutoSync", () => {
         minIncrementBytes: 1024,
       },
     });
+    mockCountUnsyncedRecords.mockReturnValue(25);
 
     await triggerAutoSync(fakeDb, PROJECT_ID);
 
-    expect(syncFn).not.toHaveBeenCalled();
+    expect(syncFn).toHaveBeenCalled();
   });
 
   it("does not sync when credentials are missing", async () => {

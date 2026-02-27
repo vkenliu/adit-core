@@ -15,9 +15,12 @@ interface SearchScreenProps {
 function formatTime(iso: string): string {
   try {
     const d = new Date(iso);
-    return d.toLocaleTimeString("en-US", { hour12: false });
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    const time = d.toLocaleTimeString("en-US", { hour12: false });
+    return `${month}/${day} ${time}`;
   } catch {
-    return iso.substring(11, 19);
+    return iso.substring(5, 19).replace("T", " ");
   }
 }
 

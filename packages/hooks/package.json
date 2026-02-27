@@ -24,6 +24,7 @@
   },
   "dependencies": {
     "@adit/core": "workspace:*",
+    "@adit/cloud": "workspace:*",
     "@adit/engine": "workspace:*"
   },
   "devDependencies": {

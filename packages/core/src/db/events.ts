@@ -153,7 +153,7 @@ export function queryEvents(
 
   const rows = db
     .prepare(
-      `SELECT * FROM events WHERE ${where} ORDER BY sequence DESC LIMIT ?`,
+      `SELECT * FROM events WHERE ${where} ORDER BY started_at DESC LIMIT ?`,
     )
     .all(...params) as Record<string, unknown>[];
 
