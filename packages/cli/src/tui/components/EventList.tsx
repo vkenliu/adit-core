@@ -6,6 +6,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import type { AditEvent } from "@adit/core";
 import type { SortField } from "../../commands/list.js";
+import { getEventSummary } from "../../utils/summary.js";
 
 interface EventListProps {
   events: AditEvent[];
@@ -59,23 +60,7 @@ function formatTime(iso: string): string {
 }
 
 function getSummary(event: AditEvent): string {
-  if (event.promptText) {
-    return truncate(event.promptText.replace(/\n/g, " "), 50);
-  }
-  if (event.toolName) {
-    return event.toolName;
-  }
-  if (event.checkpointSha) {
-    return `checkpoint ${event.checkpointSha.substring(0, 8)}`;
-  }
-  if (event.responseText) {
-    return truncate(event.responseText.replace(/\n/g, " "), 50);
-  }
-  return event.eventType;
-}
-
-function truncate(s: string, max: number): string {
-  return s.length > max ? s.substring(0, max - 3) + "..." : s;
+  return getEventSummary(event, 50);
 }
 
 function sortIndicator(column: string, sortField?: SortField): string {

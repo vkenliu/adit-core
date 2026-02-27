@@ -5,6 +5,7 @@
 import React, { useState } from "react";
 import { Box, Text, useInput } from "ink";
 import type { AditEvent } from "@adit/core";
+import { getEventSummary } from "../../utils/summary.js";
 
 interface SearchScreenProps {
   onSearch: (query: string) => void;
@@ -39,17 +40,8 @@ function actorSymbol(actor: string): string {
   }
 }
 
-function truncate(s: string, max: number): string {
-  return s.length > max ? s.substring(0, max - 3) + "..." : s;
-}
-
 function getSummary(event: AditEvent): string {
-  if (event.promptText)
-    return truncate(event.promptText.replace(/\n/g, " "), 60);
-  if (event.toolName) return event.toolName;
-  if (event.responseText)
-    return truncate(event.responseText.replace(/\n/g, " "), 60);
-  return event.eventType;
+  return getEventSummary(event, 60);
 }
 
 export function SearchScreen({

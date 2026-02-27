@@ -4,7 +4,8 @@
  * Displays a compact, token-efficient table of recent events.
  */
 
-import { loadConfig, openDatabase, closeDatabase, type AditEvent, type Actor, type EventType, parseDiffStats, parseLabels } from "@adit/core";
+import { loadConfig, openDatabase, closeDatabase, type AditEvent, type Actor, type EventType } from "@adit/core";
+import { getEventSummary } from "../utils/summary.js";
 import { createTimelineManager } from "@adit/engine";
 import pc from "picocolors";
 
@@ -133,33 +134,7 @@ function formatTime(iso: string): string {
 }
 
 function getSummary(event: AditEvent, expand?: boolean): string {
-  const maxLen = expand ? 200 : 60;
-
-  if (event.promptText) {
-    return truncate(event.promptText.replace(/\n/g, " "), maxLen);
-  }
-  if (event.toolName) {
-    return truncate(`${event.toolName}`, maxLen);
-  }
-  if (event.checkpointSha) {
-    const stats = parseDiffStats(event.diffStatJson);
-    const fileCount = stats.length;
-    return `checkpoint ${event.checkpointSha.substring(0, 8)} (${fileCount} files)`;
-  }
-  if (event.responseText) {
-    return truncate(event.responseText.replace(/\n/g, " "), maxLen);
-  }
-
-  const labels = parseLabels(event.labelsJson);
-  if (labels.length > 0) {
-    return labels.join(", ");
-  }
-
-  return event.eventType;
-}
-
-function truncate(s: string, max: number): string {
-  return s.length > max ? s.substring(0, max - 3) + "..." : s;
+  return getEventSummary(event, expand ? 200 : 60);
 }
 
 function padRight(s: string, len: number): string {

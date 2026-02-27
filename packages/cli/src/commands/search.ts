@@ -9,6 +9,7 @@ import {
   type AditEvent,
   type EventType,
 } from "@adit/core";
+import { getEventSummary } from "../utils/summary.js";
 import { createTimelineManager } from "@adit/engine";
 
 /** `adit search <query>` — search events with advanced filters */
@@ -80,11 +81,7 @@ function printEventLine(event: AditEvent): void {
   const time = event.startedAt.substring(5, 19).replace("T", " ");
   const labels = event.labelsJson ? ` ${JSON.parse(event.labelsJson).map((l: string) => `[${l}]`).join("")}` : "";
   const checkpoint = event.checkpointSha ? " *" : "";
-  const snippet =
-    event.promptText?.substring(0, 80) ??
-    event.toolName ??
-    event.responseText?.substring(0, 80) ??
-    event.eventType;
+  const snippet = getEventSummary(event, 80);
   console.log(`  ${idShort}  ${time}  [${event.actor[0].toUpperCase()}]${checkpoint}  ${snippet}${labels}`);
 }
 
@@ -97,10 +94,6 @@ function formatEventSummary(event: AditEvent): Record<string, unknown> {
     gitBranch: event.gitBranch,
     checkpointSha: event.checkpointSha,
     labels: event.labelsJson ? JSON.parse(event.labelsJson) : [],
-    snippet:
-      event.promptText?.substring(0, 200) ??
-      event.toolName ??
-      event.responseText?.substring(0, 200) ??
-      null,
+    snippet: getEventSummary(event, 200),
   };
 }
