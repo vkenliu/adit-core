@@ -41,6 +41,7 @@ import {
   cloudLogoutCommand,
   cloudSyncCommand,
   cloudStatusCommand,
+  cloudUploadCommand,
 } from "./commands/cloud.js";
 import { launchTui } from "./tui/index.js";
 
@@ -316,6 +317,22 @@ cloudCmd
   .description("Show cloud sync status")
   .option("--json", "Output as JSON")
   .action((opts) => cloudStatusCommand({ json: opts.json }));
+
+cloudCmd
+  .command("upload")
+  .description("Upload Claude Code chat history to cloud")
+  .option("--session <uuid>", "Upload a specific session")
+  .option("--list", "List available projects and sessions")
+  .option("--dry-run", "Preview without uploading")
+  .option("--json", "Output as JSON")
+  .action((opts) =>
+    cloudUploadCommand({
+      session: opts.session,
+      list: opts.list,
+      dryRun: opts.dryRun,
+      json: opts.json,
+    }),
+  );
 
 // TUI — interactive terminal interface
 program
