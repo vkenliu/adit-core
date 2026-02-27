@@ -21,6 +21,8 @@ export {
   allocateSequence,
   searchEvents,
   getLatestCheckpointEvent,
+  clearEvents,
+  countEvents,
   type InsertEventInput,
   type EventQueryOptions,
 } from "./events.js";

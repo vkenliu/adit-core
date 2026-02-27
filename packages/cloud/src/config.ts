@@ -15,6 +15,8 @@ export interface CloudConfig {
   autoSync: boolean;
   /** Max records per sync batch (server limit: 500) */
   batchSize: number;
+  /** Minimum unsynced events before auto-sync triggers (default: 50) */
+  syncThreshold: number;
 }
 
 /** Load cloud configuration from environment variables */
@@ -33,5 +35,16 @@ export function loadCloudConfig(): CloudConfig {
       parseInt(process.env.ADIT_CLOUD_BATCH_SIZE ?? "500", 10) || 500,
       500, // Server hard limit
     ),
+    syncThreshold: parseSyncThreshold(
+      process.env.ADIT_CLOUD_SYNC_THRESHOLD,
+    ),
   };
+}
+
+function parseSyncThreshold(raw: string | undefined): number {
+  const DEFAULT = 50;
+  if (raw === undefined) return DEFAULT;
+  const parsed = parseInt(raw, 10);
+  if (Number.isNaN(parsed)) return DEFAULT;
+  return Math.max(parsed, 1);
 }

@@ -2,10 +2,11 @@
  * `adit cloud` — Cloud sync commands.
  *
  * Subcommands:
- *   login   — Authenticate via device code flow
- *   logout  — Clear stored credentials
- *   sync    — Push unsynced records to cloud
- *   status  — Show sync state and unsynced count
+ *   login             — Authenticate via device code flow
+ *   logout            — Clear stored credentials
+ *   sync              — Push unsynced records to cloud
+ *   status            — Show sync state and unsynced count
+ *   reset-credentials — Force-clear all credentials and sync state
  */
 
 import { loadConfig, openDatabase, closeDatabase } from "@adit/core";
@@ -38,6 +39,22 @@ export async function cloudLoginCommand(opts?: {
 }): Promise<void> {
   const serverUrl = opts?.server ?? process.env.ADIT_CLOUD_URL ?? DEFAULT_SERVER_URL;
   const config = loadConfig();
+
+  // Single-server binding: reject login if already bound to a different server
+  const existingCredentials = loadCredentials();
+  if (existingCredentials && existingCredentials.serverUrl !== serverUrl) {
+    console.error(
+      `Already authenticated with ${existingCredentials.serverUrl}.`,
+    );
+    console.error(
+      "A client can only be connected to one cloud server at a time.",
+    );
+    console.error(
+      "Run 'adit cloud reset-credentials' first to disconnect, then try again.",
+    );
+    process.exitCode = 1;
+    return;
+  }
 
   console.log(`Connecting to ${serverUrl}...`);
   console.log();
@@ -304,4 +321,54 @@ export async function cloudStatusCommand(opts?: {
   }
 
   console.log(`Unsynced:     ${status.unsyncedRecords} records`);
+}
+
+/**
+ * `adit cloud reset-credentials` — Force-clear all credentials and sync state.
+ *
+ * Unlike logout, this does not attempt to revoke the token on the server.
+ * It simply wipes all local credential and sync state, allowing the client
+ * to connect to any cloud server again.
+ */
+export async function cloudResetCredentialsCommand(opts?: {
+  yes?: boolean;
+}): Promise<void> {
+  const credentials = loadCredentials();
+
+  if (!credentials) {
+    console.log("No credentials stored. Nothing to reset.");
+    return;
+  }
+
+  if (!opts?.yes) {
+    console.log(
+      `This will remove all stored credentials for ${credentials.serverUrl}.`,
+    );
+    console.log("Local sync state will also be cleared.");
+    console.log(
+      "You will need to run 'adit cloud login' to reconnect to any server.",
+    );
+    console.log();
+    console.log("Run with --yes to confirm.");
+    process.exitCode = 1;
+    return;
+  }
+
+  // Clear local sync state
+  const config = loadConfig();
+  try {
+    const db = openDatabase(config.dbPath);
+    try {
+      const { clearSyncState } = await import("@adit/core");
+      clearSyncState(db, credentials.serverUrl);
+    } finally {
+      closeDatabase(db);
+    }
+  } catch {
+    // Database may not exist yet
+  }
+
+  clearCredentials();
+  console.log("Credentials and sync state cleared.");
+  console.log("You can now connect to any cloud server with 'adit cloud login'.");
 }

@@ -41,7 +41,9 @@ import {
   cloudLogoutCommand,
   cloudSyncCommand,
   cloudStatusCommand,
+  cloudResetCredentialsCommand,
 } from "./commands/cloud.js";
+import { dbClearEventsCommand } from "./commands/db.js";
 import { launchTui } from "./tui/index.js";
 
 const program = new Command();
@@ -316,6 +318,24 @@ cloudCmd
   .description("Show cloud sync status")
   .option("--json", "Output as JSON")
   .action((opts) => cloudStatusCommand({ json: opts.json }));
+
+cloudCmd
+  .command("reset-credentials")
+  .description("Force-clear all credentials and sync state")
+  .option("-y, --yes", "Skip confirmation")
+  .action((opts) => cloudResetCredentialsCommand({ yes: opts.yes }));
+
+// Database management
+const dbCmd = program
+  .command("db")
+  .description("Database management commands");
+
+dbCmd
+  .command("clear-events")
+  .description("Delete all local events, sessions, diffs, and env snapshots")
+  .option("-y, --yes", "Skip confirmation")
+  .option("--json", "Output as JSON")
+  .action((opts) => dbClearEventsCommand({ yes: opts.yes, json: opts.json }));
 
 // TUI — interactive terminal interface
 program
