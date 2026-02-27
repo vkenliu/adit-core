@@ -63,7 +63,7 @@ export interface SyncEnvSnapshot {
   client_id: string;
   git_branch: string | null;
   git_head_sha: string | null;
-  dependency_files: string | null;
+  modified_files: string | null;
   lockfile_hash: string | null;
   lockfile_path: string | null;
   env_vars: string | null;
@@ -100,7 +100,7 @@ export interface SyncDiff {
   event_id: string;
   client_id: string;
   diff_text: string;
-  file_path: string | null;
+  file_filter: string | null;
   created_at: string;
 }
 
@@ -167,11 +167,12 @@ export function buildSyncBatch(
     remaining -= batch.events.length;
   }
 
-  // 3. Env snapshots — append-only
+  // 3. Env snapshots — append-only, filtered by project
   if (remaining > 0) {
     batch.envSnapshots = queryEnvSnapshots(
       db,
       afterEventId,
+      projectId,
       cloudClientId,
       remaining,
     );
@@ -370,18 +371,26 @@ function queryEvents(
 function queryEnvSnapshots(
   db: Database.Database,
   afterId: string | null,
+  projectId: string,
   cloudClientId: string,
   limit: number,
 ): SyncEnvSnapshot[] {
   let sql: string;
   const params: unknown[] = [];
 
+  // Join on sessions to filter by project_id (prevents cross-project leaks)
   if (afterId) {
-    sql = `SELECT * FROM env_snapshots WHERE id > ? ORDER BY id ASC LIMIT ?`;
-    params.push(afterId, limit);
+    sql = `SELECT es.* FROM env_snapshots es
+           JOIN sessions s ON es.session_id = s.id
+           WHERE es.id > ? AND s.project_id = ?
+           ORDER BY es.id ASC LIMIT ?`;
+    params.push(afterId, projectId, limit);
   } else {
-    sql = `SELECT * FROM env_snapshots ORDER BY id ASC LIMIT ?`;
-    params.push(limit);
+    sql = `SELECT es.* FROM env_snapshots es
+           JOIN sessions s ON es.session_id = s.id
+           WHERE s.project_id = ?
+           ORDER BY es.id ASC LIMIT ?`;
+    params.push(projectId, limit);
   }
 
   const rows = db.prepare(sql).all(...params) as Record<string, unknown>[];
@@ -392,7 +401,7 @@ function queryEnvSnapshots(
     client_id: cloudClientId,
     git_branch: (r.git_branch as string) ?? null,
     git_head_sha: (r.git_head_sha as string) ?? null,
-    dependency_files: (r.modified_files as string) ?? null,
+    modified_files: (r.modified_files as string) ?? null,
     lockfile_hash: (r.dep_lock_hash as string) ?? null,
     lockfile_path: (r.dep_lock_path as string) ?? null,
     env_vars: (r.env_vars_json as string) ?? null,
@@ -474,7 +483,7 @@ function queryDiffs(
     event_id: r.event_id as string,
     client_id: cloudClientId,
     diff_text: r.diff_text as string,
-    file_path: (r.file_filter as string) ?? null,
+    file_filter: (r.file_filter as string) ?? null,
     created_at: r.created_at as string,
   }));
 }

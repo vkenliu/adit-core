@@ -62,6 +62,10 @@ export interface NormalizedHookInput {
   toolInput?: Record<string, unknown>;
   toolOutput?: Record<string, unknown>;
   stopReason?: string;
+  /** The assistant's last message text (sent in Stop events) */
+  lastAssistantMessage?: string;
+  /** Whether the stop hook is active (loop prevention) */
+  stopHookActive?: boolean;
   taskId?: string;
   taskSubject?: string;
   taskDescription?: string;
@@ -73,7 +77,14 @@ export interface NormalizedHookInput {
   agentId?: string;
   agentType?: string;
   agentTranscriptPath?: string;
-  lastAssistantMessage?: string;
+  /** Permission mode the AI agent is running in */
+  permissionMode?: string;
+  /** Which AI model is being used (from SessionStart) */
+  model?: string;
+  /** Session source: startup, resume, clear, compact (from SessionStart) */
+  sessionSource?: string;
+  /** Why the session ended: clear, logout, exit, etc. (from SessionEnd) */
+  sessionEndReason?: string;
   rawPlatformData?: Record<string, unknown>;
 }
 

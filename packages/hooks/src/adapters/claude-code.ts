@@ -55,23 +55,36 @@ export const claudeCodeAdapter: PlatformAdapter = {
       platformCli: "claude-code",
       platformSessionId: raw.session_id as string | undefined,
       transcriptPath: raw.transcript_path as string | undefined,
+      // Prompt
       prompt: raw.prompt as string | undefined,
+      // Tool use fields (available from SubagentStop, etc.)
       toolName: raw.tool_name as string | undefined,
       toolInput: raw.tool_input as Record<string, unknown> | undefined,
       toolOutput: raw.tool_output as Record<string, unknown> | undefined,
+      // Stop
       stopReason: raw.stop_reason as string | undefined,
+      lastAssistantMessage: raw.last_assistant_message as string | undefined,
+      stopHookActive: raw.stop_hook_active as boolean | undefined,
+      // Task completed
       taskId: raw.task_id as string | undefined,
       taskSubject: raw.task_subject as string | undefined,
       taskDescription: raw.task_description as string | undefined,
       teammateName: raw.teammate_name as string | undefined,
       teamName: raw.team_name as string | undefined,
+      // Notification
       notificationMessage: raw.message as string | undefined,
       notificationTitle: raw.title as string | undefined,
       notificationType: raw.notification_type as string | undefined,
+      // Subagent
       agentId: raw.agent_id as string | undefined,
       agentType: raw.agent_type as string | undefined,
       agentTranscriptPath: raw.agent_transcript_path as string | undefined,
-      lastAssistantMessage: raw.last_assistant_message as string | undefined,
+      // Common metadata (present in all events)
+      permissionMode: raw.permission_mode as string | undefined,
+      model: raw.model as string | undefined,
+      // Session lifecycle
+      sessionSource: raw.source as string | undefined,
+      sessionEndReason: raw.reason as string | undefined,
       rawPlatformData: raw,
     };
   },
@@ -118,7 +131,7 @@ export const claudeCodeAdapter: PlatformAdapter = {
 
     let hooksFound = false;
     let hooksDetail = "No hook configuration found";
-    const requiredHooks = ["UserPromptSubmit", "Stop"];
+    const requiredHooks = HOOK_MAPPINGS.map((m) => m.platformEvent);
     const missingHooks: string[] = [];
 
     for (const settingsPath of settingsFiles) {

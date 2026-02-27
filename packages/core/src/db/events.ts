@@ -38,6 +38,7 @@ export interface InsertEventInput {
   errorJson?: string | null;
   labelsJson?: string | null;
   planTaskId?: string | null;
+  clientId?: string | null;
   vclockJson: string;
 }
 
@@ -49,7 +50,7 @@ const INSERT_SQL = `
     checkpoint_sha, checkpoint_ref, diff_stat_json,
     git_branch, git_head_sha, env_snapshot_id,
     started_at, ended_at, status, error_json, labels_json, plan_task_id,
-    vclock_json
+    client_id, vclock_json
   ) VALUES (
     ?, ?, ?, ?, ?, ?,
     ?, ?, ?,
@@ -57,7 +58,7 @@ const INSERT_SQL = `
     ?, ?, ?,
     ?, ?, ?,
     ?, ?, ?, ?, ?, ?,
-    ?
+    ?, ?
   )
 `;
 
@@ -90,6 +91,7 @@ export function insertEvent(
     input.errorJson ?? null,
     input.labelsJson ?? null,
     input.planTaskId ?? null,
+    input.clientId ?? null,
     input.vclockJson,
   );
 }
@@ -347,6 +349,7 @@ function rowToEvent(row: Record<string, unknown>): AditEvent {
     errorJson: (row.error_json as string) ?? null,
     labelsJson: (row.labels_json as string) ?? null,
     planTaskId: (row.plan_task_id as string) ?? null,
+    clientId: (row.client_id as string) ?? null,
     vclockJson: row.vclock_json as string,
     deletedAt: (row.deleted_at as string) ?? null,
   };

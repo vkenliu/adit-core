@@ -7,12 +7,24 @@
 import type { Platform } from "@adit/core";
 import type { PlatformAdapter } from "./types.js";
 import { claudeCodeAdapter } from "./claude-code.js";
+import {
+  cursorAdapter,
+  copilotAdapter,
+  opencodeAdapter,
+  codexAdapter,
+} from "./stub.js";
 
 /** Registered adapters keyed by platform */
 const adapters = new Map<Platform, PlatformAdapter>();
 
 // Register built-in adapters
 adapters.set("claude-code", claudeCodeAdapter);
+
+// Register stub adapters (detected but not yet fully implemented)
+adapters.set("cursor", cursorAdapter);
+adapters.set("copilot", copilotAdapter);
+adapters.set("opencode", opencodeAdapter);
+adapters.set("codex", codexAdapter);
 
 /** Get the adapter for a platform */
 export function getAdapter(platform: Platform): PlatformAdapter {
@@ -53,6 +65,16 @@ export function detectPlatform(): Platform {
   // GitHub Copilot detection
   if (process.env.GITHUB_COPILOT || process.env.COPILOT_SESSION) {
     return "copilot";
+  }
+
+  // OpenCode detection (Go-based AI coding CLI)
+  if (process.env.OPENCODE || process.env.OPENCODE_SESSION) {
+    return "opencode";
+  }
+
+  // Codex detection (OpenAI's AI coding agent)
+  if (process.env.CODEX || process.env.CODEX_SESSION) {
+    return "codex";
   }
 
   // Default to claude-code (the only fully supported platform)

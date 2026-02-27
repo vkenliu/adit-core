@@ -127,6 +127,7 @@ export function createTimelineManager(
         endedAt: now,
         errorJson: params.errorJson ?? null,
         planTaskId: params.planTaskId ?? null,
+        clientId: config.clientId,
         vclockJson: vclock,
       });
 

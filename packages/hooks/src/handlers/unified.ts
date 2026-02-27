@@ -5,7 +5,10 @@
  * and delegates to the appropriate ADIT handler.
  */
 
-import { getLatestEnvSnapshot } from "@adit/core";
+import {
+  getLatestEnvSnapshot,
+  endSession,
+} from "@adit/core";
 import {
   hasUncommittedChanges,
   getChangedFiles,
@@ -13,7 +16,7 @@ import {
   captureEnvironment,
   diffEnvironments,
 } from "@adit/engine";
-import { initHookContext } from "../common/context.js";
+import { initHookContext, type HookContext } from "../common/context.js";
 import type { NormalizedHookInput } from "../adapters/types.js";
 
 /**
@@ -21,288 +24,276 @@ import type { NormalizedHookInput } from "../adapters/types.js";
  * This is the single entry point for all platform hook events.
  */
 export async function dispatchHook(input: NormalizedHookInput): Promise<void> {
-  switch (input.hookType) {
-    case "prompt-submit":
-      await handlePromptSubmitUnified(input);
-      break;
-    case "stop":
-      await handleStopUnified(input);
-      break;
-    case "session-start":
-      await handleSessionStart(input);
-      break;
-    case "session-end":
-      await handleSessionEnd(input);
-      break;
-    case "task-completed":
-      await handleTaskCompleted(input);
-      break;
-    case "notification":
-      await handleNotification(input);
-      break;
-    case "subagent-start":
-      await handleSubagentStart(input);
-      break;
-    case "subagent-stop":
-      await handleSubagentStop(input);
-      break;
-  }
+  const ctx = await initHookContext(input.cwd);
 
-  // Trigger transcript upload (fire-and-forget, fail-open).
-  // Every hook event carries transcript_path, so we check on each event.
-  if (input.transcriptPath) {
-    triggerTranscriptUploadIfEnabled(input).catch(() => {
-      /* fail-open */
-    });
+  try {
+    switch (input.hookType) {
+      case "prompt-submit":
+        await handlePromptSubmitUnified(ctx, input);
+        break;
+      case "stop":
+        await handleStopUnified(ctx, input);
+        break;
+      case "session-start":
+        await handleSessionStart(ctx, input);
+        break;
+      case "session-end":
+        await handleSessionEnd(ctx, input);
+        break;
+      case "task-completed":
+        await handleTaskCompleted(ctx, input);
+        break;
+      case "notification":
+        await handleNotification(ctx, input);
+        break;
+      case "subagent-start":
+        await handleSubagentStart(ctx, input);
+        break;
+      case "subagent-stop":
+        await handleSubagentStop(ctx, input);
+        break;
+    }
+
+    // Trigger transcript upload (fire-and-forget, fail-open).
+    // Every hook event carries transcript_path, so we check on each event.
+    // Reuses the existing ctx instead of opening a second DB connection.
+    if (input.transcriptPath) {
+      triggerTranscriptUploadIfEnabled(ctx, input).catch(() => {
+        /* fail-open */
+      });
+    }
+  } finally {
+    ctx.db.close();
   }
 }
 
 /** Handle prompt submission */
-async function handlePromptSubmitUnified(input: NormalizedHookInput): Promise<void> {
+async function handlePromptSubmitUnified(ctx: HookContext, input: NormalizedHookInput): Promise<void> {
   if (!input.prompt) return;
 
-  const ctx = await initHookContext(input.cwd);
   const timeline = createTimelineManager(ctx.db, ctx.config);
 
-  try {
-    // Check if user made manual edits since last checkpoint
-    const dirty = await hasUncommittedChanges(input.cwd);
-    if (dirty) {
-      const changes = await getChangedFiles(input.cwd);
-      const userEditEvent = await timeline.recordEvent({
-        sessionId: ctx.session.id,
-        eventType: "user_edit",
-        actor: "user",
-        responseText: `Manual edits: ${changes.length} files changed`,
-      });
-
-      await timeline.createCheckpoint(
-        userEditEvent.id,
-        `[adit] user edit before prompt (${changes.length} files)`,
-      );
-    }
-
-    await timeline.recordEvent({
+  // Check if user made manual edits since last checkpoint
+  const dirty = await hasUncommittedChanges(input.cwd);
+  if (dirty) {
+    const changes = await getChangedFiles(input.cwd);
+    const userEditEvent = await timeline.recordEvent({
       sessionId: ctx.session.id,
-      eventType: "prompt_submit",
+      eventType: "user_edit",
       actor: "user",
-      promptText: input.prompt,
+      responseText: `Manual edits: ${changes.length} files changed`,
     });
-  } finally {
-    ctx.db.close();
+
+    await timeline.createCheckpoint(
+      userEditEvent.id,
+      `[adit] user edit before prompt (${changes.length} files)`,
+    );
   }
+
+  await timeline.recordEvent({
+    sessionId: ctx.session.id,
+    eventType: "prompt_submit",
+    actor: "user",
+    promptText: input.prompt,
+  });
 }
 
 /** Handle stop (assistant response complete) */
-async function handleStopUnified(input: NormalizedHookInput): Promise<void> {
-  const ctx = await initHookContext(input.cwd);
+async function handleStopUnified(ctx: HookContext, input: NormalizedHookInput): Promise<void> {
   const timeline = createTimelineManager(ctx.db, ctx.config);
 
-  try {
-    const dirty = await hasUncommittedChanges(input.cwd);
+  const dirty = await hasUncommittedChanges(input.cwd);
 
-    const recentPrompts = await timeline.list({
-      sessionId: ctx.session.id,
-      eventType: "prompt_submit",
-      limit: 1,
-    });
-    const lastPrompt = recentPrompts[0]?.promptText ?? null;
+  const recentPrompts = await timeline.list({
+    sessionId: ctx.session.id,
+    eventType: "prompt_submit",
+    limit: 1,
+  });
+  const lastPrompt = recentPrompts[0]?.promptText ?? null;
 
-    const event = await timeline.recordEvent({
-      sessionId: ctx.session.id,
-      eventType: "assistant_response",
-      actor: "assistant",
-      promptText: lastPrompt,
-      responseText: input.stopReason ?? "completed",
-    });
+  // Use last_assistant_message as the response text (what the model actually said).
+  // Fall back to stop_reason for backward compatibility, then to "completed".
+  const responseText = input.lastAssistantMessage ?? input.stopReason ?? "completed";
+  const checkpointLabel = input.stopReason ?? "completed";
 
-    if (dirty) {
-      await timeline.createCheckpoint(
-        event.id,
-        `[adit] assistant response (${input.stopReason ?? "completed"})`,
-      );
-    }
+  const event = await timeline.recordEvent({
+    sessionId: ctx.session.id,
+    eventType: "assistant_response",
+    actor: "assistant",
+    promptText: lastPrompt,
+    responseText,
+  });
 
-    if (ctx.config.captureEnv) {
-      try {
-        // Get previous snapshot before capturing new one
-        const prevSnapshot = getLatestEnvSnapshot(ctx.db, ctx.session.id);
-        await captureEnvironment(ctx.db, ctx.config, ctx.session.id);
+  if (dirty) {
+    await timeline.createCheckpoint(
+      event.id,
+      `[adit] assistant response (${checkpointLabel})`,
+    );
+  }
 
-        // Detect env drift if we have a previous snapshot
-        if (prevSnapshot) {
-          const currentSnapshot = getLatestEnvSnapshot(ctx.db, ctx.session.id);
-          if (currentSnapshot) {
-            const diff = diffEnvironments(prevSnapshot, currentSnapshot);
-            if (diff.changes.length > 0) {
-              await timeline.recordEvent({
-                sessionId: ctx.session.id,
-                eventType: "env_drift",
-                actor: "system",
-                responseText: `Environment drift detected: ${diff.changes.length} changes (${diff.severity})`,
-                toolInputJson: JSON.stringify(diff),
-              });
-            }
+  if (ctx.config.captureEnv) {
+    try {
+      // Get previous snapshot before capturing new one
+      const prevSnapshot = getLatestEnvSnapshot(ctx.db, ctx.session.id);
+      await captureEnvironment(ctx.db, ctx.config, ctx.session.id);
+
+      // Detect env drift if we have a previous snapshot
+      if (prevSnapshot) {
+        const currentSnapshot = getLatestEnvSnapshot(ctx.db, ctx.session.id);
+        if (currentSnapshot) {
+          const diff = diffEnvironments(prevSnapshot, currentSnapshot);
+          if (diff.changes.length > 0) {
+            await timeline.recordEvent({
+              sessionId: ctx.session.id,
+              eventType: "env_drift",
+              actor: "system",
+              responseText: `Environment drift detected: ${diff.changes.length} changes (${diff.severity})`,
+              toolInputJson: JSON.stringify(diff),
+            });
           }
         }
-      } catch {
-        // Fail-open
       }
-    }
-
-    // Auto-sync to cloud (fire-and-forget, fail-open)
-    // Uses dynamic import so @adit/cloud is not a build-time dependency.
-    // The module name is constructed to prevent TypeScript from resolving it.
-    try {
-      const cloudModuleName = ["@adit", "cloud"].join("/");
-      const cloudModule = await import(cloudModuleName) as {
-        triggerAutoSync: (db: unknown, projectId: string) => Promise<void>;
-      };
-      cloudModule.triggerAutoSync(ctx.db, ctx.config.projectId).catch(() => {
-        /* fail-open */
-      });
     } catch {
-      // @adit/cloud not installed — silently skip
+      // Fail-open
     }
-  } finally {
-    ctx.db.close();
+  }
+
+  // Auto-sync to cloud (fire-and-forget, fail-open)
+  // Uses dynamic import so @adit/cloud is not a build-time dependency.
+  // The module name is constructed to prevent TypeScript from resolving it.
+  try {
+    const cloudModuleName = ["@adit", "cloud"].join("/");
+    const cloudModule = await import(cloudModuleName) as {
+      triggerAutoSync: (db: unknown, projectId: string) => Promise<void>;
+    };
+    // Note: auto-sync is awaited so db stays open until it finishes querying.
+    // The actual network push happens inside triggerAutoSync's own fire-and-forget.
+    await cloudModule.triggerAutoSync(ctx.db, ctx.config.projectId);
+  } catch {
+    // @adit/cloud not installed — silently skip
   }
 }
 
-/** Handle session start — capture initial env snapshot */
-async function handleSessionStart(input: NormalizedHookInput): Promise<void> {
-  const ctx = await initHookContext(input.cwd);
+/** Handle session start — capture initial env snapshot and record metadata */
+async function handleSessionStart(ctx: HookContext, input: NormalizedHookInput): Promise<void> {
+  const timeline = createTimelineManager(ctx.db, ctx.config);
 
-  try {
-    if (ctx.config.captureEnv) {
-      try {
-        await captureEnvironment(ctx.db, ctx.config, ctx.session.id);
-      } catch {
-        // Fail-open
-      }
+  // Record session start event with platform metadata
+  const metadata: Record<string, unknown> = {};
+  if (input.model) metadata.model = input.model;
+  if (input.sessionSource) metadata.source = input.sessionSource;
+  if (input.permissionMode) metadata.permissionMode = input.permissionMode;
+
+  if (Object.keys(metadata).length > 0) {
+    await timeline.recordEvent({
+      sessionId: ctx.session.id,
+      eventType: "checkpoint",
+      actor: "system",
+      responseText: `Session started (${input.sessionSource ?? "startup"})`,
+      toolInputJson: JSON.stringify(metadata),
+    });
+  }
+
+  if (ctx.config.captureEnv) {
+    try {
+      await captureEnvironment(ctx.db, ctx.config, ctx.session.id);
+    } catch {
+      // Fail-open
     }
-  } finally {
-    ctx.db.close();
   }
 }
 
 /** Handle session end — capture final env snapshot and close session */
-async function handleSessionEnd(input: NormalizedHookInput): Promise<void> {
-  const ctx = await initHookContext(input.cwd);
-
-  try {
-    if (ctx.config.captureEnv) {
-      try {
-        await captureEnvironment(ctx.db, ctx.config, ctx.session.id);
-      } catch {
-        // Fail-open
-      }
+async function handleSessionEnd(ctx: HookContext, input: NormalizedHookInput): Promise<void> {
+  if (ctx.config.captureEnv) {
+    try {
+      await captureEnvironment(ctx.db, ctx.config, ctx.session.id);
+    } catch {
+      // Fail-open
     }
-
-    // Mark session as completed
-    const { endSession } = await import("@adit/core");
-    endSession(ctx.db, ctx.session.id, "completed");
-  } finally {
-    ctx.db.close();
   }
+
+  // Mark session as completed with end reason
+  const status = input.sessionEndReason === "error" ? "error" : "completed";
+  endSession(ctx.db, ctx.session.id, status);
 }
 
 /** Handle task completed — record semantic milestone in timeline */
-async function handleTaskCompleted(input: NormalizedHookInput): Promise<void> {
-  const ctx = await initHookContext(input.cwd);
+async function handleTaskCompleted(ctx: HookContext, input: NormalizedHookInput): Promise<void> {
   const timeline = createTimelineManager(ctx.db, ctx.config);
 
-  try {
-    await timeline.recordEvent({
-      sessionId: ctx.session.id,
-      eventType: "task_completed",
-      actor: "assistant",
-      responseText: input.taskSubject ?? "Task completed",
-      toolName: input.taskId ?? null,
-      toolInputJson: JSON.stringify({
-        taskId: input.taskId,
-        taskSubject: input.taskSubject,
-        taskDescription: input.taskDescription,
-        teammateName: input.teammateName,
-        teamName: input.teamName,
-      }),
-    });
-  } finally {
-    ctx.db.close();
-  }
+  await timeline.recordEvent({
+    sessionId: ctx.session.id,
+    eventType: "task_completed",
+    actor: "assistant",
+    responseText: input.taskSubject ?? "Task completed",
+    toolName: input.taskId ?? null,
+    toolInputJson: JSON.stringify({
+      taskId: input.taskId,
+      taskSubject: input.taskSubject,
+      taskDescription: input.taskDescription,
+      teammateName: input.teammateName,
+      teamName: input.teamName,
+    }),
+  });
 }
 
 /** Handle notification — record Claude Code notification event */
-async function handleNotification(input: NormalizedHookInput): Promise<void> {
-  const ctx = await initHookContext(input.cwd);
+async function handleNotification(ctx: HookContext, input: NormalizedHookInput): Promise<void> {
   const timeline = createTimelineManager(ctx.db, ctx.config);
 
-  try {
-    await timeline.recordEvent({
-      sessionId: ctx.session.id,
-      eventType: "notification",
-      actor: "system",
-      responseText: input.notificationMessage ?? "Notification",
-      toolName: input.notificationType ?? null,
-      toolInputJson: JSON.stringify({
-        message: input.notificationMessage,
-        title: input.notificationTitle,
-        notificationType: input.notificationType,
-      }),
-    });
-  } finally {
-    ctx.db.close();
-  }
+  await timeline.recordEvent({
+    sessionId: ctx.session.id,
+    eventType: "notification",
+    actor: "system",
+    responseText: input.notificationMessage ?? "Notification",
+    toolName: input.notificationType ?? null,
+    toolInputJson: JSON.stringify({
+      message: input.notificationMessage,
+      title: input.notificationTitle,
+      notificationType: input.notificationType,
+    }),
+  });
 }
 
 /** Handle subagent start — record when a subagent is spawned */
-async function handleSubagentStart(input: NormalizedHookInput): Promise<void> {
-  const ctx = await initHookContext(input.cwd);
+async function handleSubagentStart(ctx: HookContext, input: NormalizedHookInput): Promise<void> {
   const timeline = createTimelineManager(ctx.db, ctx.config);
 
-  try {
-    await timeline.recordEvent({
-      sessionId: ctx.session.id,
-      eventType: "subagent_start",
-      actor: "assistant",
-      responseText: `Subagent started: ${input.agentType ?? "unknown"}`,
-      toolName: input.agentType ?? null,
-      toolInputJson: JSON.stringify({
-        agentId: input.agentId,
-        agentType: input.agentType,
-      }),
-    });
-  } finally {
-    ctx.db.close();
-  }
+  await timeline.recordEvent({
+    sessionId: ctx.session.id,
+    eventType: "subagent_start",
+    actor: "assistant",
+    responseText: `Subagent started: ${input.agentType ?? "unknown"}`,
+    toolName: input.agentType ?? null,
+    toolInputJson: JSON.stringify({
+      agentId: input.agentId,
+      agentType: input.agentType,
+    }),
+  });
 }
 
 /** Handle subagent stop — record when a subagent finishes */
-async function handleSubagentStop(input: NormalizedHookInput): Promise<void> {
-  const ctx = await initHookContext(input.cwd);
+async function handleSubagentStop(ctx: HookContext, input: NormalizedHookInput): Promise<void> {
   const timeline = createTimelineManager(ctx.db, ctx.config);
 
-  try {
-    await timeline.recordEvent({
-      sessionId: ctx.session.id,
-      eventType: "subagent_stop",
-      actor: "assistant",
-      responseText: input.lastAssistantMessage
-        ? `Subagent finished: ${input.agentType ?? "unknown"}`
-        : `Subagent stopped: ${input.agentType ?? "unknown"}`,
-      toolName: input.agentType ?? null,
-      toolInputJson: JSON.stringify({
-        agentId: input.agentId,
-        agentType: input.agentType,
-        agentTranscriptPath: input.agentTranscriptPath,
-      }),
-      toolOutputJson: input.lastAssistantMessage
-        ? JSON.stringify({ lastAssistantMessage: input.lastAssistantMessage })
-        : null,
-    });
-  } finally {
-    ctx.db.close();
-  }
+  await timeline.recordEvent({
+    sessionId: ctx.session.id,
+    eventType: "subagent_stop",
+    actor: "assistant",
+    responseText: input.lastAssistantMessage
+      ? `Subagent finished: ${input.agentType ?? "unknown"}`
+      : `Subagent stopped: ${input.agentType ?? "unknown"}`,
+    toolName: input.agentType ?? null,
+    toolInputJson: JSON.stringify({
+      agentId: input.agentId,
+      agentType: input.agentType,
+      agentTranscriptPath: input.agentTranscriptPath,
+    }),
+    toolOutputJson: input.lastAssistantMessage
+      ? JSON.stringify({ lastAssistantMessage: input.lastAssistantMessage })
+      : null,
+  });
 }
 
 /**
@@ -311,35 +302,30 @@ async function handleSubagentStop(input: NormalizedHookInput): Promise<void> {
  * Uses dynamic import so @adit/cloud is not a build-time dependency.
  * Fully fail-open: errors are silently swallowed.
  *
- * Passes `cli` identifier (e.g. "claude-code") from the platform adapter
- * so the server knows which tool produced this file.
+ * Reuses the existing HookContext to avoid opening a second DB connection.
  */
 async function triggerTranscriptUploadIfEnabled(
+  ctx: HookContext,
   input: NormalizedHookInput,
 ): Promise<void> {
   if (!input.transcriptPath) return;
 
   try {
-    const ctx = await initHookContext(input.cwd);
-    try {
-      const cloudModuleName = ["@adit", "cloud"].join("/");
-      const cloudModule = (await import(cloudModuleName)) as {
-        triggerTranscriptUpload: (
-          db: unknown,
-          sessionId: string,
-          transcriptPath: string,
-          cli?: string,
-        ) => Promise<void>;
-      };
-      await cloudModule.triggerTranscriptUpload(
-        ctx.db,
-        ctx.session.id,
-        input.transcriptPath,
-        input.platformCli,
-      );
-    } finally {
-      ctx.db.close();
-    }
+    const cloudModuleName = ["@adit", "cloud"].join("/");
+    const cloudModule = (await import(cloudModuleName)) as {
+      triggerTranscriptUpload: (
+        db: unknown,
+        sessionId: string,
+        transcriptPath: string,
+        cli?: string,
+      ) => Promise<void>;
+    };
+    await cloudModule.triggerTranscriptUpload(
+      ctx.db,
+      ctx.session.id,
+      input.transcriptPath,
+      input.platformCli,
+    );
   } catch {
     // @adit/cloud not installed or other error — silently skip
   }

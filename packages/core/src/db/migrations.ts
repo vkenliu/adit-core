@@ -201,4 +201,14 @@ export const migrations: Migration[] = [
         ON transcript_uploads(session_id);
     `,
   },
+  {
+    id: 9,
+    name: "add_events_client_id_and_started_at_index",
+    sql: `
+      ALTER TABLE events ADD COLUMN client_id TEXT;
+
+      CREATE INDEX IF NOT EXISTS idx_events_started_at
+        ON events(started_at) WHERE deleted_at IS NULL;
+    `,
+  },
 ];

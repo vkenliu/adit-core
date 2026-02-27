@@ -23,28 +23,9 @@ export interface AditConfig {
   projectId: string;
   /** Git ref prefix for checkpoints */
   refPrefix: string;
-  /** Max prompt chars to store (0 = unlimited) */
-  maxPromptChars: number;
-  /** Max diff lines to store (0 = unlimited) */
-  maxDiffLines: number;
   /** Whether to capture environment snapshots */
   captureEnv: boolean;
-  /** Keys to redact from tool I/O */
-  redactKeys: string[];
 }
-
-/** Default sensitive keys to redact from recorded payloads */
-const DEFAULT_REDACT_KEYS = [
-  "authorization",
-  "api_key",
-  "apiKey",
-  "token",
-  "password",
-  "secret",
-  "credential",
-  "private_key",
-  "privateKey",
-];
 
 /** Get or create a persistent client ID */
 function getClientId(): string {
@@ -86,7 +67,18 @@ export function findGitRoot(startDir?: string): string | null {
   return null;
 }
 
-/** Load configuration from environment + defaults */
+/** Load file-based settings from settings.json in project root */
+function loadSettingsFile(projectRoot: string): Record<string, unknown> {
+  const settingsPath = join(projectRoot, "settings.json");
+  if (!existsSync(settingsPath)) return {};
+  try {
+    return JSON.parse(readFileSync(settingsPath, "utf-8"));
+  } catch {
+    return {};
+  }
+}
+
+/** Load configuration from settings.json + environment overrides */
 export function loadConfig(cwd?: string): AditConfig {
   const projectRoot =
     process.env.ADIT_PROJECT_ROOT ??
@@ -105,10 +97,8 @@ export function loadConfig(cwd?: string): AditConfig {
   const remoteUrl = process.env.ADIT_REMOTE_URL;
   const projectId = computeProjectId(projectRoot, remoteUrl);
 
-  const redactKeysEnv = process.env.ADIT_REDACT_KEYS;
-  const redactKeys = redactKeysEnv
-    ? redactKeysEnv.split(",").map((k) => k.trim())
-    : DEFAULT_REDACT_KEYS;
+  // Load file-based settings (lowest priority — env vars override)
+  const fileSettings = loadSettingsFile(projectRoot);
 
   return {
     projectRoot,
@@ -117,10 +107,9 @@ export function loadConfig(cwd?: string): AditConfig {
     clientId,
     projectId,
     refPrefix: "refs/adit/checkpoints",
-    maxPromptChars: parseInt(process.env.ADIT_MAX_PROMPT_CHARS ?? "0", 10),
-    maxDiffLines: parseInt(process.env.ADIT_MAX_DIFF_LINES ?? "0", 10),
-    captureEnv: process.env.ADIT_CAPTURE_ENV !== "false",
-    redactKeys,
+    captureEnv: process.env.ADIT_CAPTURE_ENV !== undefined
+      ? process.env.ADIT_CAPTURE_ENV !== "false"
+      : (fileSettings.captureEnv as boolean) ?? true,
   };
 }
 

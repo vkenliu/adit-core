@@ -16,8 +16,8 @@ import {
   labelCommand,
   labelRemoveCommand,
   labelListCommand,
-  searchCommand,
 } from "./commands/label.js";
+import { searchCommand } from "./commands/search.js";
 import {
   diffCommand,
   promptCommand,

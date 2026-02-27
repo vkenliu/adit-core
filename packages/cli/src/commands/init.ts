@@ -2,13 +2,14 @@
  * `adit init` — Initialize ADIT in the current project.
  *
  * Creates the .adit/ data directory, initializes the database,
- * and optionally installs Claude Code hooks.
+ * and installs hooks for the detected AI platform via the adapter.
  */
 
-import { mkdirSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig, openDatabase, closeDatabase, findGitRoot } from "@adit/core";
 import { isGitRepo } from "@adit/engine";
+import { detectPlatform, getAdapter } from "@adit/hooks/adapters";
 
 export async function initCommand(opts: { cwd?: string }): Promise<void> {
   const cwd = opts.cwd ?? process.cwd();
@@ -34,9 +35,7 @@ export async function initCommand(opts: { cwd?: string }): Promise<void> {
   const gitRoot = findGitRoot(cwd) ?? cwd;
   const gitignorePath = join(gitRoot, ".gitignore");
   if (existsSync(gitignorePath)) {
-    const content = await import("node:fs").then((fs) =>
-      fs.readFileSync(gitignorePath, "utf-8"),
-    );
+    const content = readFileSync(gitignorePath, "utf-8");
     if (!content.includes(".adit/")) {
       writeFileSync(gitignorePath, content.trimEnd() + "\n.adit/\n");
       console.log("Added .adit/ to .gitignore");
@@ -46,78 +45,14 @@ export async function initCommand(opts: { cwd?: string }): Promise<void> {
     console.log("Created .gitignore with .adit/");
   }
 
-  // Install Claude Code hooks in .claude/settings.local.json
-  const settingsLocalPath = join(gitRoot, ".claude", "settings.local.json");
-  let needsHooks = true;
-  if (existsSync(settingsLocalPath)) {
-    try {
-      const existing = JSON.parse(
-        await import("node:fs").then((fs) =>
-          fs.readFileSync(settingsLocalPath, "utf-8"),
-        ),
-      );
-      if (existing.hooks) {
-        needsHooks = false;
-      }
-    } catch {
-      // parse error — overwrite
-    }
-  }
-  if (needsHooks) {
-    mkdirSync(join(gitRoot, ".claude"), { recursive: true });
-    // Merge with existing settings if present
-    let existingSettings: Record<string, unknown> = {};
-    if (existsSync(settingsLocalPath)) {
-      try {
-        existingSettings = JSON.parse(
-          await import("node:fs").then((fs) =>
-            fs.readFileSync(settingsLocalPath, "utf-8"),
-          ),
-        );
-      } catch {
-        // ignore
-      }
-    }
-    const settings = {
-      ...existingSettings,
-      hooks: {
-        UserPromptSubmit: [
-          {
-            hooks: [
-              {
-                type: "command",
-                command: "adit-hook prompt-submit",
-                timeout: 5000,
-              },
-            ],
-          },
-        ],
-        PostToolUse: [
-          {
-            hooks: [
-              {
-                type: "command",
-                command: "adit-hook tool-use",
-                timeout: 5000,
-              },
-            ],
-          },
-        ],
-        Stop: [
-          {
-            hooks: [
-              {
-                type: "command",
-                command: "adit-hook stop",
-                timeout: 30000,
-              },
-            ],
-          },
-        ],
-      },
-    };
-    writeFileSync(settingsLocalPath, JSON.stringify(settings, null, 2) + "\n");
-    console.log("Installed hooks in .claude/settings.local.json");
+  // Install hooks via the platform adapter
+  const platform = detectPlatform();
+  try {
+    const adapter = getAdapter(platform);
+    await adapter.installHooks(gitRoot, "npx adit-hook");
+    console.log(`Installed ${adapter.displayName} hooks (${adapter.hookMappings.length} events)`);
+  } catch {
+    console.log(`Note: Could not install hooks for platform "${platform}". Run 'adit plugin install' manually.`);
   }
 
   console.log("\nADIT initialized successfully!");
