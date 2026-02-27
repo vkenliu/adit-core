@@ -58,3 +58,17 @@ export {
   clearSyncState,
   type SyncState,
 } from "./sync-state.js";
+
+export {
+  upsertTranscriptUpload,
+  getTranscriptUpload,
+  getTranscriptUploadById,
+  listPendingTranscriptUploads,
+  markTranscriptUploaded,
+  markTranscriptUploadFailed,
+  resetTranscriptUpload,
+  countActiveTranscriptUploads,
+  type TranscriptUpload,
+  type TranscriptUploadStatus,
+  type UpsertTranscriptUploadInput,
+} from "./transcript-uploads.js";

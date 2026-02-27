@@ -47,6 +47,14 @@ export async function dispatchHook(input: NormalizedHookInput): Promise<void> {
       await handleSubagentStop(input);
       break;
   }
+
+  // Trigger transcript upload (fire-and-forget, fail-open).
+  // Every hook event carries transcript_path, so we check on each event.
+  if (input.transcriptPath) {
+    triggerTranscriptUploadIfEnabled(input).catch(() => {
+      /* fail-open */
+    });
+  }
 }
 
 /** Handle prompt submission */
@@ -294,5 +302,40 @@ async function handleSubagentStop(input: NormalizedHookInput): Promise<void> {
     });
   } finally {
     ctx.db.close();
+  }
+}
+
+/**
+ * Trigger transcript upload if cloud is configured.
+ *
+ * Uses dynamic import so @adit/cloud is not a build-time dependency.
+ * Fully fail-open: errors are silently swallowed.
+ */
+async function triggerTranscriptUploadIfEnabled(
+  input: NormalizedHookInput,
+): Promise<void> {
+  if (!input.transcriptPath) return;
+
+  try {
+    const ctx = await initHookContext(input.cwd);
+    try {
+      const cloudModuleName = ["@adit", "cloud"].join("/");
+      const cloudModule = (await import(cloudModuleName)) as {
+        triggerTranscriptUpload: (
+          db: unknown,
+          sessionId: string,
+          transcriptPath: string,
+        ) => Promise<void>;
+      };
+      await cloudModule.triggerTranscriptUpload(
+        ctx.db,
+        ctx.session.id,
+        input.transcriptPath,
+      );
+    } finally {
+      ctx.db.close();
+    }
+  } catch {
+    // @adit/cloud not installed or other error — silently skip
   }
 }

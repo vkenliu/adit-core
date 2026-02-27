@@ -69,6 +69,14 @@ export {
   getSyncState,
   upsertSyncState,
   clearSyncState,
+  upsertTranscriptUpload,
+  getTranscriptUpload,
+  getTranscriptUploadById,
+  listPendingTranscriptUploads,
+  markTranscriptUploaded,
+  markTranscriptUploadFailed,
+  resetTranscriptUpload,
+  countActiveTranscriptUploads,
 } from "./db/index.js";
 
 export type {
@@ -79,6 +87,9 @@ export type {
   CreatePlanInput,
   CreateEnvSnapshotInput,
   SyncState,
+  TranscriptUpload,
+  TranscriptUploadStatus,
+  UpsertTranscriptUploadInput,
 } from "./db/index.js";
 
 // Config

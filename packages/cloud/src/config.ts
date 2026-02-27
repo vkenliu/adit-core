@@ -17,6 +17,21 @@ export interface CloudConfig {
   batchSize: number;
   /** Minimum unsynced events before auto-sync triggers (default: 50) */
   syncThreshold: number;
+  /** Transcript upload configuration */
+  transcriptUpload: TranscriptUploadConfig;
+}
+
+export interface TranscriptUploadConfig {
+  /** Whether transcript upload is enabled (default: true) */
+  enabled: boolean;
+  /** Interval in seconds between upload checks (default: 30) */
+  pollIntervalSec: number;
+  /** Max concurrent uploads (default: 2) */
+  maxConcurrent: number;
+  /** Max consecutive failures per file before giving up (default: 3) */
+  maxRetries: number;
+  /** Minimum bytes of new data before uploading an increment (default: 1024) */
+  minIncrementBytes: number;
 }
 
 /** Load cloud configuration from environment variables */
@@ -38,6 +53,29 @@ export function loadCloudConfig(): CloudConfig {
     syncThreshold: parseSyncThreshold(
       process.env.ADIT_CLOUD_SYNC_THRESHOLD,
     ),
+    transcriptUpload: loadTranscriptUploadConfig(),
+  };
+}
+
+function loadTranscriptUploadConfig(): TranscriptUploadConfig {
+  return {
+    enabled: process.env.ADIT_TRANSCRIPT_UPLOAD !== "false",
+    pollIntervalSec: parsePositiveInt(
+      process.env.ADIT_TRANSCRIPT_POLL_INTERVAL,
+      30,
+    ),
+    maxConcurrent: parsePositiveInt(
+      process.env.ADIT_TRANSCRIPT_MAX_CONCURRENT,
+      2,
+    ),
+    maxRetries: parsePositiveInt(
+      process.env.ADIT_TRANSCRIPT_MAX_RETRIES,
+      3,
+    ),
+    minIncrementBytes: parsePositiveInt(
+      process.env.ADIT_TRANSCRIPT_MIN_INCREMENT,
+      1024,
+    ),
   };
 }
 
@@ -47,4 +85,11 @@ function parseSyncThreshold(raw: string | undefined): number {
   const parsed = parseInt(raw, 10);
   if (Number.isNaN(parsed)) return DEFAULT;
   return Math.max(parsed, 1);
+}
+
+function parsePositiveInt(raw: string | undefined, defaultVal: number): number {
+  if (raw === undefined) return defaultVal;
+  const parsed = parseInt(raw, 10);
+  if (Number.isNaN(parsed) || parsed < 1) return defaultVal;
+  return parsed;
 }

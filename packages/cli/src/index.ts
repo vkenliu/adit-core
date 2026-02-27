@@ -44,6 +44,13 @@ import {
   cloudResetCredentialsCommand,
 } from "./commands/cloud.js";
 import { dbClearEventsCommand } from "./commands/db.js";
+import {
+  transcriptEnableCommand,
+  transcriptDisableCommand,
+  transcriptStatusCommand,
+  transcriptUploadCommand,
+  transcriptResetCommand,
+} from "./commands/transcript.js";
 import { launchTui } from "./tui/index.js";
 
 const program = new Command();
@@ -324,6 +331,39 @@ cloudCmd
   .description("Force-clear all credentials and sync state")
   .option("-y, --yes", "Skip confirmation")
   .action((opts) => cloudResetCredentialsCommand({ yes: opts.yes }));
+
+// Transcript upload management (under cloud)
+const transcriptCmd = cloudCmd
+  .command("transcript")
+  .description("Manage transcript upload to cloud");
+
+transcriptCmd
+  .command("enable")
+  .description("Enable automatic transcript upload (default)")
+  .action(() => transcriptEnableCommand());
+
+transcriptCmd
+  .command("disable")
+  .description("Disable automatic transcript upload")
+  .action(() => transcriptDisableCommand());
+
+transcriptCmd
+  .command("status")
+  .description("Show transcript upload status")
+  .option("--json", "Output as JSON")
+  .action((opts) => transcriptStatusCommand({ json: opts.json }));
+
+transcriptCmd
+  .command("upload")
+  .description("Manually trigger transcript uploads")
+  .option("--json", "Output as JSON")
+  .action((opts) => transcriptUploadCommand({ json: opts.json }));
+
+transcriptCmd
+  .command("reset <id>")
+  .description("Reset a failed transcript for re-upload")
+  .option("--json", "Output as JSON")
+  .action((id, opts) => transcriptResetCommand(id, { json: opts.json }));
 
 // Database management
 const dbCmd = program

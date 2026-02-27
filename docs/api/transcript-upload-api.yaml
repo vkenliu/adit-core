@@ -1,0 +1,382 @@
+openapi: "3.1.0"
+info:
+  title: ADIT Cloud — Transcript Upload API
+  version: "1.0.0"
+  description: |
+    Server API specification for the ADIT transcript incremental upload feature.
+
+    ## Overview
+
+    The transcript upload system allows ADIT clients to incrementally upload
+    Claude Code session transcripts (JSONL files) to the cloud server. The
+    design minimizes bandwidth by only sending new data since the last upload.
+
+    ## Protocol Flow
+
+    1. Client discovers a transcript file via Claude Code hook events
+    2. Client reads new bytes from the file (since last confirmed offset)
+    3. Client snaps to the nearest complete JSONL line boundary
+    4. Client compresses the increment with gzip
+    5. Client POSTs the compressed chunk with metadata to the server
+    6. Server validates, decompresses, and appends to stored transcript
+    7. Server responds with the confirmed byte offset and a version token
+    8. Client persists the confirmed offset locally for next upload
+
+    ## Incremental Upload
+
+    Transcripts grow over time as the coding session progresses. Each upload
+    sends only the bytes between the last confirmed offset and the current
+    end of file (snapped to complete JSONL lines). The server assembles the
+    full transcript from these increments.
+
+    ## Error Recovery
+
+    If the server detects data corruption (e.g., incomplete lines, checksum
+    mismatch), it responds with `resyncRequired: true` and the client must
+    re-upload the entire file from offset 0.
+
+    ## Retry Policy
+
+    The client retries up to 3 times per transcript file. After 3 consecutive
+    failures, the file is marked as "failed" and no further uploads are
+    attempted unless manually reset by the user.
+
+servers:
+  - url: https://cloud.adit.dev
+    description: Production server
+
+paths:
+  /api/transcripts/upload:
+    post:
+      operationId: uploadTranscriptChunk
+      summary: Upload an incremental transcript chunk
+      description: |
+        Upload a gzip-compressed chunk of a JSONL transcript file.
+        The chunk starts at the given byte offset and contains only
+        complete JSONL lines.
+
+        **Idempotency**: If the server already has data at the given
+        offset, it validates the overlap and ignores duplicate data.
+
+        **Conflict detection**: The `serverVersion` token prevents
+        concurrent uploads from corrupting the stored transcript.
+        If the token doesn't match, the server returns 409.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TranscriptUploadRequest"
+      responses:
+        "200":
+          description: Chunk accepted and appended successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TranscriptUploadResponse"
+        "400":
+          description: Invalid request (missing fields, invalid offset, etc.)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Authentication required or token expired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: |
+            Conflict — server version mismatch or data corruption detected.
+            Client should check `resyncRequired` in the response body.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TranscriptConflictResponse"
+        "413":
+          description: Chunk too large (server limit exceeded)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "429":
+          description: Rate limited — check Retry-After header
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Seconds to wait before retrying
+
+  /api/transcripts/{transcriptId}/status:
+    get:
+      operationId: getTranscriptStatus
+      summary: Get server-side status for a transcript
+      description: |
+        Returns the server's current state for a tracked transcript,
+        including confirmed byte offset and version token. Useful for
+        resuming uploads after client restarts.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: transcriptId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Server-side transcript ID (from upload response or init)
+      responses:
+        "200":
+          description: Transcript status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TranscriptStatusResponse"
+        "404":
+          description: Transcript not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/transcripts/by-path:
+    get:
+      operationId: getTranscriptByPath
+      summary: Look up a transcript by its original file path
+      description: |
+        Find a server-side transcript record by the client-reported
+        file path and session ID. Returns the current upload state.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: sessionId
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Client session ID
+        - name: transcriptPath
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Absolute file path on the client machine
+      responses:
+        "200":
+          description: Transcript found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TranscriptStatusResponse"
+        "404":
+          description: No transcript found for the given path and session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    TranscriptUploadRequest:
+      type: object
+      required:
+        - sessionId
+        - transcriptPath
+        - offsetBytes
+        - newOffsetBytes
+        - fileSizeBytes
+        - encoding
+        - data
+        - rawBytes
+        - compressedBytes
+      properties:
+        sessionId:
+          type: string
+          description: |
+            ADIT session ID that owns this transcript.
+            Used to group transcripts by coding session.
+          example: "01JNAB3X4Y5Z6W7V8U9T0S"
+        transcriptPath:
+          type: string
+          description: |
+            Absolute path to the transcript file on the client.
+            Used as a deduplication key (per session + server).
+          example: "/home/user/.claude/projects/.../abc123.jsonl"
+        offsetBytes:
+          type: integer
+          minimum: 0
+          description: |
+            Starting byte offset of this chunk in the original file.
+            Must match the server's `confirmedOffset` from the previous
+            upload (or 0 for initial upload).
+          example: 0
+        newOffsetBytes:
+          type: integer
+          minimum: 0
+          description: |
+            Ending byte offset after this chunk. Always falls on a
+            newline boundary to preserve JSONL line integrity.
+          example: 4096
+        fileSizeBytes:
+          type: integer
+          minimum: 0
+          description: |
+            Current total size of the transcript file on the client.
+            Informational only — the server does not rely on this for
+            correctness, but it helps track upload progress.
+          example: 8192
+        serverVersion:
+          type: string
+          nullable: true
+          description: |
+            Opaque version token from the server's previous response.
+            Used for optimistic concurrency control. Send null for
+            the initial upload.
+          example: "v1-abc123-1709123456"
+        encoding:
+          type: string
+          enum: [gzip]
+          description: |
+            Compression encoding of the `data` field. Currently
+            only "gzip" is supported.
+        data:
+          type: string
+          format: byte
+          description: |
+            Base64-encoded gzip-compressed transcript data.
+            Contains complete JSONL lines only (no partial lines).
+          example: "H4sIAAAAAAAA..."
+        rawBytes:
+          type: integer
+          minimum: 0
+          description: |
+            Size of the data before compression (in bytes).
+            Used to validate decompression and for metrics.
+          example: 3500
+        compressedBytes:
+          type: integer
+          minimum: 0
+          description: |
+            Size of the data after compression (in bytes).
+            Used for bandwidth tracking and metrics.
+          example: 1200
+
+    TranscriptUploadResponse:
+      type: object
+      required:
+        - confirmedOffset
+        - serverVersion
+        - resyncRequired
+      properties:
+        confirmedOffset:
+          type: integer
+          minimum: 0
+          description: |
+            The byte offset that the server has confirmed receiving up to.
+            The client should store this and use it as `offsetBytes` in
+            the next upload request.
+          example: 4096
+        serverVersion:
+          type: string
+          description: |
+            Opaque version token. The client must send this back in the
+            next upload's `serverVersion` field for conflict detection.
+          example: "v1-abc123-1709123456"
+        resyncRequired:
+          type: boolean
+          description: |
+            If true, the server has detected data corruption or
+            inconsistency. The client must re-upload the entire
+            transcript from offset 0 with serverVersion=null.
+          example: false
+
+    TranscriptConflictResponse:
+      type: object
+      required:
+        - resyncRequired
+        - message
+      properties:
+        resyncRequired:
+          type: boolean
+          description: |
+            Always true for conflict responses. Signals the client
+            to reset its upload state and re-upload from offset 0.
+          example: true
+        message:
+          type: string
+          description: Human-readable explanation of the conflict.
+          example: "Server version mismatch — data may be corrupted. Full re-upload required."
+        confirmedOffset:
+          type: integer
+          description: |
+            The server's last known good offset. May be 0 if the
+            server has discarded all data for this transcript.
+          example: 0
+
+    TranscriptStatusResponse:
+      type: object
+      required:
+        - transcriptId
+        - confirmedOffset
+        - serverVersion
+        - createdAt
+        - updatedAt
+      properties:
+        transcriptId:
+          type: string
+          description: Server-side unique identifier for this transcript.
+          example: "tr_01JNAB3X4Y5Z6W7V8U9T0S"
+        sessionId:
+          type: string
+          description: ADIT session ID.
+          example: "01JNAB3X4Y5Z6W7V8U9T0S"
+        transcriptPath:
+          type: string
+          description: Original file path from the client.
+          example: "/home/user/.claude/projects/.../abc123.jsonl"
+        confirmedOffset:
+          type: integer
+          minimum: 0
+          description: Byte offset confirmed by the server.
+          example: 4096
+        totalStoredBytes:
+          type: integer
+          minimum: 0
+          description: Total bytes stored on the server for this transcript.
+          example: 4096
+        serverVersion:
+          type: string
+          description: Current version token.
+          example: "v1-abc123-1709123456"
+        createdAt:
+          type: string
+          format: date-time
+          description: When the transcript was first registered on the server.
+        updatedAt:
+          type: string
+          format: date-time
+          description: When the transcript was last updated.
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Human-readable error message.
+          example: "Invalid request: offsetBytes must be non-negative"
+        code:
+          type: string
+          description: |
+            Machine-readable error code for programmatic handling.
+            Optional — not all errors have a code.
+          example: "INVALID_OFFSET"

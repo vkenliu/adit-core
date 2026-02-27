@@ -51,6 +51,10 @@ export interface HookMapping {
 export interface NormalizedHookInput {
   cwd: string;
   hookType: AditHookType;
+  /** Session ID from the platform (e.g., Claude Code session_id) */
+  platformSessionId?: string;
+  /** Path to the session transcript file (JSONL) */
+  transcriptPath?: string;
   prompt?: string;
   toolName?: string;
   toolInput?: Record<string, unknown>;

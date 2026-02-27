@@ -174,4 +174,31 @@ export const migrations: Migration[] = [
       );
     `,
   },
+  {
+    id: 8,
+    name: "create_transcript_uploads",
+    sql: `
+      CREATE TABLE IF NOT EXISTS transcript_uploads (
+        id                TEXT PRIMARY KEY,
+        session_id        TEXT NOT NULL,
+        transcript_path   TEXT NOT NULL,
+        server_url        TEXT NOT NULL,
+        uploaded_bytes    INTEGER NOT NULL DEFAULT 0,
+        file_size_bytes   INTEGER NOT NULL DEFAULT 0,
+        status            TEXT NOT NULL DEFAULT 'pending',
+        failure_count     INTEGER NOT NULL DEFAULT 0,
+        last_error        TEXT,
+        server_version    TEXT,
+        created_at        TEXT NOT NULL,
+        updated_at        TEXT NOT NULL
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_transcript_path_server
+        ON transcript_uploads(transcript_path, server_url);
+      CREATE INDEX IF NOT EXISTS idx_transcript_status
+        ON transcript_uploads(status) WHERE status IN ('pending', 'uploading');
+      CREATE INDEX IF NOT EXISTS idx_transcript_session
+        ON transcript_uploads(session_id);
+    `,
+  },
 ];
