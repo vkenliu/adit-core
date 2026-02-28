@@ -7,9 +7,25 @@
 
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { loadConfig, openDatabase, closeDatabase, findGitRoot } from "@adit/core";
 import { isGitRepo } from "@adit/engine";
 import { detectPlatform, getAdapter } from "@adit/hooks/adapters";
+
+/**
+ * Resolve the absolute path to the adit-hook binary.
+ * Uses import.meta.resolve to find the installed @adit/hooks entry point,
+ * avoiding npx which can hang when the package isn't found locally.
+ */
+function resolveAditHookBinary(): string {
+  try {
+    const hookUrl: string =
+      (import.meta as unknown as { resolve(s: string): string }).resolve("@adit/hooks");
+    return `node "${fileURLToPath(hookUrl)}"`;
+  } catch {
+    return "npx adit-hook";
+  }
+}
 
 export async function initCommand(opts: { cwd?: string }): Promise<void> {
   const cwd = opts.cwd ?? process.cwd();
@@ -49,7 +65,7 @@ export async function initCommand(opts: { cwd?: string }): Promise<void> {
   const platform = detectPlatform();
   try {
     const adapter = getAdapter(platform);
-    await adapter.installHooks(gitRoot, "npx adit-hook");
+    await adapter.installHooks(gitRoot, resolveAditHookBinary());
     console.log(`Installed ${adapter.displayName} hooks (${adapter.hookMappings.length} events)`);
   } catch {
     console.log(`Note: Could not install hooks for platform "${platform}". Run 'adit plugin install' manually.`);

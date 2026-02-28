@@ -5,6 +5,7 @@
  * for different AI platforms.
  */
 
+import { fileURLToPath } from "node:url";
 import { loadConfig } from "@adit/core";
 import {
   getAdapter,
@@ -13,6 +14,23 @@ import {
   type PlatformAdapter,
 } from "@adit/hooks/adapters";
 import type { Platform } from "@adit/core";
+
+/**
+ * Resolve the absolute path to the adit-hook binary.
+ * Uses import.meta.resolve to find the installed @adit/hooks entry point,
+ * avoiding npx which can hang when the package isn't found locally.
+ */
+function resolveAditHookBinary(): string {
+  try {
+    // import.meta.resolve is available in Node.js 20+ (sync, returns URL string).
+    // @adit/hooks main entry and bin both point to dist/index.js.
+    const hookUrl: string =
+      (import.meta as unknown as { resolve(s: string): string }).resolve("@adit/hooks");
+    return `node "${fileURLToPath(hookUrl)}"`;
+  } catch {
+    return "npx adit-hook";
+  }
+}
 
 /** adit plugin install [platform] */
 export async function pluginInstallCommand(
@@ -24,7 +42,7 @@ export async function pluginInstallCommand(
   const adapter = getAdapterSafe(platform);
   if (!adapter) return;
 
-  const aditBinaryPath = "npx adit-hook";
+  const aditBinaryPath = resolveAditHookBinary();
 
   try {
     await adapter.installHooks(config.projectRoot, aditBinaryPath);

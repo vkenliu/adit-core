@@ -91,7 +91,7 @@ export const claudeCodeAdapter: PlatformAdapter = {
 
   generateHookConfig(aditBinaryPath: string): PlatformHookConfig {
     const makeHookEntry = (command: string) => [
-      { hooks: [{ type: "command", command }] },
+      { hooks: [{ type: "command", command, timeout: 10000 }] },
     ];
 
     return {
