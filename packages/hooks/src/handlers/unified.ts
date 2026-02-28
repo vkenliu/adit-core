@@ -23,7 +23,7 @@ import type { NormalizedHookInput } from "../adapters/types.js";
  * This is the single entry point for all platform hook events.
  */
 export async function dispatchHook(input: NormalizedHookInput): Promise<void> {
-  const ctx = await initHookContext(input.cwd, "claude-code", input.platformSessionId);
+  const ctx = await initHookContext(input.cwd, input.platformCli ?? "claude-code", input.platformSessionId);
 
   try {
     switch (input.hookType) {
@@ -53,16 +53,16 @@ export async function dispatchHook(input: NormalizedHookInput): Promise<void> {
         break;
     }
 
-    // Trigger transcript upload (fire-and-forget, fail-open).
+    // Trigger transcript upload (fail-open).
     // Every hook event carries transcript_path, so we check on each event.
-    // Reuses the existing ctx instead of opening a second DB connection.
+    // Awaited so db stays open until the query finishes.
     if (input.transcriptPath) {
-      triggerTranscriptUploadIfEnabled(ctx, input).catch(() => {
+      await triggerTranscriptUploadIfEnabled(ctx, input).catch(() => {
         /* fail-open */
       });
     }
 
-    // Auto-sync to cloud on every hook event (fire-and-forget, fail-open).
+    // Auto-sync to cloud on every hook event (fail-open).
     // Uses dynamic import so @adit/cloud is not a build-time dependency.
     // The module name is constructed to prevent TypeScript from resolving it.
     try {
@@ -81,30 +81,15 @@ export async function dispatchHook(input: NormalizedHookInput): Promise<void> {
   }
 }
 
-/** Handle prompt submission */
+/** Handle prompt submission (kept lightweight — no git operations) */
 async function handlePromptSubmitUnified(ctx: HookContext, input: NormalizedHookInput): Promise<void> {
   if (!input.prompt) return;
 
   const timeline = createTimelineManager(ctx.db, ctx.config);
 
-  // Check if user made manual edits since last checkpoint.
-  // Uses getChangedFiles directly instead of hasUncommittedChanges + getChangedFiles
-  // to avoid running `git status` twice.
-  const changes = await getChangedFiles(input.cwd);
-  if (changes.length > 0) {
-    const userEditEvent = await timeline.recordEvent({
-      sessionId: ctx.session.id,
-      eventType: "user_edit",
-      actor: "user",
-      responseText: `Manual edits: ${changes.length} files changed`,
-    });
-
-    await timeline.createCheckpoint(
-      userEditEvent.id,
-      `[adit] user edit before prompt (${changes.length} files)`,
-    );
-  }
-
+  // Only record the prompt text. Manual-edit detection (getChangedFiles) is
+  // deferred to handleStopUnified so this blocking UserPromptSubmit hook
+  // stays fast and doesn't run `git status` on every keystroke-enter.
   await timeline.recordEvent({
     sessionId: ctx.session.id,
     eventType: "prompt_submit",
@@ -146,6 +131,7 @@ async function handleStopUnified(ctx: HookContext, input: NormalizedHookInput): 
     await timeline.createCheckpoint(
       event.id,
       `[adit] assistant response (${checkpointLabel})`,
+      changedFiles,
     );
   }
 

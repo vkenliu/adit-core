@@ -9,7 +9,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig, openDatabase, closeDatabase, findGitRoot } from "@adit/core";
 import { isGitRepo } from "@adit/engine";
-import { detectPlatform, getAdapter } from "@adit/hooks/adapters";
+import { detectPlatform, getAdapter, resolveAditHookBinary } from "@adit/hooks/adapters";
 
 export async function initCommand(opts: { cwd?: string }): Promise<void> {
   const cwd = opts.cwd ?? process.cwd();
@@ -49,7 +49,7 @@ export async function initCommand(opts: { cwd?: string }): Promise<void> {
   const platform = detectPlatform();
   try {
     const adapter = getAdapter(platform);
-    await adapter.installHooks(gitRoot, "npx adit-hook");
+    await adapter.installHooks(gitRoot, resolveAditHookBinary());
     console.log(`Installed ${adapter.displayName} hooks (${adapter.hookMappings.length} events)`);
   } catch {
     console.log(`Note: Could not install hooks for platform "${platform}". Run 'adit plugin install' manually.`);

@@ -35,9 +35,10 @@ export async function createSnapshot(
   parentSha: string | null,
   message: string,
   refPath: string,
+  preComputedChanges?: FileChange[],
 ): Promise<SnapshotResult | null> {
-  // Detect what changed
-  const changes = await getChangedFiles(cwd);
+  // Reuse pre-computed changes when the caller already ran git status
+  const changes = preComputedChanges ?? await getChangedFiles(cwd);
   if (changes.length === 0) return null;
 
   // Create temp index file
@@ -98,13 +99,15 @@ async function stageChanges(
   changes: FileChange[],
   env: Record<string, string>,
 ): Promise<void> {
-  for (const change of changes) {
-    if (change.status === "D") {
-      await runGit(["rm", "--cached", change.path], { cwd, env });
-    } else {
-      // M, A, ??, R — add to index
-      await runGit(["add", change.path], { cwd, env });
-    }
+  // Batch into at most 2 git commands instead of N sequential spawns.
+  const toDelete = changes.filter((c) => c.status === "D").map((c) => c.path);
+  const toAdd = changes.filter((c) => c.status !== "D").map((c) => c.path);
+
+  if (toDelete.length > 0) {
+    await runGit(["rm", "--cached", "--", ...toDelete], { cwd, env });
+  }
+  if (toAdd.length > 0) {
+    await runGit(["add", "--", ...toAdd], { cwd, env });
   }
 }
 

@@ -81,22 +81,40 @@ export async function initHookContext(
 export async function readStdin(): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     let data = "";
+    let settled = false;
+
+    const finish = <T>(fn: (value: T) => void, value: T): void => {
+      if (settled) return;
+      settled = true;
+      fn(value);
+    };
+
     process.stdin.setEncoding("utf-8");
     process.stdin.on("data", (chunk) => {
       data += chunk;
     });
     process.stdin.on("end", () => {
       try {
-        resolve(JSON.parse(data));
+        finish(resolve, JSON.parse(data));
       } catch {
-        reject(new Error("Invalid JSON on stdin"));
+        finish(reject, new Error("Invalid JSON on stdin"));
       }
     });
-    process.stdin.on("error", reject);
+    process.stdin.on("error", (err) => finish(reject, err));
 
-    // Timeout after 3 seconds
+    // Hard timeout — always fires after 3 seconds regardless of data state.
+    // If data was received but stdin never closed (e.g. parent process didn't
+    // close the pipe), try to parse whatever we have instead of hanging forever.
     setTimeout(() => {
-      if (!data) reject(new Error("No stdin data received"));
+      if (data) {
+        try {
+          finish(resolve, JSON.parse(data));
+        } catch {
+          finish(reject, new Error("Stdin timeout: incomplete JSON"));
+        }
+      } else {
+        finish(reject, new Error("No stdin data received"));
+      }
     }, 3000);
   });
 }

@@ -10,6 +10,7 @@ import {
   getAdapter,
   listAdapters,
   detectPlatform,
+  resolveAditHookBinary,
   type PlatformAdapter,
 } from "@adit/hooks/adapters";
 import type { Platform } from "@adit/core";
@@ -24,7 +25,7 @@ export async function pluginInstallCommand(
   const adapter = getAdapterSafe(platform);
   if (!adapter) return;
 
-  const aditBinaryPath = "npx adit-hook";
+  const aditBinaryPath = resolveAditHookBinary();
 
   try {
     await adapter.installHooks(config.projectRoot, aditBinaryPath);

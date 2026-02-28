@@ -28,6 +28,7 @@ import {
   deserialize,
 } from "@adit/core";
 import { createSnapshot, getCheckpointDiff } from "../snapshot/creator.js";
+import type { FileChange } from "../detector/working-tree.js";
 import { getHeadSha, getCurrentBranch } from "../git/runner.js";
 import { getRefPrefix } from "../git/refs.js";
 import { runGitOrThrow } from "../git/runner.js";
@@ -40,6 +41,7 @@ export interface TimelineManager {
   createCheckpoint(
     eventId: string,
     message: string,
+    preComputedChanges?: FileChange[],
   ): Promise<{ sha: string; ref: string } | null>;
 
   /** Revert working tree to a checkpoint */
@@ -137,6 +139,7 @@ export function createTimelineManager(
     async createCheckpoint(
       eventId: string,
       message: string,
+      preComputedChanges?: FileChange[],
     ): Promise<{ sha: string; ref: string } | null> {
       const event = getEventById(db, eventId);
       if (!event) throw new Error(`Event not found: ${eventId}`);
@@ -146,7 +149,7 @@ export function createTimelineManager(
       const parentSha = lastCheckpoint?.checkpointSha ?? (await getHeadSha(cwd));
 
       const refPath = `${getRefPrefix()}/${eventId}`;
-      const result = await createSnapshot(cwd, parentSha, message, refPath);
+      const result = await createSnapshot(cwd, parentSha, message, refPath, preComputedChanges);
       if (!result) return null;
 
       // Store the diff
