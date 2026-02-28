@@ -28,17 +28,15 @@ const HOOK_MAPPINGS: HookMapping[] = [
   { platformEvent: "SubagentStop", aditHandler: "subagent-stop" },
 ];
 
-/** Map Claude Code platform events to ADIT hook types */
-const PLATFORM_TO_ADIT: Record<string, AditHookType> = {
-  UserPromptSubmit: "prompt-submit",
-  Stop: "stop",
-  SessionStart: "session-start",
-  SessionEnd: "session-end",
-  TaskCompleted: "task-completed",
-  Notification: "notification",
-  SubagentStart: "subagent-start",
-  SubagentStop: "subagent-stop",
-};
+/** Map Claude Code platform events to ADIT hook types (derived from HOOK_MAPPINGS) */
+const PLATFORM_TO_ADIT: Record<string, AditHookType> = Object.fromEntries(
+  HOOK_MAPPINGS.map((m) => [m.platformEvent, m.aditHandler]),
+) as Record<string, AditHookType>;
+
+/** Check if a command string is an ADIT hook (matches both npx and resolved-path formats) */
+function isAditHookCommand(command: string): boolean {
+  return command.includes("adit-hook") || command.includes("hooks/dist/index.js");
+}
 
 export const claudeCodeAdapter: PlatformAdapter = {
   platform: "claude-code" as Platform,
@@ -148,9 +146,9 @@ export const claudeCodeAdapter: PlatformAdapter = {
           }
           const hasAdit = entries.some(
             (entry: { command?: string; hooks?: Array<{ command?: string }> }) => {
-              if (typeof entry.command === "string" && entry.command.includes("adit-hook")) return true;
+              if (typeof entry.command === "string" && isAditHookCommand(entry.command)) return true;
               if (Array.isArray(entry.hooks)) {
-                return entry.hooks.some((h) => typeof h.command === "string" && h.command.includes("adit-hook"));
+                return entry.hooks.some((h) => typeof h.command === "string" && isAditHookCommand(h.command));
               }
               return false;
             },
@@ -221,9 +219,9 @@ export const claudeCodeAdapter: PlatformAdapter = {
 
         settings.hooks[hookName] = entries.filter(
           (entry: { command?: string; hooks?: Array<{ command?: string }> }) => {
-            if (typeof entry.command === "string" && entry.command.includes("adit-hook")) return false;
+            if (typeof entry.command === "string" && isAditHookCommand(entry.command)) return false;
             if (Array.isArray(entry.hooks)) {
-              return !entry.hooks.some((h) => typeof h.command === "string" && h.command.includes("adit-hook"));
+              return !entry.hooks.some((h) => typeof h.command === "string" && isAditHookCommand(h.command));
             }
             return true;
           },
