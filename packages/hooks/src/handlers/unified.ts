@@ -131,6 +131,7 @@ async function handleStopUnified(ctx: HookContext, input: NormalizedHookInput): 
     await timeline.createCheckpoint(
       event.id,
       `[adit] assistant response (${checkpointLabel})`,
+      changedFiles,
     );
   }
 
