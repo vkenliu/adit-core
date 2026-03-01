@@ -101,6 +101,20 @@ export {
   type AditConfig,
 } from "./config/index.js";
 
+// Performance logging
+export {
+  recordPerf,
+  withPerf,
+  withPerfSync,
+  readPerfLogs,
+  generatePerfStats,
+  clearPerfLogs,
+  pruneOldLogs,
+  type PerfEntry,
+  type PerfOperationStats,
+  type PerfStatsReport,
+} from "./perf/perf-log.js";
+
 // Sync primitives
 export {
   generateId,

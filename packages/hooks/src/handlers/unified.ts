@@ -8,6 +8,7 @@
 import {
   getLatestEnvSnapshot,
   endSession,
+  withPerf,
 } from "@adit/core";
 import {
   getChangedFiles,
@@ -24,40 +25,45 @@ import type { NormalizedHookInput } from "../adapters/types.js";
  */
 export async function dispatchHook(input: NormalizedHookInput): Promise<void> {
   const ctx = await initHookContext(input.cwd, input.platformCli ?? "claude-code", input.platformSessionId);
+  const dataDir = ctx.config.dataDir;
 
   try {
-    switch (input.hookType) {
-      case "prompt-submit":
-        await handlePromptSubmitUnified(ctx, input);
-        break;
-      case "stop":
-        await handleStopUnified(ctx, input);
-        break;
-      case "session-start":
-        await handleSessionStart(ctx, input);
-        break;
-      case "session-end":
-        await handleSessionEnd(ctx, input);
-        break;
-      case "task-completed":
-        await handleTaskCompleted(ctx, input);
-        break;
-      case "notification":
-        await handleNotification(ctx, input);
-        break;
-      case "subagent-start":
-        await handleSubagentStart(ctx, input);
-        break;
-      case "subagent-stop":
-        await handleSubagentStop(ctx, input);
-        break;
-    }
+    await withPerf(dataDir, "hook", input.hookType, async () => {
+      switch (input.hookType) {
+        case "prompt-submit":
+          await handlePromptSubmitUnified(ctx, input);
+          break;
+        case "stop":
+          await handleStopUnified(ctx, input);
+          break;
+        case "session-start":
+          await handleSessionStart(ctx, input);
+          break;
+        case "session-end":
+          await handleSessionEnd(ctx, input);
+          break;
+        case "task-completed":
+          await handleTaskCompleted(ctx, input);
+          break;
+        case "notification":
+          await handleNotification(ctx, input);
+          break;
+        case "subagent-start":
+          await handleSubagentStart(ctx, input);
+          break;
+        case "subagent-stop":
+          await handleSubagentStop(ctx, input);
+          break;
+      }
+    });
 
     // Trigger transcript upload (fail-open).
     // Every hook event carries transcript_path, so we check on each event.
     // Awaited so db stays open until the query finishes.
     if (input.transcriptPath) {
-      await triggerTranscriptUploadIfEnabled(ctx, input).catch(() => {
+      await withPerf(dataDir, "hook", "transcript-upload", () =>
+        triggerTranscriptUploadIfEnabled(ctx, input),
+      ).catch(() => {
         /* fail-open */
       });
     }
@@ -66,13 +72,15 @@ export async function dispatchHook(input: NormalizedHookInput): Promise<void> {
     // Uses dynamic import so @adit/cloud is not a build-time dependency.
     // The module name is constructed to prevent TypeScript from resolving it.
     try {
-      const cloudModuleName = ["@adit", "cloud"].join("/");
-      const cloudModule = await import(cloudModuleName) as {
-        triggerAutoSync: (db: unknown, projectId: string) => Promise<void>;
-      };
-      // Awaited so db stays open until it finishes querying.
-      // The actual network push happens inside triggerAutoSync's own fire-and-forget.
-      await cloudModule.triggerAutoSync(ctx.db, ctx.config.projectId);
+      await withPerf(dataDir, "network", "cloud-auto-sync", async () => {
+        const cloudModuleName = ["@adit", "cloud"].join("/");
+        const cloudModule = await import(cloudModuleName) as {
+          triggerAutoSync: (db: unknown, projectId: string) => Promise<void>;
+        };
+        // Awaited so db stays open until it finishes querying.
+        // The actual network push happens inside triggerAutoSync's own fire-and-forget.
+        await cloudModule.triggerAutoSync(ctx.db, ctx.config.projectId);
+      });
     } catch {
       // @adit/cloud not installed — silently skip
     }
@@ -104,7 +112,9 @@ async function handleStopUnified(ctx: HookContext, input: NormalizedHookInput): 
 
   // Use getChangedFiles directly so the result can be reused by captureEnvironment,
   // avoiding a duplicate `git status` call.
-  const changedFiles = await getChangedFiles(input.cwd);
+  const changedFiles = await withPerf(ctx.config.dataDir, "git", "getChangedFiles", () =>
+    getChangedFiles(input.cwd),
+  );
   const dirty = changedFiles.length > 0;
 
   const recentPrompts = await timeline.list({
@@ -140,9 +150,11 @@ async function handleStopUnified(ctx: HookContext, input: NormalizedHookInput): 
       // Get previous snapshot before capturing new one
       const prevSnapshot = getLatestEnvSnapshot(ctx.db, ctx.session.id);
       // Pass pre-computed changed files to avoid duplicate git status call
-      await captureEnvironment(ctx.db, ctx.config, ctx.session.id, {
-        changedFiles,
-      });
+      await withPerf(ctx.config.dataDir, "snapshot", "captureEnvironment", () =>
+        captureEnvironment(ctx.db, ctx.config, ctx.session.id, {
+          changedFiles,
+        }),
+      );
 
       // Detect env drift if we have a previous snapshot
       if (prevSnapshot) {
@@ -189,7 +201,9 @@ async function handleSessionStart(ctx: HookContext, input: NormalizedHookInput):
 
   if (ctx.config.captureEnv) {
     try {
-      await captureEnvironment(ctx.db, ctx.config, ctx.session.id);
+      await withPerf(ctx.config.dataDir, "snapshot", "captureEnvironment", () =>
+        captureEnvironment(ctx.db, ctx.config, ctx.session.id),
+      );
     } catch {
       // Fail-open
     }
@@ -200,7 +214,9 @@ async function handleSessionStart(ctx: HookContext, input: NormalizedHookInput):
 async function handleSessionEnd(ctx: HookContext, input: NormalizedHookInput): Promise<void> {
   if (ctx.config.captureEnv) {
     try {
-      await captureEnvironment(ctx.db, ctx.config, ctx.session.id);
+      await withPerf(ctx.config.dataDir, "snapshot", "captureEnvironment", () =>
+        captureEnvironment(ctx.db, ctx.config, ctx.session.id),
+      );
     } catch {
       // Fail-open
     }

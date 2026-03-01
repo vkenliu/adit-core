@@ -10,7 +10,7 @@
  */
 
 import type Database from "better-sqlite3";
-import { getSyncState, upsertSyncState } from "@adit/core";
+import { getSyncState, upsertSyncState, withPerf } from "@adit/core";
 import type { SyncState } from "@adit/core";
 import type { CloudClient } from "../http/client.js";
 import { buildSyncBatch, batchRecordCount } from "./serializer.js";
@@ -54,6 +54,7 @@ export class SyncEngine {
   private readonly batchSize: number;
   private readonly serverUrl: string;
   private readonly cloudClientId: string;
+  private readonly dataDir: string | null;
 
   constructor(
     db: Database.Database,
@@ -63,6 +64,7 @@ export class SyncEngine {
       batchSize: number;
       serverUrl: string;
       cloudClientId: string;
+      dataDir?: string;
     },
   ) {
     this.db = db;
@@ -71,6 +73,7 @@ export class SyncEngine {
     this.batchSize = config.batchSize;
     this.serverUrl = config.serverUrl;
     this.cloudClientId = config.cloudClientId;
+    this.dataDir = config.dataDir ?? null;
   }
 
   /**
@@ -80,77 +83,84 @@ export class SyncEngine {
    * local records have been synced.
    */
   async sync(): Promise<SyncResult> {
-    // 1. Get server's current cursor
-    const serverStatus = await this.getRemoteStatus();
+    const doSync = async (): Promise<SyncResult> => {
+      // 1. Get server's current cursor
+      const serverStatus = await this.getRemoteStatus();
 
-    // 2. Compare with local state and adopt server's cursor
-    //    (server is authoritative for cursor position)
-    let cursor = serverStatus.lastSyncedEventId;
-    let syncVersion = serverStatus.syncVersion;
-    const lastSyncedAt = serverStatus.lastSyncedAt;
+      // 2. Compare with local state and adopt server's cursor
+      //    (server is authoritative for cursor position)
+      let cursor = serverStatus.lastSyncedEventId;
+      let syncVersion = serverStatus.syncVersion;
+      const lastSyncedAt = serverStatus.lastSyncedAt;
 
-    const result: SyncResult = {
-      accepted: 0,
-      duplicates: 0,
-      conflicts: [],
-      newSyncCursor: cursor,
-      batches: 0,
-      totalRecords: 0,
-    };
+      const result: SyncResult = {
+        accepted: 0,
+        duplicates: 0,
+        conflicts: [],
+        newSyncCursor: cursor,
+        batches: 0,
+        totalRecords: 0,
+      };
 
-    // 3. Push batches until no more records
-    while (true) {
-      const batch = buildSyncBatch(
-        this.db,
-        cursor,
-        lastSyncedAt,
-        this.projectId,
-        this.cloudClientId,
-        this.batchSize,
-      );
+      // 3. Push batches until no more records
+      while (true) {
+        const batch = buildSyncBatch(
+          this.db,
+          cursor,
+          lastSyncedAt,
+          this.projectId,
+          this.cloudClientId,
+          this.batchSize,
+        );
 
-      const count = batchRecordCount(batch);
-      if (count === 0) break; // All synced
+        const count = batchRecordCount(batch);
+        if (count === 0) break; // All synced
 
-      const response = await this.client.post<PushResponse>(
-        "/api/sync/push",
-        {
+        const response = await this.client.post<PushResponse>(
+          "/api/sync/push",
+          {
+            clientId: this.cloudClientId,
+            syncVersion,
+            batch,
+          },
+        );
+
+        result.accepted += response.accepted;
+        result.duplicates += response.duplicates;
+        result.conflicts.push(...response.conflicts);
+        result.batches++;
+        result.totalRecords += count;
+
+        // Handle conflicts
+        if (response.conflicts.length > 0) {
+          handleConflicts(response.conflicts);
+        }
+
+        // Update cursor
+        cursor = response.newSyncCursor;
+        syncVersion = response.newSyncVersion;
+        result.newSyncCursor = cursor;
+
+        // Persist progress after each batch (crash-safe)
+        upsertSyncState(this.db, {
+          serverUrl: this.serverUrl,
           clientId: this.cloudClientId,
+          lastSyncedEventId: cursor,
+          lastSyncedAt: new Date().toISOString(),
           syncVersion,
-          batch,
-        },
-      );
+        });
 
-      result.accepted += response.accepted;
-      result.duplicates += response.duplicates;
-      result.conflicts.push(...response.conflicts);
-      result.batches++;
-      result.totalRecords += count;
-
-      // Handle conflicts
-      if (response.conflicts.length > 0) {
-        handleConflicts(response.conflicts);
+        // If batch was smaller than limit, we're done
+        if (count < this.batchSize) break;
       }
 
-      // Update cursor
-      cursor = response.newSyncCursor;
-      syncVersion = response.newSyncVersion;
-      result.newSyncCursor = cursor;
+      return result;
+    };
 
-      // Persist progress after each batch (crash-safe)
-      upsertSyncState(this.db, {
-        serverUrl: this.serverUrl,
-        clientId: this.cloudClientId,
-        lastSyncedEventId: cursor,
-        lastSyncedAt: new Date().toISOString(),
-        syncVersion,
-      });
-
-      // If batch was smaller than limit, we're done
-      if (count < this.batchSize) break;
+    if (this.dataDir) {
+      return withPerf(this.dataDir, "network", "cloud-sync", doSync);
     }
-
-    return result;
+    return doSync();
   }
 
   /** Get sync status from server */
