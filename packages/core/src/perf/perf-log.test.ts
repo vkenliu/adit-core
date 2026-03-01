@@ -268,11 +268,20 @@ describe("Performance Logging", () => {
       expect(op.avgMs).toBe(200);
       expect(op.minMs).toBe(100);
       expect(op.maxMs).toBe(300);
-      expect(op.totalMs).toBe(600);
       expect(op.failures).toBe(1);
+      expect(op.stddevMs).toBe(100);
     });
 
-    it("computes stats for multiple operations sorted by total time", () => {
+    it("computes stddev as 0 for single entry", () => {
+      const entries: PerfEntry[] = [
+        { timestamp: "2025-01-15T12:00:00Z", category: "hook", operation: "stop", durationMs: 42, success: true },
+      ];
+
+      const report = generatePerfStats(entries);
+      expect(report.operations[0].stddevMs).toBe(0);
+    });
+
+    it("sorts operations by call count descending", () => {
       const entries: PerfEntry[] = [
         { timestamp: "2025-01-15T12:00:00Z", category: "hook", operation: "stop", durationMs: 100, success: true },
         { timestamp: "2025-01-15T12:00:00Z", category: "git", operation: "getChangedFiles", durationMs: 500, success: true },
@@ -282,10 +291,11 @@ describe("Performance Logging", () => {
       const report = generatePerfStats(entries);
 
       expect(report.operations).toHaveLength(2);
-      // git:getChangedFiles should be first (higher total time)
+      // git:getChangedFiles should be first (higher count)
       expect(report.operations[0].operation).toBe("getChangedFiles");
-      expect(report.operations[0].totalMs).toBe(1100);
+      expect(report.operations[0].count).toBe(2);
       expect(report.operations[1].operation).toBe("stop");
+      expect(report.operations[1].count).toBe(1);
     });
 
     it("computes p95 correctly", () => {

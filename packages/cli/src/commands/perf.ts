@@ -67,7 +67,7 @@ function printReport(report: PerfStatsReport): void {
   console.log("ADIT Performance Report");
   console.log("=======================");
   console.log();
-  console.log(`Period:     ${report.fromDate} to ${report.toDate}`);
+  console.log(`Period:      ${report.fromDate} to ${report.toDate}`);
   console.log(`Total calls: ${report.totalEntries}`);
   console.log();
 
@@ -79,7 +79,7 @@ function printReport(report: PerfStatsReport): void {
   const colMin = 10;
   const colMax = 10;
   const colP95 = 10;
-  const colTotal = 12;
+  const colStddev = 10;
   const colFail = 6;
 
   const header = [
@@ -90,7 +90,7 @@ function printReport(report: PerfStatsReport): void {
     padLeft("Min (ms)", colMin),
     padLeft("Max (ms)", colMax),
     padLeft("P95 (ms)", colP95),
-    padLeft("Total (ms)", colTotal),
+    padLeft("StdDev", colStddev),
     padLeft("Fail", colFail),
   ].join("  ");
 
@@ -106,39 +106,11 @@ function printReport(report: PerfStatsReport): void {
       padLeft(formatMs(op.minMs), colMin),
       padLeft(formatMs(op.maxMs), colMax),
       padLeft(formatMs(op.p95Ms), colP95),
-      padLeft(formatMs(op.totalMs), colTotal),
+      padLeft(formatMs(op.stddevMs), colStddev),
       padLeft(op.failures > 0 ? String(op.failures) : "-", colFail),
     ].join("  ");
 
     console.log(row);
-  }
-
-  console.log();
-
-  // Summary by category
-  const categories = new Map<string, { count: number; totalMs: number; failures: number }>();
-  for (const op of report.operations) {
-    const cat = categories.get(op.category);
-    if (cat) {
-      cat.count += op.count;
-      cat.totalMs += op.totalMs;
-      cat.failures += op.failures;
-    } else {
-      categories.set(op.category, {
-        count: op.count,
-        totalMs: op.totalMs,
-        failures: op.failures,
-      });
-    }
-  }
-
-  console.log("Summary by Category");
-  console.log("--------------------");
-  for (const [category, stats] of categories) {
-    const failStr = stats.failures > 0 ? `, ${stats.failures} failures` : "";
-    console.log(
-      `  ${padRight(category, 12)}  ${stats.count} calls, ${formatMs(stats.totalMs)} ms total${failStr}`,
-    );
   }
 }
 

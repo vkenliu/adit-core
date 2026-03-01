@@ -41,8 +41,6 @@ export interface PerfOperationStats {
   operation: string;
   /** Total number of calls */
   count: number;
-  /** Total time spent in ms */
-  totalMs: number;
   /** Average duration in ms */
   avgMs: number;
   /** Minimum duration in ms */
@@ -51,6 +49,8 @@ export interface PerfOperationStats {
   maxMs: number;
   /** p95 duration in ms */
   p95Ms: number;
+  /** Standard deviation in ms (measures jitter) */
+  stddevMs: number;
   /** Number of failures */
   failures: number;
 }
@@ -64,7 +64,7 @@ export interface PerfStatsReport {
   toDate: string;
   /** Total number of entries analyzed */
   totalEntries: number;
-  /** Per-operation stats, sorted by total time descending */
+  /** Per-operation stats, sorted by call count descending */
   operations: PerfOperationStats[];
 }
 
@@ -300,26 +300,35 @@ export function generatePerfStats(entries: PerfEntry[]): PerfStatsReport {
   for (const [, group] of groups) {
     const durations = group.map((e) => e.durationMs).sort((a, b) => a - b);
     const totalMs = durations.reduce((sum, d) => sum + d, 0);
+    const avgMs = totalMs / group.length;
     const p95Index = Math.min(
       Math.ceil(durations.length * 0.95) - 1,
       durations.length - 1,
     );
 
+    // Standard deviation
+    const variance =
+      group.length > 1
+        ? durations.reduce((sum, d) => sum + (d - avgMs) ** 2, 0) /
+          (group.length - 1)
+        : 0;
+    const stddevMs = Math.round(Math.sqrt(variance) * 100) / 100;
+
     operations.push({
       category: group[0].category,
       operation: group[0].operation,
       count: group.length,
-      totalMs: Math.round(totalMs * 100) / 100,
-      avgMs: Math.round((totalMs / group.length) * 100) / 100,
+      avgMs: Math.round(avgMs * 100) / 100,
       minMs: durations[0],
       maxMs: durations[durations.length - 1],
       p95Ms: durations[p95Index],
+      stddevMs,
       failures: group.filter((e) => !e.success).length,
     });
   }
 
-  // Sort by total time descending
-  operations.sort((a, b) => b.totalMs - a.totalMs);
+  // Sort by call count descending
+  operations.sort((a, b) => b.count - a.count);
 
   return {
     generatedAt: now,
