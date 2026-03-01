@@ -51,6 +51,7 @@ import {
   transcriptUploadCommand,
   transcriptResetCommand,
 } from "./commands/transcript.js";
+import { perfCommand, perfClearCommand } from "./commands/perf.js";
 import { launchTui } from "./tui/index.js";
 
 const program = new Command();
@@ -376,6 +377,33 @@ dbCmd
   .option("-y, --yes", "Skip confirmation")
   .option("--json", "Output as JSON")
   .action((opts) => dbClearEventsCommand({ yes: opts.yes, json: opts.json }));
+
+// Performance stats
+const perfCmd = program
+  .command("perf")
+  .description("Performance stats for hook and git operations");
+
+perfCmd
+  .command("stats")
+  .description("Show performance stats report")
+  .option("--from <date>", "Start date (YYYY-MM-DD)")
+  .option("--to <date>", "End date (YYYY-MM-DD)")
+  .option("-c, --category <cat>", "Filter by category (hook|git|snapshot|network)")
+  .option("--json", "Output as JSON")
+  .action((opts) =>
+    perfCommand({
+      from: opts.from,
+      to: opts.to,
+      category: opts.category,
+      json: opts.json,
+    }),
+  );
+
+perfCmd
+  .command("clear")
+  .description("Clear all performance logs")
+  .option("--json", "Output as JSON")
+  .action((opts) => perfClearCommand({ json: opts.json }));
 
 // TUI — interactive terminal interface
 program
