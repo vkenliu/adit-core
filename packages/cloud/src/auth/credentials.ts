@@ -130,7 +130,7 @@ export function incrementSyncErrors(threshold = 5): boolean {
 export function clearSyncErrors(): void {
   const creds = loadCredentials();
   if (!creds) return;
-  if (creds.syncErrorCount === undefined && !creds.syncDisabled) return;
+  if (!creds.syncErrorCount && !creds.syncDisabled) return;
   saveCredentials({
     ...creds,
     syncErrorCount: 0,

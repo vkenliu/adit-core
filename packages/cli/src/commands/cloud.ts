@@ -412,10 +412,12 @@ export async function cloudStatusCommand(opts?: {
 /**
  * `adit cloud auth-token <token>` — Authenticate with a static JWT token.
  *
- * Always uses the hardcoded DEFAULT_SERVER_URL. If device-code (login)
- * credentials already exist, rejects — login credentials take priority.
+ * Server URL: ADIT_CLOUD_URL env > DEFAULT_SERVER_URL.
+ * If device-code (login) credentials already exist, rejects —
+ * login credentials take priority.
  */
 export async function cloudAuthTokenCommand(token: string): Promise<void> {
+  const serverUrl = process.env.ADIT_CLOUD_URL ?? DEFAULT_SERVER_URL;
   const config = loadConfig();
 
   // If device (login) credentials already exist, reject
@@ -450,14 +452,14 @@ export async function cloudAuthTokenCommand(token: string): Promise<void> {
     refreshToken: "",
     clientId: config.clientId,
     expiresAt: "",
-    serverUrl: DEFAULT_SERVER_URL,
+    serverUrl,
   });
 
   // Reset any error state from previous sync failures
   clearSyncErrors();
 
   console.log("Token saved successfully.");
-  console.log(`Server:    ${DEFAULT_SERVER_URL}`);
+  console.log(`Server:    ${serverUrl}`);
   console.log(`Client ID: ${config.clientId}`);
   console.log("Credentials saved to ~/.adit/cloud-credentials.json");
 }
