@@ -28,8 +28,8 @@ export class CloudClient {
 
   /** HEAD request with auth — returns headers only */
   async head(path: string): Promise<Record<string, string>> {
-    // Refresh token if expired before making the request
-    if (isTokenExpired(this.credentials)) {
+    // Refresh token if expired before making the request (skip for static tokens)
+    if (this.credentials.authType !== "token" && isTokenExpired(this.credentials)) {
       await this.refreshToken();
     }
 
@@ -40,22 +40,33 @@ export class CloudClient {
 
     const response = await fetch(url, { method: "HEAD", headers });
 
-    if (response.status === 401) {
-      await this.refreshToken();
-      // Retry once with new token
-      const retry = await fetch(url, {
-        method: "HEAD",
-        headers: {
-          Authorization: `Bearer ${this.credentials.accessToken}`,
-        },
-      });
-      if (!retry.ok) {
-        throw new CloudApiError(
-          `HEAD ${path}: ${retry.status} ${retry.statusText}`,
-          retry.status,
+    if (response.status === 401 || response.status === 403) {
+      // Static tokens cannot be refreshed — fail immediately
+      if (this.credentials.authType === "token") {
+        throw new CloudAuthError(
+          `Authentication failed: ${response.status} ${response.statusText}`,
         );
       }
-      return headersToRecord(retry.headers);
+      if (response.status === 401) {
+        await this.refreshToken();
+        // Retry once with new token
+        const retry = await fetch(url, {
+          method: "HEAD",
+          headers: {
+            Authorization: `Bearer ${this.credentials.accessToken}`,
+          },
+        });
+        if (!retry.ok) {
+          throw new CloudApiError(
+            `HEAD ${path}: ${retry.status} ${retry.statusText}`,
+            retry.status,
+          );
+        }
+        return headersToRecord(retry.headers);
+      }
+      throw new CloudAuthError(
+        `Authentication failed: ${response.status} ${response.statusText}`,
+      );
     }
 
     if (!response.ok) {
@@ -93,8 +104,8 @@ export class CloudClient {
     path: string,
     body?: unknown,
   ): Promise<T> {
-    // Refresh token if expired before making the request
-    if (isTokenExpired(this.credentials)) {
+    // Refresh token if expired before making the request (skip for static tokens)
+    if (this.credentials.authType !== "token" && isTokenExpired(this.credentials)) {
       await this.refreshToken();
     }
 
@@ -119,7 +130,14 @@ export class CloudClient {
           body: body !== undefined ? JSON.stringify(body) : undefined,
         });
 
-        // Handle 401 — try refreshing token once
+        // Handle 401 — static tokens cannot be refreshed, fail immediately
+        if (response.status === 401 && this.credentials.authType === "token") {
+          throw new CloudAuthError(
+            `Authentication failed: ${response.status} ${response.statusText}`,
+          );
+        }
+
+        // Handle 401 — try refreshing token once (device auth only)
         if (response.status === 401 && attempt === 0) {
           await this.refreshToken();
           continue; // Retry with new token
@@ -185,6 +203,11 @@ export class CloudClient {
 
   /** Refresh the access token using the refresh token */
   private async refreshToken(): Promise<void> {
+    if (this.credentials.authType === "token") {
+      throw new CloudAuthError(
+        "Cannot refresh a static token. Re-authenticate with a new token or use 'adit cloud login'.",
+      );
+    }
     try {
       const response = await fetch(
         `${this.serverUrl}/api/auth/token/refresh`,

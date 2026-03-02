@@ -42,6 +42,7 @@ import {
   cloudSyncCommand,
   cloudStatusCommand,
   cloudResetCredentialsCommand,
+  cloudAuthTokenCommand,
 } from "./commands/cloud.js";
 import { dbClearEventsCommand } from "./commands/db.js";
 import {
@@ -332,6 +333,11 @@ cloudCmd
   .description("Force-clear all credentials and sync state")
   .option("-y, --yes", "Skip confirmation")
   .action((opts) => cloudResetCredentialsCommand({ yes: opts.yes }));
+
+cloudCmd
+  .command("auth-token <token>")
+  .description("Authenticate with a static JWT token")
+  .action((token) => cloudAuthTokenCommand(token));
 
 // Transcript upload management (under cloud)
 const transcriptCmd = cloudCmd

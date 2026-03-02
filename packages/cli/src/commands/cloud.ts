@@ -24,12 +24,13 @@ import {
   CloudAuthError,
   CloudNetworkError,
   CloudApiError,
+  clearSyncErrors,
+  isSyncDisabled,
+  DEFAULT_SERVER_URL,
 } from "@adit/cloud";
 import type { DeviceAuthOptions } from "@adit/cloud";
 import { createHash } from "node:crypto";
 import { hostname } from "node:os";
-
-const DEFAULT_SERVER_URL = "https://adit-cloud.varve.ai";
 
 /**
  * `adit cloud login` — Interactive device authorization flow.
@@ -102,6 +103,9 @@ export async function cloudLoginCommand(opts?: {
       serverUrl,
     });
 
+    // Reset any error state from previous sync failures
+    clearSyncErrors();
+
     console.log();
     console.log("Authenticated successfully.");
     console.log(`Client ID: ${tokenResponse.clientId}`);
@@ -169,7 +173,8 @@ export async function cloudSyncCommand(opts?: {
   const credentials = loadCredentials();
 
   if (!credentials) {
-    const msg = "Not logged in. Run 'adit cloud login' first.";
+    const msg =
+      "Not logged in. Run 'adit cloud login' or 'adit cloud auth-token <jwt>' first.";
     if (opts?.json) {
       console.log(JSON.stringify({ error: msg }));
     } else {
@@ -177,6 +182,11 @@ export async function cloudSyncCommand(opts?: {
     }
     process.exitCode = 1;
     return;
+  }
+
+  // Re-enable sync if circuit breaker was tripped (manual sync = user intent)
+  if (isSyncDisabled()) {
+    clearSyncErrors();
   }
 
   const serverUrl = cloudConfig.serverUrl ?? credentials.serverUrl;
@@ -238,6 +248,9 @@ export async function cloudStatusCommand(opts?: {
   const credentials = loadCredentials();
   const config = loadConfig();
 
+  // Reset circuit breaker on manual status check
+  clearSyncErrors();
+
   const status: Record<string, unknown> = {
     serverUrl: cloudConfig.serverUrl,
     enabled: cloudConfig.enabled,
@@ -246,6 +259,7 @@ export async function cloudStatusCommand(opts?: {
   };
 
   if (credentials) {
+    status.authType = credentials.authType ?? "device";
     status.clientId = credentials.clientId;
     status.tokenExpired = isTokenExpired(credentials);
   }
@@ -321,10 +335,16 @@ export async function cloudStatusCommand(opts?: {
   console.log(`Logged in:    ${credentials ? "yes" : "no"}`);
 
   if (credentials) {
+    const authType = credentials.authType ?? "device";
+    console.log(`Auth type:    ${authType}`);
     console.log(`Client ID:    ${credentials.clientId}`);
-    console.log(
-      `Token:        ${isTokenExpired(credentials) ? "expired" : "valid"}`,
-    );
+    if (authType === "token") {
+      console.log("Token:        static (never expires)");
+    } else {
+      console.log(
+        `Token:        ${isTokenExpired(credentials) ? "expired" : "valid"}`,
+      );
+    }
   }
 
   // Server reachability
@@ -387,6 +407,61 @@ export async function cloudStatusCommand(opts?: {
       `${status.unsyncedRecords} records pending. Run 'adit cloud sync' to push now.`,
     );
   }
+}
+
+/**
+ * `adit cloud auth-token <token>` — Authenticate with a static JWT token.
+ *
+ * Server URL: ADIT_CLOUD_URL env > DEFAULT_SERVER_URL.
+ * If device-code (login) credentials already exist, rejects —
+ * login credentials take priority.
+ */
+export async function cloudAuthTokenCommand(token: string): Promise<void> {
+  const serverUrl = process.env.ADIT_CLOUD_URL ?? DEFAULT_SERVER_URL;
+  const config = loadConfig();
+
+  // If device (login) credentials already exist, reject
+  const existingCredentials = loadCredentials();
+  if (existingCredentials && existingCredentials.authType !== "token") {
+    console.error(
+      "Already authenticated via 'adit cloud login'.",
+    );
+    console.error(
+      "Login credentials take priority over static tokens.",
+    );
+    console.error(
+      "Run 'adit cloud logout' or 'adit cloud reset-credentials' first, then try again.",
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  // Basic JWT format validation (3 dot-separated segments)
+  const segments = token.split(".");
+  if (segments.length !== 3) {
+    console.error(
+      "Invalid token format. Expected a JWT with 3 dot-separated segments.",
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  saveCredentials({
+    authType: "token",
+    accessToken: token,
+    refreshToken: "",
+    clientId: config.clientId,
+    expiresAt: "",
+    serverUrl,
+  });
+
+  // Reset any error state from previous sync failures
+  clearSyncErrors();
+
+  console.log("Token saved successfully.");
+  console.log(`Server:    ${serverUrl}`);
+  console.log(`Client ID: ${config.clientId}`);
+  console.log("Credentials saved to ~/.adit/cloud-credentials.json");
 }
 
 /**

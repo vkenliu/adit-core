@@ -36,6 +36,9 @@ export interface TranscriptUploadConfig {
   minIncrementBytes: number;
 }
 
+/** Default cloud server URL */
+export const DEFAULT_SERVER_URL = "https://adit-cloud.varve.ai";
+
 /** Load cloud configuration from environment variables */
 export function loadCloudConfig(): CloudConfig {
   const serverUrl = process.env.ADIT_CLOUD_URL ?? null;

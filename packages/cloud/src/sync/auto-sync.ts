@@ -20,8 +20,16 @@
 
 import type Database from "better-sqlite3";
 import { getSyncState } from "@adit/core";
-import { loadCloudConfig } from "../config.js";
-import { loadCredentials, isTokenExpired } from "../auth/credentials.js";
+import { loadCloudConfig, DEFAULT_SERVER_URL } from "../config.js";
+import {
+  loadCredentials,
+  saveCredentials,
+  isTokenExpired,
+  credentialsFromEnvToken,
+  incrementSyncErrors,
+  clearSyncErrors,
+  isSyncDisabled,
+} from "../auth/credentials.js";
 import { CloudClient } from "../http/client.js";
 import { CloudNetworkError, CloudAuthError } from "../http/errors.js";
 import { SyncEngine } from "./engine.js";
@@ -50,9 +58,21 @@ export async function triggerAutoSync(
 ): Promise<void> {
   const cloudConfig = loadCloudConfig();
 
+  // 0. Circuit breaker — skip if too many consecutive failures
+  if (isSyncDisabled()) return;
+
   // 1. Check credentials exist — credentials are the implicit opt-in
-  const credentials = loadCredentials();
-  if (!credentials) return;
+  let credentials = loadCredentials();
+  if (!credentials) {
+    // Try auto-importing from ADIT_AUTH_TOKEN env var
+    const serverUrl = cloudConfig.serverUrl ?? DEFAULT_SERVER_URL;
+    const { loadConfig } = await import("@adit/core");
+    const config = loadConfig();
+    const envCreds = credentialsFromEnvToken(serverUrl, config.clientId);
+    if (!envCreds) return;
+    saveCredentials(envCreds);
+    credentials = envCreds;
+  }
 
   // 2. Resolve server URL: env var takes priority, fall back to credentials
   const serverUrl = cloudConfig.serverUrl ?? credentials.serverUrl;
@@ -111,7 +131,11 @@ export async function triggerAutoSync(
     });
 
     await engine.sync();
+    clearSyncErrors();
   } catch (error) {
+    // Track consecutive failures — disable sync after threshold
+    const disabled = incrementSyncErrors();
+
     // Fail silently — this is fire-and-forget.
     // CloudNetworkError: server unreachable, will retry next trigger
     // CloudAuthError: credentials invalid, user needs to re-login
@@ -124,6 +148,11 @@ export async function triggerAutoSync(
             ? `[adit-cloud] auto-sync skipped: auth failed — ${error.message}`
             : `[adit-cloud] auto-sync failed: ${error instanceof Error ? error.message : String(error)}`;
       process.stderr.write(msg + "\n");
+      if (disabled) {
+        process.stderr.write(
+          "[adit-cloud] auto-sync disabled after repeated failures. Run 'adit cloud sync' to re-enable.\n",
+        );
+      }
     }
   }
 }

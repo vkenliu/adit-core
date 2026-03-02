@@ -6,7 +6,7 @@
  */
 
 // Config
-export { loadCloudConfig, type CloudConfig } from "./config.js";
+export { loadCloudConfig, DEFAULT_SERVER_URL, type CloudConfig } from "./config.js";
 
 // Auth
 export {
@@ -14,6 +14,10 @@ export {
   saveCredentials,
   clearCredentials,
   isTokenExpired,
+  credentialsFromEnvToken,
+  incrementSyncErrors,
+  clearSyncErrors,
+  isSyncDisabled,
   type CloudCredentials,
 } from "./auth/credentials.js";
 export {
