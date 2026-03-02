@@ -19,15 +19,22 @@ const syncFn = vi.fn().mockResolvedValue({
 // Mock modules before importing the subject
 vi.mock("../config.js", () => ({
   loadCloudConfig: vi.fn(),
+  DEFAULT_SERVER_URL: "https://adit-cloud.varve.ai",
 }));
 
 vi.mock("../auth/credentials.js", () => ({
   loadCredentials: vi.fn(),
+  saveCredentials: vi.fn(),
   isTokenExpired: vi.fn(() => false),
+  credentialsFromEnvToken: vi.fn(() => null),
+  incrementSyncErrors: vi.fn(() => false),
+  clearSyncErrors: vi.fn(),
+  isSyncDisabled: vi.fn(() => false),
 }));
 
 vi.mock("@adit/core", () => ({
   getSyncState: vi.fn(),
+  loadConfig: vi.fn(() => ({ clientId: "test-client" })),
 }));
 
 vi.mock("./serializer.js", () => ({
