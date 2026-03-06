@@ -65,7 +65,8 @@ program
 program
   .command("init")
   .description("Initialize ADIT in the current project")
-  .action(() => initCommand({ cwd: process.cwd() }));
+  .option("-p, --platform <platform>", "Target platform (claude-code, opencode, cursor, copilot, codex)")
+  .action((opts) => initCommand({ cwd: process.cwd(), platform: opts.platform }));
 
 program
   .command("list")
