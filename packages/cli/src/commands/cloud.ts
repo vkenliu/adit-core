@@ -420,47 +420,64 @@ export async function cloudAuthTokenCommand(token: string): Promise<void> {
   const serverUrl = process.env.ADIT_CLOUD_URL ?? DEFAULT_SERVER_URL;
   const config = loadConfig();
 
-  // If device (login) credentials already exist, reject
+  // If device (login) credentials already exist, warn but allow override
   const existingCredentials = loadCredentials();
   if (existingCredentials && existingCredentials.authType !== "token") {
-    console.error(
-      "Already authenticated via 'adit cloud login'.",
+    console.log(
+      "Replacing existing login credentials with static token.",
     );
-    console.error(
-      "Login credentials take priority over static tokens.",
-    );
-    console.error(
-      "Run 'adit cloud logout' or 'adit cloud reset-credentials' first, then try again.",
-    );
-    process.exitCode = 1;
-    return;
   }
 
-  // Basic JWT format validation (3 dot-separated segments)
-  const segments = token.split(".");
-  if (segments.length !== 3) {
-    console.error(
-      "Invalid token format. Expected a JWT with 3 dot-separated segments.",
-    );
-    process.exitCode = 1;
-    return;
-  }
-
-  saveCredentials({
-    authType: "token",
+  // Save credentials with local clientId initially
+  const credentials = {
+    authType: "token" as const,
     accessToken: token,
     refreshToken: "",
     clientId: config.clientId,
     expiresAt: "",
     serverUrl,
-  });
+  };
+  saveCredentials(credentials);
+
+  // Verify token against the server and retrieve server-assigned clientId
+  try {
+    const client = new CloudClient(serverUrl, credentials);
+    const status = await client.get<{ clientId: string }>(
+      "/api/sync/status",
+    );
+    if (status.clientId && status.clientId !== config.clientId) {
+      // Update with server-assigned clientId
+      saveCredentials({ ...credentials, clientId: status.clientId });
+      console.log("Token verified successfully.");
+      console.log(`Server:    ${serverUrl}`);
+      console.log(`Client ID: ${status.clientId} (server-assigned)`);
+    } else {
+      console.log("Token verified successfully.");
+      console.log(`Server:    ${serverUrl}`);
+      console.log(`Client ID: ${config.clientId}`);
+    }
+  } catch (error) {
+    // Token saved but verification failed — still usable, warn user
+    if (error instanceof CloudAuthError) {
+      console.warn(
+        `Warning: Token verification failed (${error.message}). The token may be invalid.`,
+      );
+    } else if (error instanceof CloudNetworkError) {
+      console.warn(
+        `Warning: Could not reach ${serverUrl} to verify token. Token saved anyway.`,
+      );
+    } else {
+      console.warn(
+        `Warning: Token verification failed. Token saved anyway.`,
+      );
+    }
+    console.log(`Server:    ${serverUrl}`);
+    console.log(`Client ID: ${config.clientId}`);
+  }
 
   // Reset any error state from previous sync failures
   clearSyncErrors();
 
-  console.log("Token saved successfully.");
-  console.log(`Server:    ${serverUrl}`);
-  console.log(`Client ID: ${config.clientId}`);
   console.log("Credentials saved to ~/.adit/cloud-credentials.json");
 }
 

@@ -23,12 +23,12 @@ import { getSyncState } from "@adit/core";
 import { loadCloudConfig, DEFAULT_SERVER_URL } from "../config.js";
 import {
   loadCredentials,
-  saveCredentials,
   isTokenExpired,
   credentialsFromEnvToken,
   incrementSyncErrors,
   clearSyncErrors,
   isSyncDisabled,
+  type CloudCredentials,
 } from "../auth/credentials.js";
 import { CloudClient } from "../http/client.js";
 import { CloudNetworkError, CloudAuthError } from "../http/errors.js";
@@ -61,18 +61,22 @@ export async function triggerAutoSync(
   // 0. Circuit breaker — skip if too many consecutive failures
   if (isSyncDisabled()) return;
 
-  // 1. Check credentials exist — credentials are the implicit opt-in
-  let credentials = loadCredentials();
-  if (!credentials) {
-    // Try auto-importing from ADIT_AUTH_TOKEN env var
+  // 1. Check credentials exist — credentials are the implicit opt-in.
+  //    ADIT_AUTH_TOKEN env var takes priority over stored credentials
+  //    (enables CI/CD and headless use without writing credentials first).
+  let credentials: CloudCredentials | null = null;
+  if (process.env.ADIT_AUTH_TOKEN) {
     const serverUrl = cloudConfig.serverUrl ?? DEFAULT_SERVER_URL;
-    const { loadConfig } = await import("@adit/core");
-    const config = loadConfig();
-    const envCreds = credentialsFromEnvToken(serverUrl, config.clientId);
-    if (!envCreds) return;
-    saveCredentials(envCreds);
-    credentials = envCreds;
+    // Prefer stored credentials' clientId (set by `auth-token` verification)
+    // over the local config clientId, since the server assigns its own UUID.
+    const stored = loadCredentials();
+    const clientId = stored?.clientId ?? (await import("@adit/core")).loadConfig().clientId;
+    credentials = credentialsFromEnvToken(serverUrl, clientId);
   }
+  if (!credentials) {
+    credentials = loadCredentials();
+  }
+  if (!credentials) return;
 
   // 2. Resolve server URL: env var takes priority, fall back to credentials
   const serverUrl = cloudConfig.serverUrl ?? credentials.serverUrl;

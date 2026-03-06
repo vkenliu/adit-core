@@ -9,9 +9,7 @@
  * `adit doctor --json` outputs results as JSON.
  */
 
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
+import { existsSync, statSync } from "node:fs";
 import { execSync } from "node:child_process";
 import {
   loadConfig,
@@ -22,12 +20,7 @@ import {
   endSession,
 } from "@adit/core";
 import { isGitRepo, listCheckpointRefs, deleteCheckpointRef } from "@adit/engine";
-import { detectPlatform, getAdapter } from "@adit/hooks/adapters";
-
-/** Check if a command string is an ADIT hook (matches both npx and resolved-path formats) */
-function isAditCommand(command: string): boolean {
-  return command.includes("adit-hook") || command.includes("hooks/dist/index.js");
-}
+import { detectPlatform, getAdapter, listAdapters } from "@adit/hooks/adapters";
 
 interface Check {
   name: string;
@@ -110,29 +103,36 @@ export async function doctorCommand(
     detail: binaryOk ? "Available on PATH or via npx" : "Not found. Ensure @adit/hooks is installed.",
   });
 
-  // 6. Hooks — check .claude/settings.local.json or .claude/settings.json
-  const settingsLocalPath = join(config.projectRoot, ".claude", "settings.local.json");
-  const settingsJsonPath = join(config.projectRoot, ".claude", "settings.json");
+  // 6. Hooks — validate via platform adapters
+  //    Check all implemented adapters; report per-platform status.
+  const implementedAdapters = listAdapters().filter((a) => a.hookMappings.length > 0);
   let hooksOk = false;
-  let hooksDetail = "No hooks found in .claude/settings.local.json or .claude/settings.json";
-  for (const p of [settingsLocalPath, settingsJsonPath]) {
-    if (existsSync(p)) {
-      try {
-        const content = JSON.parse(readFileSync(p, "utf-8"));
-        if (content.hooks) {
-          hooksOk = true;
-          hooksDetail = p;
-          break;
-        }
-      } catch {
-        // ignore parse errors
-      }
+  const hooksDetails: string[] = [];
+  const adaptersNeedingFix: typeof implementedAdapters = [];
+
+  for (const adapter of implementedAdapters) {
+    const result = await adapter.validateInstallation(config.projectRoot);
+    if (result.valid) {
+      hooksOk = true;
+      hooksDetails.push(`${adapter.displayName}: OK`);
+    } else if (result.checks.some((c) => c.ok)) {
+      // Platform directory exists but hooks incomplete
+      hooksDetails.push(`${adapter.displayName}: ${result.checks.filter((c) => !c.ok).map((c) => c.detail).join("; ")}`);
+      adaptersNeedingFix.push(adapter);
     }
   }
+
+  if (hooksDetails.length === 0) {
+    const detected = detectPlatform();
+    const detectedAdapter = getAdapter(detected);
+    hooksDetails.push(`No platform hooks found (detected: ${detectedAdapter.displayName})`);
+    adaptersNeedingFix.push(detectedAdapter);
+  }
+
   checks.push({
     name: "Hooks config",
     ok: hooksOk,
-    detail: hooksDetail,
+    detail: hooksDetails.join("; "),
     fixable: !hooksOk,
   });
 
@@ -166,66 +166,17 @@ export async function doctorCommand(
     fixable: orphanedRefs > 0,
   });
 
-  // 8. Platform hooks — verify all required hooks are registered
+  // 8. Platform hook completeness — detailed per-adapter validation
+  //    (check #6 above gives a summary; this gives per-check detail)
   const detectedPlatform = detectPlatform();
   const platformAdapter = getAdapter(detectedPlatform);
-  const requiredHooks = platformAdapter.hookMappings.map((m) => m.platformEvent);
-  const hookSettingsLocations = [
-    join(config.projectRoot, ".claude", "settings.local.json"),
-    join(config.projectRoot, ".claude", "settings.json"),
-    join(homedir(), ".claude", "settings.json"),
-  ];
-
-  let claudeSettingsOk = false;
-  let claudeSettingsDetail = `No ${platformAdapter.displayName} settings found`;
-  const missingHooks: string[] = [];
-
-  for (const hookSettingsPath of hookSettingsLocations) {
-    if (!existsSync(hookSettingsPath)) continue;
-    try {
-      const raw = readFileSync(hookSettingsPath, "utf-8");
-      const settings = JSON.parse(raw);
-      const hooks = settings.hooks;
-      if (!hooks) {
-        claudeSettingsDetail = `${hookSettingsPath} found but has no hooks configuration`;
-        break;
-      }
-
-      for (const hookName of requiredHooks) {
-        const hookEntries = hooks[hookName];
-        if (!Array.isArray(hookEntries)) {
-          missingHooks.push(hookName);
-          continue;
-        }
-        const hasAdit = hookEntries.some(
-          (entry: { command?: string; hooks?: Array<{ command?: string }> }) => {
-            if (typeof entry.command === "string" && isAditCommand(entry.command)) return true;
-            if (Array.isArray(entry.hooks)) {
-              return entry.hooks.some(
-                (h) => typeof h.command === "string" && isAditCommand(h.command),
-              );
-            }
-            return false;
-          },
-        );
-        if (!hasAdit) missingHooks.push(hookName);
-      }
-
-      claudeSettingsOk = missingHooks.length === 0;
-      claudeSettingsDetail = claudeSettingsOk
-        ? `All hooks registered in ${hookSettingsPath}`
-        : `Missing hooks in ${hookSettingsPath}: ${missingHooks.join(", ")}`;
-      break;
-    } catch {
-      claudeSettingsDetail = `Failed to parse ${hookSettingsPath}`;
-    }
-  }
+  const platformResult = await platformAdapter.validateInstallation(config.projectRoot);
 
   checks.push({
     name: `${platformAdapter.displayName} settings`,
-    ok: claudeSettingsOk,
-    detail: claudeSettingsDetail,
-    fixable: !claudeSettingsOk,
+    ok: platformResult.valid,
+    detail: platformResult.checks.map((c) => `${c.name}: ${c.detail}`).join("; "),
+    fixable: !platformResult.valid,
   });
 
   // 9. Stale sessions
@@ -299,11 +250,14 @@ export async function doctorCommand(
 
     // Fix missing hooks via plugin install
     if (!hooksOk) {
-      try {
-        await platformAdapter.installHooks(config.projectRoot, "npx adit-hook");
-        fixes.push(`Installed ADIT hooks for ${platformAdapter.displayName}`);
-      } catch {
-        // ignore
+      for (const adapter of adaptersNeedingFix) {
+        try {
+          const { resolveAditHookBinary } = await import("@adit/hooks/adapters");
+          await adapter.installHooks(config.projectRoot, resolveAditHookBinary());
+          fixes.push(`Installed ADIT hooks for ${adapter.displayName}`);
+        } catch {
+          // ignore
+        }
       }
     }
 

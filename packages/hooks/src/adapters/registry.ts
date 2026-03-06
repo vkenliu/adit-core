@@ -10,9 +10,9 @@ import { claudeCodeAdapter } from "./claude-code.js";
 import {
   cursorAdapter,
   copilotAdapter,
-  opencodeAdapter,
   codexAdapter,
 } from "./stub.js";
+import { opencodeAdapter } from "./opencode.js";
 
 /** Registered adapters keyed by platform */
 const adapters = new Map<Platform, PlatformAdapter>();
@@ -20,10 +20,12 @@ const adapters = new Map<Platform, PlatformAdapter>();
 // Register built-in adapters
 adapters.set("claude-code", claudeCodeAdapter);
 
+// Register OpenCode adapter (fully implemented)
+adapters.set("opencode", opencodeAdapter);
+
 // Register stub adapters (detected but not yet fully implemented)
 adapters.set("cursor", cursorAdapter);
 adapters.set("copilot", copilotAdapter);
-adapters.set("opencode", opencodeAdapter);
 adapters.set("codex", codexAdapter);
 
 /** Get the adapter for a platform */

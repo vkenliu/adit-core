@@ -137,9 +137,21 @@ export class SyncEngine {
         }
 
         // Update cursor
+        const prevCursor = cursor;
         cursor = response.newSyncCursor;
         syncVersion = response.newSyncVersion;
         result.newSyncCursor = cursor;
+
+        // Guard against infinite loop: if all records were duplicates and
+        // the cursor didn't advance, the same batch would repeat forever.
+        if (response.accepted === 0 && cursor === prevCursor) {
+          if (process.env.ADIT_DEBUG) {
+            process.stderr.write(
+              `[adit-cloud] sync: all ${count} records were duplicates and cursor unchanged — stopping\n`,
+            );
+          }
+          break;
+        }
 
         // Persist progress after each batch (crash-safe)
         upsertSyncState(this.db, {

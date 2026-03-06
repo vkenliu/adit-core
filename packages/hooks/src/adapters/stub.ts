@@ -83,13 +83,6 @@ export const copilotAdapter = createStubAdapter(
   ["GITHUB_COPILOT", "COPILOT_SESSION"],
 );
 
-/** OpenCode — Go-based AI coding CLI */
-export const opencodeAdapter = createStubAdapter(
-  "opencode",
-  "OpenCode",
-  ["OPENCODE", "OPENCODE_SESSION"],
-);
-
 /** Codex — OpenAI's AI coding agent */
 export const codexAdapter = createStubAdapter(
   "codex",

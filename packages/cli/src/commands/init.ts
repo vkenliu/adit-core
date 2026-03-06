@@ -2,16 +2,47 @@
  * `adit init` — Initialize ADIT in the current project.
  *
  * Creates the .adit/ data directory, initializes the database,
- * and installs hooks for the detected AI platform via the adapter.
+ * and installs hooks for detected (or specified) AI platforms via adapters.
  */
 
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig, openDatabase, closeDatabase, findGitRoot } from "@adit/core";
+import type { Platform } from "@adit/core";
 import { isGitRepo } from "@adit/engine";
 import { detectPlatform, getAdapter, resolveAditHookBinary } from "@adit/hooks/adapters";
 
-export async function initCommand(opts: { cwd?: string }): Promise<void> {
+/**
+ * Detect which platforms are present in this project by checking
+ * for their config directories. Falls back to env-based detection
+ * if no platform directories are found.
+ */
+function detectPlatforms(projectRoot: string): Platform[] {
+  const platforms = new Set<Platform>();
+
+  // Check for Claude Code config directory
+  if (existsSync(join(projectRoot, ".claude"))) {
+    platforms.add("claude-code");
+  }
+
+  // Check for OpenCode config directory or config file
+  if (
+    existsSync(join(projectRoot, ".opencode")) ||
+    existsSync(join(projectRoot, "opencode.json")) ||
+    existsSync(join(projectRoot, "opencode.jsonc"))
+  ) {
+    platforms.add("opencode");
+  }
+
+  // If no platform directories found, fall back to env detection
+  if (platforms.size === 0) {
+    platforms.add(detectPlatform());
+  }
+
+  return Array.from(platforms);
+}
+
+export async function initCommand(opts: { cwd?: string; platform?: string }): Promise<void> {
   const cwd = opts.cwd ?? process.cwd();
 
   // Verify we're in a git repo
@@ -45,14 +76,33 @@ export async function initCommand(opts: { cwd?: string }): Promise<void> {
     console.log("Created .gitignore with .adit/");
   }
 
-  // Install hooks via the platform adapter
-  const platform = detectPlatform();
-  try {
-    const adapter = getAdapter(platform);
-    await adapter.installHooks(gitRoot, resolveAditHookBinary());
-    console.log(`Installed ${adapter.displayName} hooks (${adapter.hookMappings.length} events)`);
-  } catch {
-    console.log(`Note: Could not install hooks for platform "${platform}". Run 'adit plugin install' manually.`);
+  // Determine which platforms to install hooks for
+  const aditBinaryPath = resolveAditHookBinary();
+
+  if (opts.platform) {
+    // Explicit platform specified
+    const platform = opts.platform as Platform;
+    try {
+      const adapter = getAdapter(platform);
+      await adapter.installHooks(gitRoot, aditBinaryPath);
+      console.log(`Installed ${adapter.displayName} hooks (${adapter.hookMappings.length} events)`);
+    } catch {
+      console.log(`Note: Could not install hooks for platform "${platform}". Run 'adit plugin install ${platform}' manually.`);
+    }
+  } else {
+    // Auto-detect: install hooks for all detected platforms
+    const platforms = detectPlatforms(gitRoot);
+    for (const platform of platforms) {
+      try {
+        const adapter = getAdapter(platform);
+        // Skip stub adapters (no hook mappings)
+        if (adapter.hookMappings.length === 0) continue;
+        await adapter.installHooks(gitRoot, aditBinaryPath);
+        console.log(`Installed ${adapter.displayName} hooks (${adapter.hookMappings.length} events)`);
+      } catch {
+        console.log(`Note: Could not install hooks for platform "${platform}". Run 'adit plugin install ${platform}' manually.`);
+      }
+    }
   }
 
   console.log("\nADIT initialized successfully!");

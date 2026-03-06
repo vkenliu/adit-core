@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { getAdapter, listAdapters, detectPlatform, registerAdapter } from "./registry.js";
 import { claudeCodeAdapter } from "./claude-code.js";
+import { opencodeAdapter } from "./opencode.js";
 import type { PlatformAdapter } from "./types.js";
 
 describe("Adapter Registry", () => {
@@ -33,13 +34,16 @@ describe("Adapter Registry", () => {
     expect(["claude-code", "cursor", "copilot", "opencode", "codex", "other"]).toContain(platform);
   });
 
+  it("returns the OpenCode adapter (fully implemented)", () => {
+    const opencode = getAdapter("opencode");
+    expect(opencode.displayName).toBe("OpenCode");
+    expect(opencode.hookMappings.length).toBeGreaterThan(0);
+  });
+
   it("returns stub adapters for unimplemented platforms", () => {
     const cursor = getAdapter("cursor");
     expect(cursor.displayName).toBe("Cursor");
     expect(cursor.hookMappings).toHaveLength(0);
-
-    const opencode = getAdapter("opencode");
-    expect(opencode.displayName).toBe("OpenCode");
 
     const codex = getAdapter("codex");
     expect(codex.displayName).toBe("Codex");
@@ -181,6 +185,17 @@ describe("Claude Code Adapter", () => {
     expect(input.lastAssistantMessage).toBe("Analysis complete.");
   });
 
+  it("reclassifies task-notification prompt as notification", () => {
+    const input = claudeCodeAdapter.parseInput(
+      { cwd: "/project", prompt: "<task-notification>Task done</task-notification>" },
+      "UserPromptSubmit",
+    );
+    expect(input.hookType).toBe("notification");
+    expect(input.prompt).toBeUndefined();
+    expect(input.notificationMessage).toBe("<task-notification>Task done</task-notification>");
+    expect(input.notificationType).toBe("task-notification");
+  });
+
   it("generateHookConfig produces valid structure with async hooks", () => {
     const config = claudeCodeAdapter.generateHookConfig("npx adit-hook");
     expect(config.configPath).toBe(".claude/settings.local.json");
@@ -203,5 +218,177 @@ describe("Claude Code Adapter", () => {
       }>;
       expect(entries[0].hooks[0].async).toBeUndefined();
     }
+  });
+});
+
+describe("OpenCode Adapter", () => {
+  it("has correct hook mappings", () => {
+    expect(opencodeAdapter.hookMappings.length).toBe(8);
+
+    const mappings = opencodeAdapter.hookMappings.map((m) => m.platformEvent);
+    expect(mappings).toContain("chat.message");
+    expect(mappings).toContain("stop");
+    expect(mappings).toContain("session.created");
+    expect(mappings).toContain("session.deleted");
+    expect(mappings).toContain("message.updated");
+    expect(mappings).toContain("message.part.updated");
+    expect(mappings).toContain("session.diff");
+    expect(mappings).toContain("todo.updated");
+  });
+
+  it("parseInput normalizes prompt-submit", () => {
+    const input = opencodeAdapter.parseInput(
+      { cwd: "/project", prompt: "hello world", session_id: "sess-1" },
+      "prompt-submit",
+    );
+    expect(input.hookType).toBe("prompt-submit");
+    expect(input.prompt).toBe("hello world");
+    expect(input.cwd).toBe("/project");
+    expect(input.platformCli).toBe("opencode");
+    expect(input.platformSessionId).toBe("sess-1");
+  });
+
+  it("parseInput normalizes stop", () => {
+    const input = opencodeAdapter.parseInput(
+      { cwd: "/project", stop_reason: "completed", last_assistant_message: "Done." },
+      "stop",
+    );
+    expect(input.hookType).toBe("stop");
+    expect(input.stopReason).toBe("completed");
+    expect(input.lastAssistantMessage).toBe("Done.");
+  });
+
+  it("parseInput normalizes session-start", () => {
+    const input = opencodeAdapter.parseInput(
+      { cwd: "/project", source: "startup", session_id: "sess-2", model: "claude-sonnet" },
+      "session-start",
+    );
+    expect(input.hookType).toBe("session-start");
+    expect(input.sessionSource).toBe("startup");
+    expect(input.model).toBe("claude-sonnet");
+  });
+
+  it("parseInput normalizes session-end from session.deleted", () => {
+    const input = opencodeAdapter.parseInput(
+      { cwd: "/project", reason: "deleted", session_id: "sess-3" },
+      "session-end",
+    );
+    expect(input.hookType).toBe("session-end");
+    expect(input.sessionEndReason).toBe("deleted");
+  });
+
+  it("parseInput maps session.error to session-end", () => {
+    const input = opencodeAdapter.parseInput(
+      { cwd: "/project", reason: "error" },
+      "session.error",
+    );
+    expect(input.hookType).toBe("session-end");
+    expect(input.sessionEndReason).toBe("error");
+  });
+
+  it("parseInput normalizes notification (assistant_metadata)", () => {
+    const input = opencodeAdapter.parseInput(
+      {
+        cwd: "/project",
+        session_id: "sess-1",
+        notification_type: "assistant_metadata",
+        title: "Assistant Response",
+        message: "Model: claude-sonnet, Cost: 0.05, Tokens: 1500",
+        model: "claude-sonnet",
+        cost: 0.05,
+        tokens: { input: 1000, output: 500 },
+      },
+      "notification",
+    );
+    expect(input.hookType).toBe("notification");
+    expect(input.notificationType).toBe("assistant_metadata");
+    expect(input.notificationTitle).toBe("Assistant Response");
+    expect(input.model).toBe("claude-sonnet");
+    expect(input.rawPlatformData?.cost).toBe(0.05);
+  });
+
+  it("parseInput normalizes notification (tool_result)", () => {
+    const input = opencodeAdapter.parseInput(
+      {
+        cwd: "/project",
+        session_id: "sess-1",
+        notification_type: "tool_result",
+        title: "Read file.ts",
+        message: "Tool read: Read file.ts",
+        tool_name: "read",
+        tool_input: { filePath: "file.ts" },
+        tool_output: { content: "..." },
+      },
+      "notification",
+    );
+    expect(input.hookType).toBe("notification");
+    expect(input.notificationType).toBe("tool_result");
+    expect(input.toolName).toBe("read");
+    expect(input.toolInput).toEqual({ filePath: "file.ts" });
+  });
+
+  it("parseInput normalizes task-completed (todo.updated)", () => {
+    const input = opencodeAdapter.parseInput(
+      {
+        cwd: "/project",
+        session_id: "sess-1",
+        task_id: "todo-1",
+        task_subject: "Add error handling",
+        task_description: "Priority: high",
+      },
+      "task-completed",
+    );
+    expect(input.hookType).toBe("task-completed");
+    expect(input.taskId).toBe("todo-1");
+    expect(input.taskSubject).toBe("Add error handling");
+    expect(input.taskDescription).toBe("Priority: high");
+  });
+
+  it("parseInput does not set transcriptPath (OpenCode has no transcript file)", () => {
+    const input = opencodeAdapter.parseInput(
+      { cwd: "/project", stop_reason: "completed" },
+      "stop",
+    );
+    expect(input.transcriptPath).toBeUndefined();
+  });
+
+  it("generateHookConfig produces plugin file content", () => {
+    const config = opencodeAdapter.generateHookConfig("npx adit-hook");
+    expect(config.configPath).toBe(".opencode/plugins/adit.js");
+    expect(config.content.plugin).toBeDefined();
+
+    const pluginContent = config.content.plugin as string;
+    expect(pluginContent).toContain("@adit/auto-generated");
+    expect(pluginContent).toContain("adit-hook");
+    expect(pluginContent).toContain("OPENCODE");
+    // Core hooks
+    expect(pluginContent).toContain("chat.message");
+    expect(pluginContent).toContain("session.created");
+    expect(pluginContent).toContain("session.deleted");
+    expect(pluginContent).toContain("session.error");
+    // New events
+    expect(pluginContent).toContain("message.updated");
+    expect(pluginContent).toContain("message.part.updated");
+    expect(pluginContent).toContain("session.diff");
+    expect(pluginContent).toContain("todo.updated");
+    // Notification types
+    expect(pluginContent).toContain("assistant_metadata");
+    expect(pluginContent).toContain("tool_result");
+    expect(pluginContent).toContain("step_finish");
+    expect(pluginContent).toContain("session_diff");
+    expect(pluginContent).toContain("task-completed");
+  });
+
+  it("generateHookConfig handles resolved binary path", () => {
+    const config = opencodeAdapter.generateHookConfig('node "/path/to/hooks/dist/index.js"');
+    const pluginContent = config.content.plugin as string;
+    expect(pluginContent).toContain("/path/to/hooks/dist/index.js");
+    expect(pluginContent).toContain('"node"');
+  });
+
+  it("validateInstallation reports missing plugin", async () => {
+    const result = await opencodeAdapter.validateInstallation("/nonexistent/path");
+    expect(result.valid).toBe(false);
+    expect(result.checks.some((c) => !c.ok && c.detail.includes("Not found"))).toBe(true);
   });
 });
