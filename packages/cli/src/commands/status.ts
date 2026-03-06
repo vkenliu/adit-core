@@ -5,8 +5,7 @@
  * active session info, and recent checkpoint count.
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
 import {
   loadConfig,
   openDatabase,
@@ -23,12 +22,7 @@ import {
   getCurrentBranch,
   getHeadSha,
 } from "@adit/engine";
-import { detectPlatform, getAdapter } from "@adit/hooks/adapters";
-
-/** Check if a command string is an ADIT hook (matches both npx and resolved-path formats) */
-function isAditCommand(command: string): boolean {
-  return command.includes("adit-hook") || command.includes("hooks/dist/index.js");
-}
+import { detectPlatform, getAdapter, listAdapters } from "@adit/hooks/adapters";
 
 export async function statusCommand(opts?: { json?: boolean }): Promise<void> {
   const config = loadConfig();
@@ -52,45 +46,35 @@ export async function statusCommand(opts?: { json?: boolean }): Promise<void> {
     return;
   }
 
-  // 2. Check hook configuration — derive required hooks from adapter
-  const platform = detectPlatform();
-  const adapter = getAdapter(platform);
-  const requiredHooks = adapter.hookMappings.map((m) => m.platformEvent);
-  const installedHooks: string[] = [];
+  // 2. Check hook configuration via platform adapters
+  //    Validate all implemented adapters (skip stubs with no hook mappings)
+  const implementedAdapters = listAdapters().filter((a) => a.hookMappings.length > 0);
+  const installedPlatforms: string[] = [];
+  const missingPlatforms: string[] = [];
 
-  const settingsPath = join(gitRoot, ".claude", "settings.local.json");
-  if (existsSync(settingsPath)) {
-    try {
-      const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
-      if (settings.hooks) {
-        for (const hookName of requiredHooks) {
-          const hookEntries = settings.hooks[hookName];
-          if (Array.isArray(hookEntries)) {
-            const hasAdit = hookEntries.some((entry: Record<string, unknown>) => {
-              // Support both flat command string and nested hooks array format
-              if (typeof entry.command === "string" && isAditCommand(entry.command)) {
-                return true;
-              }
-              if (Array.isArray(entry.hooks)) {
-                return entry.hooks.some(
-                  (h: Record<string, unknown>) =>
-                    typeof h.command === "string" && isAditCommand(h.command),
-                );
-              }
-              return false;
-            });
-            if (hasAdit) installedHooks.push(hookName);
-          }
-        }
-      }
-    } catch {
-      // ignore parse errors
+  for (const adapter of implementedAdapters) {
+    const result = await adapter.validateInstallation(gitRoot);
+    if (result.valid) {
+      installedPlatforms.push(adapter.displayName);
+    } else if (result.checks.some((c) => c.ok)) {
+      // Partially installed — platform directory exists but hooks incomplete
+      missingPlatforms.push(adapter.displayName);
     }
   }
+
+  // Fall back to env-detected platform if nothing found
+  if (installedPlatforms.length === 0 && missingPlatforms.length === 0) {
+    const platform = detectPlatform();
+    const adapter = getAdapter(platform);
+    if (adapter.hookMappings.length > 0) {
+      missingPlatforms.push(adapter.displayName);
+    }
+  }
+
   status.hooks = {
-    installed: installedHooks,
-    missing: requiredHooks.filter((h) => !installedHooks.includes(h)),
-    allInstalled: installedHooks.length === requiredHooks.length,
+    installed: installedPlatforms,
+    missing: missingPlatforms,
+    allInstalled: missingPlatforms.length === 0 && installedPlatforms.length > 0,
   };
 
   // 3. Database + session info
@@ -198,9 +182,13 @@ export async function statusCommand(opts?: { json?: boolean }): Promise<void> {
 
   // Hooks
   if (hooksStatus.allInstalled) {
-    console.log(`Hooks:        All ${requiredHooks.length} installed`);
+    console.log(`Hooks:        ${hooksStatus.installed.join(", ")} installed`);
+  } else if (hooksStatus.installed.length > 0) {
+    console.log(`Hooks:        ${hooksStatus.installed.join(", ")} installed; missing: ${hooksStatus.missing.join(", ")}`);
+  } else if (hooksStatus.missing.length > 0) {
+    console.log(`Hooks:        Not installed (${hooksStatus.missing.join(", ")} detected but incomplete)`);
   } else {
-    console.log(`Hooks:        ${hooksStatus.installed.length}/${requiredHooks.length} installed, missing: ${hooksStatus.missing.join(", ")}`);
+    console.log("Hooks:        No platforms detected");
   }
 
   // Session
