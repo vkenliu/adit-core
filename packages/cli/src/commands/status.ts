@@ -25,6 +25,11 @@ import {
 } from "@adit/engine";
 import { detectPlatform, getAdapter } from "@adit/hooks/adapters";
 
+/** Check if a command string is an ADIT hook (matches both npx and resolved-path formats) */
+function isAditCommand(command: string): boolean {
+  return command.includes("adit-hook") || command.includes("hooks/dist/index.js");
+}
+
 export async function statusCommand(opts?: { json?: boolean }): Promise<void> {
   const config = loadConfig();
   const gitRoot = findGitRoot() ?? config.projectRoot;
@@ -63,13 +68,13 @@ export async function statusCommand(opts?: { json?: boolean }): Promise<void> {
           if (Array.isArray(hookEntries)) {
             const hasAdit = hookEntries.some((entry: Record<string, unknown>) => {
               // Support both flat command string and nested hooks array format
-              if (typeof entry.command === "string" && entry.command.includes("adit-hook")) {
+              if (typeof entry.command === "string" && isAditCommand(entry.command)) {
                 return true;
               }
               if (Array.isArray(entry.hooks)) {
                 return entry.hooks.some(
                   (h: Record<string, unknown>) =>
-                    typeof h.command === "string" && h.command.includes("adit-hook"),
+                    typeof h.command === "string" && isAditCommand(h.command),
                 );
               }
               return false;

@@ -24,6 +24,11 @@ import {
 import { isGitRepo, listCheckpointRefs, deleteCheckpointRef } from "@adit/engine";
 import { detectPlatform, getAdapter } from "@adit/hooks/adapters";
 
+/** Check if a command string is an ADIT hook (matches both npx and resolved-path formats) */
+function isAditCommand(command: string): boolean {
+  return command.includes("adit-hook") || command.includes("hooks/dist/index.js");
+}
+
 interface Check {
   name: string;
   ok: boolean;
@@ -194,10 +199,10 @@ export async function doctorCommand(
         }
         const hasAdit = hookEntries.some(
           (entry: { command?: string; hooks?: Array<{ command?: string }> }) => {
-            if (typeof entry.command === "string" && entry.command.includes("adit-hook")) return true;
+            if (typeof entry.command === "string" && isAditCommand(entry.command)) return true;
             if (Array.isArray(entry.hooks)) {
               return entry.hooks.some(
-                (h) => typeof h.command === "string" && h.command.includes("adit-hook"),
+                (h) => typeof h.command === "string" && isAditCommand(h.command),
               );
             }
             return false;
