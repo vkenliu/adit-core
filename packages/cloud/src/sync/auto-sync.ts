@@ -4,7 +4,8 @@
  * Called from the hooks system via dynamic import. Fully fail-open:
  * any error is swallowed so it never blocks the AI agent.
  *
- * Sync is triggered when either:
+ * Sync is triggered when any of the following is true:
+ * - `options.force` is true (used on session-end to flush all data), OR
  * - The number of unsynced records meets the configured threshold
  *   (ADIT_CLOUD_SYNC_THRESHOLD, default 50), OR
  * - More than syncTimeoutHours (default 12h) have elapsed since
@@ -55,6 +56,7 @@ import { countUnsyncedRecords } from "./serializer.js";
 export async function triggerAutoSync(
   db: Database.Database,
   projectId: string,
+  options?: { force?: boolean },
 ): Promise<void> {
   const cloudConfig = loadCloudConfig();
 
@@ -94,28 +96,30 @@ export async function triggerAutoSync(
   if (process.env.ADIT_CLOUD_AUTO_SYNC === "false") return;
   if (process.env.ADIT_CLOUD_ENABLED === "false") return;
 
-  // 4. Check sync triggers: time-based first (cheap), then count-based (expensive)
-  const syncState = getSyncState(db, serverUrl);
+  // 4. Check sync triggers (skipped when force=true, e.g. session-end)
+  if (!options?.force) {
+    const syncState = getSyncState(db, serverUrl);
 
-  // 4a. Time-based trigger: if more than syncTimeoutHours since last successful sync,
-  //     skip the expensive multi-table COUNT and trigger sync directly.
-  //     Only applies when we have a previous sync timestamp (first sync uses count-based).
-  const timeoutMs = cloudConfig.syncTimeoutHours * 60 * 60 * 1000;
-  const timeTriggered =
-    syncState?.lastSyncedAt != null &&
-    Date.now() - new Date(syncState.lastSyncedAt).getTime() > timeoutMs;
+    // 4a. Time-based trigger: if more than syncTimeoutHours since last successful sync,
+    //     skip the expensive multi-table COUNT and trigger sync directly.
+    //     Only applies when we have a previous sync timestamp (first sync uses count-based).
+    const timeoutMs = cloudConfig.syncTimeoutHours * 60 * 60 * 1000;
+    const timeTriggered =
+      syncState?.lastSyncedAt != null &&
+      Date.now() - new Date(syncState.lastSyncedAt).getTime() > timeoutMs;
 
-  // 4b. Count-based trigger: only run the expensive count if time didn't trigger
-  if (!timeTriggered) {
-    const unsyncedCount = countUnsyncedRecords(
-      db,
-      syncState?.lastSyncedEventId ?? null,
-      syncState?.lastSyncedAt ?? null,
-      projectId,
-    );
+    // 4b. Count-based trigger: only run the expensive count if time didn't trigger
+    if (!timeTriggered) {
+      const unsyncedCount = countUnsyncedRecords(
+        db,
+        syncState?.lastSyncedEventId ?? null,
+        syncState?.lastSyncedAt ?? null,
+        projectId,
+      );
 
-    if (unsyncedCount < cloudConfig.syncThreshold) {
-      return;
+      if (unsyncedCount < cloudConfig.syncThreshold) {
+        return;
+      }
     }
   }
 

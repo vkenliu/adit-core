@@ -71,15 +71,17 @@ export async function dispatchHook(input: NormalizedHookInput): Promise<void> {
     // Auto-sync to cloud on every hook event (fail-open).
     // Uses dynamic import so @adit/cloud is not a build-time dependency.
     // The module name is constructed to prevent TypeScript from resolving it.
+    // On session-end, force sync to flush all remaining data to cloud.
     try {
       await withPerf(dataDir, "network", "cloud-auto-sync", async () => {
         const cloudModuleName = ["@adit", "cloud"].join("/");
         const cloudModule = await import(cloudModuleName) as {
-          triggerAutoSync: (db: unknown, projectId: string) => Promise<void>;
+          triggerAutoSync: (db: unknown, projectId: string, options?: { force?: boolean }) => Promise<void>;
         };
         // Awaited so db stays open until it finishes querying.
         // The actual network push happens inside triggerAutoSync's own fire-and-forget.
-        await cloudModule.triggerAutoSync(ctx.db, ctx.config.projectId);
+        const force = input.hookType === "session-end";
+        await cloudModule.triggerAutoSync(ctx.db, ctx.config.projectId, force ? { force: true } : undefined);
       });
     } catch {
       // @adit/cloud not installed — silently skip
