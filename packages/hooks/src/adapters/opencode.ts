@@ -30,10 +30,16 @@ const PLUGIN_FILENAME = "adit.js";
 
 const HOOK_MAPPINGS: HookMapping[] = [
   { platformEvent: "chat.message", aditHandler: "prompt-submit" },
-  { platformEvent: "stop", aditHandler: "stop" },
+  // OpenCode has no "stop" hook key; session.idle fires when the assistant
+  // finishes a response turn and is the correct trigger for checkpoints.
+  // session.idle also triggers a forced cloud sync so data is flushed before
+  // the user exits (since /exit does not reliably fire a session-end event).
+  { platformEvent: "session.idle", aditHandler: "stop" },
   { platformEvent: "session.created", aditHandler: "session-start" },
   { platformEvent: "session.deleted", aditHandler: "session-end" },
-  { platformEvent: "message.updated", aditHandler: "notification" },
+  // /exit does not fire session.deleted; command.executed is intercepted
+  // synchronously in the plugin to flush cloud sync before process exit.
+  { platformEvent: "command.executed", aditHandler: "session-end" },
   { platformEvent: "message.part.updated", aditHandler: "notification" },
   { platformEvent: "session.diff", aditHandler: "notification" },
   { platformEvent: "todo.updated", aditHandler: "task-completed" },
@@ -42,7 +48,7 @@ const HOOK_MAPPINGS: HookMapping[] = [
 /** Map OpenCode hook/event types to ADIT hook types */
 const EVENT_TO_ADIT: Record<string, AditHookType> = {
   "chat.message": "prompt-submit",
-  "stop": "stop",
+  "session.idle": "stop",
   "session-start": "session-start",
   "session-end": "session-end",
   "session.created": "session-start",
@@ -65,14 +71,26 @@ function isAditPlugin(content: string): boolean {
  * isolated — errors never crash OpenCode.
  *
  * Hooked events:
- * - chat.message (user)       → prompt-submit
- * - stop                      → stop (checkpoint creation)
+ * - chat.message (user)       → prompt-submit (prompt from parts[].text)
+ * - session.idle              → stop (checkpoint + forced cloud sync; AI finished)
  * - session.created/deleted   → session-start/session-end
  * - session.error             → session-end
- * - message.updated (asst)    → notification (cost, tokens, model metadata)
+ * - command.executed          → session-end (exit/quit/q only, synchronous)
  * - message.part.updated      → notification (tool results, step finishes)
  * - session.diff              → notification (file-level diffs)
  * - todo.updated              → task-completed (AI task tracking)
+ *
+ * Note: OpenCode's Plugin API has no "stop" hook key. The equivalent is the
+ * "session.idle" event, which fires when the assistant finishes a response.
+ * UserMessage has no content field; the user prompt lives in the parts array
+ * (TextPart items with type === "text"). Session has no model field — model
+ * info comes from the chat.message input arg instead.
+ *
+ * Note: /exit (/quit, /q) does NOT fire session.deleted — OpenCode just
+ * terminates the process. We intercept command.executed (which fires for all
+ * slash commands) and use spawnSync to block until the session-end hook (and
+ * cloud sync) completes before the process exits. The active session ID is
+ * tracked via session.created/deleted.
  */
 function generatePluginContent(aditBinaryPath: string): string {
   // Split the binary path into command + args for spawning.
@@ -87,7 +105,7 @@ function generatePluginContent(aditBinaryPath: string): string {
 // This plugin listens for OpenCode events and forwards them to ADIT's
 // hook dispatcher via child process. All errors are swallowed (fail-open).
 
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 
 const ADIT_CMD = ${JSON.stringify(cmd)};
 const ADIT_BASE_ARGS = ${JSON.stringify(baseArgs)};
@@ -109,96 +127,105 @@ function spawnAditHook(hookType, data) {
   }
 }
 
+// Synchronous variant used on /exit — we must block until ADIT finishes
+// because the process is about to terminate and a detached child would be
+// orphaned before it completes the cloud sync.
+function spawnAditHookSync(hookType, data) {
+  try {
+    spawnSync(ADIT_CMD, [...ADIT_BASE_ARGS, hookType], {
+      input: JSON.stringify(data),
+      stdio: ["pipe", "ignore", "ignore"],
+      env: { ...process.env, OPENCODE: "1" },
+      timeout: 10000,
+    });
+  } catch (e) {
+    // fail-open
+  }
+}
+
 exports.AditPlugin = async (ctx) => {
   const cwd = ctx.directory || ctx.worktree || process.cwd();
 
+  // Track the active session ID so we can fire session-end on /exit.
+  // OpenCode does not fire session.deleted when the user types /exit —
+  // it just terminates the process. We intercept command.executed to
+  // detect exit commands and block until the sync finishes.
+  let activeSessionId = undefined;
+
   return {
-    // Capture user prompts
-    "chat.message": async (_input, output) => {
+    // Capture user prompts.
+    // input contains sessionID and model info; output.parts is the array of
+    // message parts — collect text parts to reconstruct the prompt string.
+    // UserMessage has no content field; the text lives in TextPart items.
+    "chat.message": async (input, output) => {
       try {
-        const msg = output.message;
-        if (!msg || msg.role !== "user") return;
+        const parts = output.parts || [];
+        const prompt = parts
+          .filter(function(p) { return p.type === "text"; })
+          .map(function(p) { return p.text || ""; })
+          .join("\\n")
+          .trim();
         spawnAditHook("prompt-submit", {
           cwd,
-          prompt: typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content),
-          session_id: msg.sessionID,
+          prompt: prompt,
+          session_id: input.sessionID,
+          model: input.model ? (input.model.providerID + "/" + input.model.modelID) : undefined,
         });
       } catch (e) {
         // fail-open
       }
     },
 
-    // Capture assistant stop (response complete — triggers checkpoint)
-    stop: async (input) => {
-      try {
-        const sessionId = input.sessionID || input.session_id;
-        spawnAditHook("stop", {
-          cwd,
-          session_id: sessionId,
-          stop_reason: "completed",
-          last_assistant_message: input.lastMessage || input.last_assistant_message,
-        });
-      } catch (e) {
-        // fail-open
-      }
-    },
-
-    // Capture session lifecycle + rich metadata via event bus
+    // Capture session lifecycle + rich metadata via event bus.
+    // Note: there is no "stop" hook key in the OpenCode Plugin API.
+    // The equivalent is the "session.idle" event fired when the assistant
+    // finishes a response turn.
     event: async ({ event }) => {
       try {
         const props = event.properties || {};
 
         switch (event.type) {
+          // --- Assistant finished responding (replaces missing "stop" hook) ---
+          case "session.idle": {
+            spawnAditHook("stop", {
+              cwd,
+              session_id: props.sessionID,
+              stop_reason: "completed",
+            });
+            break;
+          }
+
           // --- Session lifecycle ---
           case "session.created": {
             const info = props.info || {};
+            activeSessionId = info.id;
             spawnAditHook("session-start", {
               cwd,
-              session_id: info.id || props.sessionID,
+              session_id: info.id,
               source: "startup",
-              model: info.model,
             });
             break;
           }
           case "session.deleted": {
             const info = props.info || {};
+            if (activeSessionId === info.id) activeSessionId = undefined;
             spawnAditHook("session-end", {
               cwd,
-              session_id: info.id || props.sessionID,
+              session_id: info.id,
               reason: "deleted",
             });
             break;
           }
           case "session.error": {
+            // sessionID is optional in session.error — fall back to activeSessionId
+            const errorSessionId = props.sessionID || activeSessionId;
+            if (activeSessionId && activeSessionId === errorSessionId) activeSessionId = undefined;
+            if (!errorSessionId) break;
             spawnAditHook("session-end", {
               cwd,
-              session_id: props.sessionID,
+              session_id: errorSessionId,
               reason: "error",
               error: props.error,
-            });
-            break;
-          }
-
-          // --- Assistant message metadata (cost, tokens, model) ---
-          case "message.updated": {
-            const msg = props.info;
-            if (!msg || msg.role !== "assistant") break;
-            // Only capture completed assistant messages (time.completed is set)
-            if (!msg.time || !msg.time.completed) break;
-            spawnAditHook("notification", {
-              cwd,
-              session_id: msg.sessionID,
-              notification_type: "assistant_metadata",
-              title: "Assistant Response",
-              message: "Model: " + (msg.modelID || "unknown")
-                + ", Cost: " + (msg.cost || 0)
-                + ", Tokens: " + (msg.tokens ? (msg.tokens.input + msg.tokens.output) : 0),
-              model: msg.modelID,
-              provider: msg.providerID,
-              cost: msg.cost,
-              tokens: msg.tokens,
-              finish: msg.finish,
-              error: msg.error,
             });
             break;
           }
@@ -238,38 +265,6 @@ exports.AditPlugin = async (ctx) => {
               });
             }
 
-            // Step finish — captures cost/tokens per step
-            if (part.type === "step-finish") {
-              spawnAditHook("notification", {
-                cwd,
-                session_id: part.sessionID,
-                notification_type: "step_finish",
-                title: "Step finished",
-                message: "Step finished (" + (part.reason || "end_turn")
-                  + "), cost: " + (part.cost || 0),
-                cost: part.cost,
-                tokens: part.tokens,
-                reason: part.reason,
-              });
-            }
-            break;
-          }
-
-          // --- File-level diffs per turn ---
-          case "session.diff": {
-            const diff = props.diff;
-            if (!Array.isArray(diff) || diff.length === 0) break;
-            const fileCount = diff.length;
-            const totalAdds = diff.reduce(function(s, d) { return s + (d.additions || 0); }, 0);
-            const totalDels = diff.reduce(function(s, d) { return s + (d.deletions || 0); }, 0);
-            spawnAditHook("notification", {
-              cwd,
-              session_id: props.sessionID,
-              notification_type: "session_diff",
-              title: "File changes",
-              message: fileCount + " file(s) changed, +" + totalAdds + " -" + totalDels,
-              diff: diff,
-            });
             break;
           }
 
@@ -289,6 +284,25 @@ exports.AditPlugin = async (ctx) => {
                 });
               }
             }
+            break;
+          }
+
+          // --- /exit, /quit, /q interception ---
+          // session.deleted does NOT fire on /exit — OpenCode just terminates.
+          // command.executed fires for ALL slash commands with { name, sessionID }.
+          // We must use spawnSync here so the cloud sync finishes before exit.
+          case "command.executed": {
+            const cmdName = (props.name || "").toLowerCase();
+            const isExit = cmdName === "exit" || cmdName === "quit" || cmdName === "q";
+            if (!isExit) break;
+            const exitSessionId = props.sessionID || activeSessionId;
+            if (!exitSessionId) break;
+            activeSessionId = undefined;
+            spawnAditHookSync("session-end", {
+              cwd,
+              session_id: exitSessionId,
+              reason: "exit",
+            });
             break;
           }
         }
@@ -324,7 +338,7 @@ export const opencodeAdapter: PlatformAdapter = {
       sessionSource: raw.source as string | undefined,
       sessionEndReason: raw.reason as string | undefined,
       model: raw.model as string | undefined,
-      // Notification (assistant_metadata, tool_result, step_finish, session_diff)
+      // Notification (tool_result, tool_error, session_diff)
       notificationMessage: raw.message as string | undefined,
       notificationTitle: raw.title as string | undefined,
       notificationType: raw.notification_type as string | undefined,

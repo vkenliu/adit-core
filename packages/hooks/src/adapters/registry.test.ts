@@ -227,10 +227,15 @@ describe("OpenCode Adapter", () => {
 
     const mappings = opencodeAdapter.hookMappings.map((m) => m.platformEvent);
     expect(mappings).toContain("chat.message");
-    expect(mappings).toContain("stop");
+    // OpenCode has no "stop" hook; session.idle fires when the AI finishes
+    // and also triggers a forced cloud sync (guards against lost data on /exit)
+    expect(mappings).toContain("session.idle");
     expect(mappings).toContain("session.created");
     expect(mappings).toContain("session.deleted");
-    expect(mappings).toContain("message.updated");
+    // /exit fires command.executed (not session.deleted); intercepted synchronously
+    expect(mappings).toContain("command.executed");
+    // message.updated (assistant_metadata) removed — LLM cost/token tracking not needed
+    expect(mappings).not.toContain("message.updated");
     expect(mappings).toContain("message.part.updated");
     expect(mappings).toContain("session.diff");
     expect(mappings).toContain("todo.updated");
@@ -248,7 +253,17 @@ describe("OpenCode Adapter", () => {
     expect(input.platformSessionId).toBe("sess-1");
   });
 
-  it("parseInput normalizes stop", () => {
+  it("parseInput maps session.idle to stop", () => {
+    const input = opencodeAdapter.parseInput(
+      { cwd: "/project", session_id: "sess-1", stop_reason: "completed" },
+      "session.idle",
+    );
+    expect(input.hookType).toBe("stop");
+    expect(input.platformSessionId).toBe("sess-1");
+    expect(input.stopReason).toBe("completed");
+  });
+
+  it("parseInput normalizes stop (direct hookType)", () => {
     const input = opencodeAdapter.parseInput(
       { cwd: "/project", stop_reason: "completed", last_assistant_message: "Done." },
       "stop",
@@ -363,20 +378,26 @@ describe("OpenCode Adapter", () => {
     expect(pluginContent).toContain("OPENCODE");
     // Core hooks
     expect(pluginContent).toContain("chat.message");
+    // session.idle replaces the non-existent "stop" hook
+    expect(pluginContent).toContain("session.idle");
     expect(pluginContent).toContain("session.created");
     expect(pluginContent).toContain("session.deleted");
     expect(pluginContent).toContain("session.error");
     // New events
-    expect(pluginContent).toContain("message.updated");
     expect(pluginContent).toContain("message.part.updated");
-    expect(pluginContent).toContain("session.diff");
     expect(pluginContent).toContain("todo.updated");
-    // Notification types
-    expect(pluginContent).toContain("assistant_metadata");
+    // command.executed intercepts /exit synchronously
+    expect(pluginContent).toContain("command.executed");
+    expect(pluginContent).toContain("spawnAditHookSync");
+    // Notification types — assistant_metadata removed (LLM cost/token tracking not needed)
+    expect(pluginContent).not.toContain("message.updated");
+    expect(pluginContent).not.toContain("assistant_metadata");
     expect(pluginContent).toContain("tool_result");
-    expect(pluginContent).toContain("step_finish");
-    expect(pluginContent).toContain("session_diff");
     expect(pluginContent).toContain("task-completed");
+    // Removed: step_finish and session_diff are no longer recorded
+    expect(pluginContent).not.toContain("step_finish");
+    expect(pluginContent).not.toContain("session_diff");
+    expect(pluginContent).not.toContain("session.diff");
   });
 
   it("generateHookConfig handles resolved binary path", () => {

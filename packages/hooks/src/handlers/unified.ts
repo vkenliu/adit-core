@@ -71,7 +71,8 @@ export async function dispatchHook(input: NormalizedHookInput): Promise<void> {
     // Auto-sync to cloud on every hook event (fail-open).
     // Uses dynamic import so @adit/cloud is not a build-time dependency.
     // The module name is constructed to prevent TypeScript from resolving it.
-    // On session-end, force sync to flush all remaining data to cloud.
+    // Force sync on session-end (flush all data) and on stop/session.idle
+    // (ensures data is persisted even if /exit doesn't fire a session-end).
     try {
       await withPerf(dataDir, "network", "cloud-auto-sync", async () => {
         const cloudModuleName = ["@adit", "cloud"].join("/");
@@ -80,7 +81,7 @@ export async function dispatchHook(input: NormalizedHookInput): Promise<void> {
         };
         // Awaited so db stays open until it finishes querying.
         // The actual network push happens inside triggerAutoSync's own fire-and-forget.
-        const force = input.hookType === "session-end";
+        const force = input.hookType === "session-end" || input.hookType === "stop";
         await cloudModule.triggerAutoSync(ctx.db, ctx.config.projectId, force ? { force: true } : undefined);
       });
     } catch {
@@ -249,9 +250,15 @@ async function handleTaskCompleted(ctx: HookContext, input: NormalizedHookInput)
   });
 }
 
-/** Handle notification — record Claude Code notification event */
+/** Handle notification — record notification event (tool results, session diffs, etc.) */
 async function handleNotification(ctx: HookContext, input: NormalizedHookInput): Promise<void> {
   const timeline = createTimelineManager(ctx.db, ctx.config);
+
+  const base: Record<string, unknown> = {
+    message: input.notificationMessage,
+    title: input.notificationTitle,
+    notificationType: input.notificationType,
+  };
 
   await timeline.recordEvent({
     sessionId: ctx.session.id,
@@ -259,11 +266,7 @@ async function handleNotification(ctx: HookContext, input: NormalizedHookInput):
     actor: "system",
     responseText: input.notificationMessage ?? "Notification",
     toolName: input.notificationType ?? null,
-    toolInputJson: JSON.stringify({
-      message: input.notificationMessage,
-      title: input.notificationTitle,
-      notificationType: input.notificationType,
-    }),
+    toolInputJson: JSON.stringify(base),
   });
 }
 
