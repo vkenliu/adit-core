@@ -54,6 +54,7 @@ export {
   searchEvents,
   getLatestCheckpointEvent,
   getLatestCheckpointByBranch,
+  getRecentCheckpointsExcludingBranch,
   clearEvents,
   countEvents,
   insertDiff,

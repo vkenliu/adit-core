@@ -14,6 +14,7 @@ import {
   hasUncommittedChanges,
   runGit,
   getHeadSha,
+  shaExists,
 } from "@adit/engine";
 import { getEventSummary } from "../utils/summary.js";
 
@@ -93,6 +94,16 @@ export async function revertCommand(
         );
         console.log("Use --yes to skip this warning.");
       }
+    }
+
+    // Verify checkpoint SHA is still reachable
+    const reachable = await shaExists(config.projectRoot, event.checkpointSha);
+    if (!reachable) {
+      console.error(
+        `Checkpoint ${event.checkpointSha.substring(0, 8)} is no longer reachable in the git object store.`,
+      );
+      console.error("The checkpoint ref may have been deleted and the object garbage collected.");
+      process.exit(1);
     }
 
     // Check for dependency file changes
@@ -209,6 +220,18 @@ export async function interactiveRevertCommand(opts: {
       }
     }
 
+    // Verify checkpoint SHA is still reachable
+    if (selected.checkpointSha) {
+      const reachable = await shaExists(config.projectRoot, selected.checkpointSha);
+      if (!reachable) {
+        console.error(
+          `\nCheckpoint ${selected.checkpointSha.substring(0, 8)} is no longer reachable in the git object store.`,
+        );
+        console.error("The checkpoint ref may have been deleted and the object garbage collected.");
+        return;
+      }
+    }
+
     // Check for dependency file changes
     const headSha = await getHeadSha(config.projectRoot);
     if (headSha && selected.checkpointSha) {
@@ -265,12 +288,15 @@ export async function undoCommand(opts: { yes?: boolean }): Promise<void> {
       limit: 1,
     });
     if (headSha && latestCheckpoint[0]?.checkpointSha) {
-      const depChanges = await checkDependencyChanges(
-        config.projectRoot,
-        headSha,
-        latestCheckpoint[0].checkpointSha,
-      );
-      printDependencyWarnings(depChanges);
+      const reachable = await shaExists(config.projectRoot, latestCheckpoint[0].checkpointSha);
+      if (reachable) {
+        const depChanges = await checkDependencyChanges(
+          config.projectRoot,
+          headSha,
+          latestCheckpoint[0].checkpointSha,
+        );
+        printDependencyWarnings(depChanges);
+      }
     }
 
     await timeline.undo();

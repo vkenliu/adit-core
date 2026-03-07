@@ -20,6 +20,7 @@ import {
   openDatabase,
   closeDatabase,
   getLatestCheckpointByBranch,
+  getRecentCheckpointsExcludingBranch,
   getSessionById,
   getEventsBySession,
 } from "@adit/core";
@@ -29,6 +30,8 @@ import {
   hasUncommittedChanges,
   getCurrentBranch,
   getHeadSha,
+  branchExists,
+  shaExists,
   runGitOrThrow,
 } from "@adit/engine";
 import { listAdapters } from "@adit/hooks/adapters";
@@ -85,13 +88,44 @@ export async function resumeCommand(
       await runGitOrThrow(["checkout", branch], { cwd });
     }
 
-    // 3. Find latest checkpoint on the target branch
-    const checkpoint = getLatestCheckpointByBranch(db, targetBranch);
+    // 3. Find latest checkpoint on the target branch.
+    //    If none found, try a squash-merge fallback: search for checkpoints
+    //    on branches that no longer exist locally (likely squash-merged into
+    //    the current branch and then deleted).
+    let checkpoint = getLatestCheckpointByBranch(db, targetBranch);
+    let isSquashMergeResume = false;
+
+    if (!checkpoint) {
+      const candidates = getRecentCheckpointsExcludingBranch(db, targetBranch, 10);
+
+      // Filter to candidates whose original branch no longer exists
+      // (deleted after squash merge) and whose checkpoint SHA is still reachable
+      for (const candidate of candidates) {
+        if (!candidate.gitBranch || !candidate.checkpointSha) continue;
+
+        const branchStillExists = await branchExists(cwd, candidate.gitBranch);
+        if (branchStillExists) continue; // branch still exists — not a squash merge
+
+        const shaReachable = await shaExists(cwd, candidate.checkpointSha);
+        if (!shaReachable) continue; // checkpoint object was garbage collected
+
+        checkpoint = candidate;
+        isSquashMergeResume = true;
+        break;
+      }
+    }
 
     if (!checkpoint) {
       console.error(`No checkpoints found on branch "${targetBranch}".`);
       console.error("Work with your AI agent to create checkpoints first.");
       process.exit(1);
+    }
+
+    if (isSquashMergeResume) {
+      console.log(
+        `No checkpoints on "${targetBranch}", but found one from merged branch "${checkpoint.gitBranch}".`,
+      );
+      console.log("Resuming from squash-merged branch checkpoint.\n");
     }
 
     // 4. Warn about dirty working tree
@@ -105,7 +139,19 @@ export async function resumeCommand(
       }
     }
 
-    // 5. Check dependency file changes
+    // 5. Verify checkpoint SHA is still reachable (protects against GC'd objects)
+    if (checkpoint.checkpointSha) {
+      const reachable = await shaExists(cwd, checkpoint.checkpointSha);
+      if (!reachable) {
+        console.error(
+          `Checkpoint ${checkpoint.checkpointSha.substring(0, 8)} is no longer reachable in the git object store.`,
+        );
+        console.error("The checkpoint ref may have been deleted and the object garbage collected.");
+        process.exit(1);
+      }
+    }
+
+    // 6. Check dependency file changes
     const headSha = await getHeadSha(cwd);
     if (headSha && checkpoint.checkpointSha) {
       const depChanges = await checkDependencyChanges(
@@ -116,24 +162,27 @@ export async function resumeCommand(
       printDependencyWarnings(depChanges);
     }
 
-    // 6. Restore working tree from checkpoint
+    // 7. Restore working tree from checkpoint
     await timeline.revertTo(checkpoint.id);
 
-    // 7. Record a resume event in the timeline
+    // 8. Record a resume event in the timeline
+    const resumeSource = isSquashMergeResume
+      ? `Resumed from squash-merged branch "${checkpoint.gitBranch}" checkpoint ${checkpoint.checkpointSha?.substring(0, 8)}`
+      : `Resumed from checkpoint ${checkpoint.checkpointSha?.substring(0, 8)} on branch ${targetBranch}`;
     await timeline.recordEvent({
       sessionId: checkpoint.sessionId,
       eventType: "revert",
       actor: "user",
-      responseText: `Resumed from checkpoint ${checkpoint.checkpointSha?.substring(0, 8)} on branch ${targetBranch}`,
+      responseText: resumeSource,
     });
 
-    // 8. Print resume summary
-    printResumeSummary(checkpoint, targetBranch, cwd);
+    // 9. Print resume summary
+    printResumeSummary(checkpoint, targetBranch, cwd, isSquashMergeResume);
 
-    // 9. Print session context (last few events from the original session)
+    // 10. Print session context (last few events from the original session)
     printSessionContext(db, checkpoint);
 
-    // 10. Print platform-specific continue commands
+    // 11. Print platform-specific continue commands
     printContinueCommands(cwd, checkpoint);
   } finally {
     closeDatabase(db);
@@ -145,6 +194,7 @@ function printResumeSummary(
   checkpoint: AditEvent,
   branch: string,
   _cwd: string,
+  isSquashMerge = false,
 ): void {
   const sha = checkpoint.checkpointSha?.substring(0, 8) ?? "????????";
   const time = checkpoint.startedAt
@@ -154,6 +204,9 @@ function printResumeSummary(
 
   console.log("\n--- Session Resumed ---\n");
   console.log(`  Branch:     ${branch}`);
+  if (isSquashMerge && checkpoint.gitBranch) {
+    console.log(`  Merged from: ${checkpoint.gitBranch}`);
+  }
   console.log(`  Checkpoint: ${sha}`);
   console.log(`  Time:       ${time}`);
   console.log(`  Summary:    ${summary}`);

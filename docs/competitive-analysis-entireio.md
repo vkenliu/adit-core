@@ -46,7 +46,7 @@ checkpoints, and provide rewind/recovery.
 | Sequence numbering | N/A | Atomic auto-increment per session | **ADIT** |
 | Model name tracking | Captures per session (v0.5.0) | Via tool input metadata | Both |
 | Token usage tracking | `CalculateTokenUsage()` per agent | Not implemented | Entire |
-| Squash-merge support | Resume/rewind work after squash | Not handled | Entire |
+| Squash-merge support | Resume/rewind work after squash | Cross-branch fallback + SHA reachability | **Implemented** |
 | Concurrent sessions | Warns, tracks separately | `clientId` + vector clocks | ADIT |
 
 ### 3. Rewind / Recovery
@@ -59,7 +59,7 @@ checkpoints, and provide rewind/recovery.
 | Dependency warnings | Not documented | Detects lockfile changes | **ADIT** |
 | Dirty tree warnings | Not documented | Yes, with `--yes` skip | **ADIT** |
 | Revert audit trail | Not documented | Records `revert` event | **ADIT** |
-| Squash-merge rewind | Supported (v0.5.0) | Not handled | Entire |
+| Squash-merge rewind | Supported (v0.5.0) | SHA reachability guard + fallback | **Implemented** |
 
 ### 4. Session Resume
 
@@ -72,7 +72,7 @@ checkpoints, and provide rewind/recovery.
 | Branch switching | Implicit | `adit resume <branch>` auto-switches | Both |
 | Dependency warnings | Not documented | Detects lockfile changes | **ADIT** |
 | Dirty tree safety | Not documented | Warns + blocks (or `--yes` skip) | **ADIT** |
-| Squash-merge resume | Supported (v0.5.0) | Not yet handled | Entire |
+| Squash-merge resume | Supported (v0.5.0) | Cross-branch fallback for merged branches | **Implemented** |
 
 ### 5. Secret Redaction
 
@@ -153,9 +153,9 @@ checkpoints, and provide rewind/recovery.
 ## Remaining Features to Implement
 
 Features 1 (enable/disable lifecycle), 3 (content-aware redaction),
-4 (interactive rewind), 5 (session resume), hook chaining, and styled
-status output from the original analysis have been implemented.
-The remaining items are:
+4 (interactive rewind), 5 (session resume), hook chaining, styled
+status output, and squash-merge support from the original analysis
+have been implemented. The remaining items are:
 
 ### P1: Broader Agent Support
 
@@ -172,8 +172,6 @@ The remaining items are:
   Our `doctor --fix` partially covers this but dedicated commands are clearer.
 - **Accessible mode**: `ACCESSIBLE=1` for screen reader support.
 - **Token usage tracking**: Per-session token/cost metrics.
-- **Squash-merge support**: Entire handles resume/rewind after squash merges
-  since v0.5.0. We should handle this if we implement resume.
 
 ---
 

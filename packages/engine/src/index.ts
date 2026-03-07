@@ -10,6 +10,8 @@ export {
   getCurrentBranch,
   getRemoteUrl,
   isGitRepo,
+  branchExists,
+  shaExists,
   type GitResult,
   type GitRunOptions,
 } from "./git/runner.js";

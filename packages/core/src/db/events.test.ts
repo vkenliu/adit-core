@@ -17,6 +17,7 @@ import {
   searchEvents,
   getLatestCheckpointEvent,
   getLatestCheckpointByBranch,
+  getRecentCheckpointsExcludingBranch,
 } from "./events.js";
 
 function tempDbPath(): string {
@@ -363,6 +364,96 @@ describe("Events CRUD", () => {
 
     const result = getLatestCheckpointByBranch(db, "main");
     expect(result).toBeNull();
+  });
+
+  it("finds recent checkpoints excluding a specific branch", () => {
+    // Setup: checkpoints on multiple branches
+    insertEvent(db, {
+      id: "evt-main-1",
+      sessionId,
+      sequence: 1,
+      eventType: "checkpoint",
+      actor: "system",
+      gitBranch: "main",
+      checkpointSha: "aaa111",
+      checkpointRef: "refs/adit/checkpoints/evt-main-1",
+      startedAt: "2025-01-01T10:00:00Z",
+      vclockJson: '{"test-client": 1}',
+    });
+    insertEvent(db, {
+      id: "evt-feat-1",
+      sessionId,
+      sequence: 2,
+      eventType: "checkpoint",
+      actor: "system",
+      gitBranch: "feature/auth",
+      checkpointSha: "bbb222",
+      checkpointRef: "refs/adit/checkpoints/evt-feat-1",
+      startedAt: "2025-01-01T11:00:00Z",
+      vclockJson: '{"test-client": 2}',
+    });
+    insertEvent(db, {
+      id: "evt-feat-2",
+      sessionId,
+      sequence: 3,
+      eventType: "checkpoint",
+      actor: "system",
+      gitBranch: "feature/auth",
+      checkpointSha: "ccc333",
+      checkpointRef: "refs/adit/checkpoints/evt-feat-2",
+      startedAt: "2025-01-01T12:00:00Z",
+      vclockJson: '{"test-client": 3}',
+    });
+
+    // Excluding "main" should return both feature/auth checkpoints
+    const excludingMain = getRecentCheckpointsExcludingBranch(db, "main");
+    expect(excludingMain).toHaveLength(2);
+    expect(excludingMain[0].id).toBe("evt-feat-2"); // most recent first
+    expect(excludingMain[1].id).toBe("evt-feat-1");
+
+    // Excluding "feature/auth" should return only the main checkpoint
+    const excludingFeature = getRecentCheckpointsExcludingBranch(db, "feature/auth");
+    expect(excludingFeature).toHaveLength(1);
+    expect(excludingFeature[0].id).toBe("evt-main-1");
+  });
+
+  it("returns empty array when no checkpoints exist on other branches", () => {
+    insertEvent(db, {
+      id: "evt-001",
+      sessionId,
+      sequence: 1,
+      eventType: "checkpoint",
+      actor: "system",
+      gitBranch: "main",
+      checkpointSha: "aaa111",
+      startedAt: new Date().toISOString(),
+      vclockJson: '{"test-client": 1}',
+    });
+
+    const results = getRecentCheckpointsExcludingBranch(db, "main");
+    expect(results).toHaveLength(0);
+  });
+
+  it("respects limit parameter in cross-branch checkpoint query", () => {
+    for (let i = 1; i <= 5; i++) {
+      insertEvent(db, {
+        id: `evt-feat-${i}`,
+        sessionId,
+        sequence: i,
+        eventType: "checkpoint",
+        actor: "system",
+        gitBranch: "feature/many",
+        checkpointSha: `sha${i}`,
+        startedAt: `2025-01-0${i}T10:00:00Z`,
+        vclockJson: `{"test-client": ${i}}`,
+      });
+    }
+
+    const limited = getRecentCheckpointsExcludingBranch(db, "main", 2);
+    expect(limited).toHaveLength(2);
+    // Most recent first
+    expect(limited[0].id).toBe("evt-feat-5");
+    expect(limited[1].id).toBe("evt-feat-4");
   });
 
   it("gets events by session ordered by sequence", () => {

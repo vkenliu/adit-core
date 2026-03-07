@@ -24,6 +24,7 @@ export {
   searchEvents,
   getLatestCheckpointEvent,
   getLatestCheckpointByBranch,
+  getRecentCheckpointsExcludingBranch,
   clearEvents,
   countEvents,
   type InsertEventInput,

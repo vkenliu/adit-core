@@ -35,10 +35,13 @@ vi.mock("@adit/core", () => ({
 
 const mockRunGitOrThrow = vi.fn().mockResolvedValue("");
 
+const mockShaExists = vi.fn().mockResolvedValue(true);
+
 vi.mock("../git/runner.js", () => ({
   getHeadSha: vi.fn().mockResolvedValue("head-sha-123"),
   getCurrentBranch: vi.fn().mockResolvedValue("main"),
   runGitOrThrow: (...args: unknown[]) => mockRunGitOrThrow(...args),
+  shaExists: (...args: unknown[]) => mockShaExists(...args),
 }));
 
 vi.mock("../git/refs.js", () => ({
@@ -211,7 +214,7 @@ describe("TimelineManager.undo", () => {
     await expect(tm.undo()).rejects.toThrow("No checkpoints to undo");
   });
 
-  it("throws when parent of latest checkpoint not found", async () => {
+  it("falls back to HEAD when parent of latest checkpoint not found", async () => {
     mockGetLatestCheckpointEvent.mockReturnValue({
       id: "evt-latest",
       checkpointSha: "latest-sha",
@@ -219,7 +222,27 @@ describe("TimelineManager.undo", () => {
     mockGetParentSha.mockResolvedValue(null);
 
     const tm = createTimelineManager(fakeDb, fakeConfig);
+    await tm.undo();
 
-    await expect(tm.undo()).rejects.toThrow("Cannot find parent");
+    // Should fall back to HEAD when parent is unreachable
+    expect(mockRunGitOrThrow).toHaveBeenCalledWith(
+      ["checkout", "head-sha-123", "--", "."],
+      { cwd: "/test-project" },
+    );
+  });
+
+  it("throws when checkpoint SHA is unreachable in revertTo", async () => {
+    mockGetEventById.mockReturnValue({
+      id: "evt-001",
+      checkpointSha: "unreachable-sha",
+    });
+    mockShaExists.mockResolvedValue(false);
+
+    const tm = createTimelineManager(fakeDb, fakeConfig);
+
+    await expect(tm.revertTo("evt-001")).rejects.toThrow("no longer reachable");
+
+    // Restore for other tests
+    mockShaExists.mockResolvedValue(true);
   });
 });

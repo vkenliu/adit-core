@@ -355,6 +355,32 @@ export function getLatestCheckpointByBranch(
 }
 
 /**
+ * Find recent checkpoint events across all branches, excluding a specific branch.
+ *
+ * Used as a fallback when the current branch has no checkpoints — typically
+ * after a squash merge where the feature branch's checkpoints are recorded
+ * under the old branch name that no longer exists.
+ *
+ * Returns checkpoints ordered by started_at DESC so the most recent comes first.
+ */
+export function getRecentCheckpointsExcludingBranch(
+  db: Database.Database,
+  excludeBranch: string,
+  limit = 10,
+): AditEvent[] {
+  const rows = db
+    .prepare(
+      `SELECT * FROM events
+       WHERE checkpoint_sha IS NOT NULL
+         AND git_branch != ?
+         AND deleted_at IS NULL
+       ORDER BY started_at DESC LIMIT ?`,
+    )
+    .all(excludeBranch, limit) as Record<string, unknown>[];
+  return rows.map(rowToEvent);
+}
+
+/**
  * Delete all events and associated diffs for a project.
  * Respects foreign key order: diffs → events.
  * Returns the number of events deleted.
