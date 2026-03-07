@@ -257,17 +257,20 @@ ensure_pnpm() {
         warn "pnpm v${pnpm_ver} found but >= ${REQUIRED_PNPM_MAJOR} is required"
       fi
     else
-      warn "pnpm found but could not determine version — will attempt reinstall"
+      warn "pnpm found but could not determine version (likely a broken corepack shim)"
+      # Disable corepack's pnpm shim so npm-installed pnpm takes precedence
+      if command -v corepack &>/dev/null; then
+        debug "ensure_pnpm: disabling corepack pnpm shim"
+        corepack disable pnpm 2>/dev/null || true
+      fi
     fi
   else
     debug "ensure_pnpm: pnpm not found"
   fi
 
-  info "Installing pnpm …"
+  info "Installing pnpm via npm …"
   local pnpm_installed=false
 
-  # Try npm first (most reliable), then corepack as fallback.
-  # Each method tries without sudo first, then with sudo if needed.
   if command -v npm &>/dev/null; then
     debug "ensure_pnpm: trying npm install -g pnpm"
     if npm install -g "pnpm@${REQUIRED_PNPM_MAJOR}" 2>/dev/null; then
@@ -282,8 +285,10 @@ ensure_pnpm() {
     fi
   fi
 
+  # Only try corepack as a last resort — it requires network access
+  # to the npm registry and fails in restricted environments.
   if [[ "$pnpm_installed" == "false" ]] && command -v corepack &>/dev/null; then
-    debug "ensure_pnpm: trying corepack"
+    debug "ensure_pnpm: trying corepack as last resort"
     if corepack enable 2>/dev/null && corepack prepare "pnpm@${REQUIRED_PNPM_MAJOR}" --activate 2>/dev/null; then
       pnpm_installed=true
     fi
@@ -292,6 +297,9 @@ ensure_pnpm() {
   if [[ "$pnpm_installed" == "false" ]]; then
     die "Could not install pnpm. Please install it manually: npm install -g pnpm"
   fi
+
+  # Clear bash's command hash so it finds the newly installed pnpm
+  hash -r 2>/dev/null || true
 
   command -v pnpm &>/dev/null || die "pnpm installation failed"
   local final_ver
