@@ -7,7 +7,7 @@
  */
 
 export interface CloudConfig {
-  /** Cloud server URL (e.g., "https://cloud.adit.dev") */
+  /** Cloud server URL (e.g., "https://adit-cloud.varve.ai") */
   serverUrl: string | null;
   /** Whether cloud sync is enabled */
   enabled: boolean;
