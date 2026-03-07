@@ -110,18 +110,19 @@ ensure_git() {
   ok "git installed"
 }
 
-# ── Build tools (for better-sqlite3 native addon) ──────────────────
-ensure_build_tools() {
-  info "Checking build tools for native modules …"
+# ── Build tools (fallback for native addon compilation) ─────────────
+# better-sqlite3 ships prebuilt binaries for most platforms via
+# prebuild-install. Build tools are only needed as a fallback when
+# prebuilds are unavailable (rare). We check but don't block.
+check_build_tools() {
   case "$PLATFORM" in
     macos)
       if xcode-select -p &>/dev/null; then
-        ok "Xcode Command Line Tools found"
+        ok "Xcode Command Line Tools found (optional — prebuilds preferred)"
       else
-        info "Installing Xcode Command Line Tools …"
-        xcode-select --install 2>/dev/null || true
-        warn "A dialog may have appeared — please complete the install, then re-run this script"
-        exit 1
+        info "Xcode Command Line Tools not installed (not required — prebuilt binaries will be used)"
+        info "If native compilation is needed later, run: xcode-select --install"
+        HAS_BUILD_TOOLS=false
       fi
       ;;
     linux)
@@ -132,23 +133,11 @@ ensure_build_tools() {
 
       if [[ ${#missing[@]} -eq 0 ]]; then
         ok "Build tools found (python3, make, g++)"
-        return
+      else
+        info "Build tools not fully installed: ${missing[*]} (not required — prebuilt binaries will be used)"
+        info "If native compilation is needed later, install: ${missing[*]}"
+        HAS_BUILD_TOOLS=false
       fi
-
-      info "Installing build tools: ${missing[*]} …"
-      case "$PKG_MANAGER" in
-        apt)
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq python3 make g++
-          ;;
-        dnf)    sudo dnf install -y python3 make gcc-c++ ;;
-        yum)    sudo yum install -y python3 make gcc-c++ ;;
-        pacman) sudo pacman -Sy --noconfirm python make gcc ;;
-        apk)    sudo apk add --no-cache python3 make g++ ;;
-        zypper) sudo zypper install -y python3 make gcc-c++ ;;
-        *)      warn "Please install python3, make, and g++ manually" ;;
-      esac
-      ok "Build tools installed"
       ;;
   esac
 }
@@ -258,8 +247,21 @@ ensure_pnpm() {
 install_deps() {
   info "Installing project dependencies …"
   cd "$SCRIPT_DIR"
-  pnpm install --frozen-lockfile 2>/dev/null || pnpm install
-  ok "Dependencies installed"
+  if pnpm install --frozen-lockfile 2>/dev/null || pnpm install; then
+    ok "Dependencies installed"
+  else
+    if [[ "${HAS_BUILD_TOOLS:-true}" == "false" ]]; then
+      err "Dependency install failed — prebuilt binaries may not be available for your platform."
+      err "Install build tools and retry:"
+      case "$PLATFORM" in
+        macos) err "  xcode-select --install" ;;
+        linux) err "  sudo apt-get install -y python3 make g++  (or equivalent)" ;;
+      esac
+      exit 1
+    else
+      die "Dependency install failed"
+    fi
+  fi
 }
 
 # ── Build ───────────────────────────────────────────────────────────
@@ -368,9 +370,11 @@ main() {
   printf "${BOLD}║     AI Development Intent Tracker             ║${NC}\n"
   printf "${BOLD}╚══════════════════════════════════════════════╝${NC}\n\n"
 
+  HAS_BUILD_TOOLS=true
+
   detect_platform
   ensure_git
-  ensure_build_tools
+  check_build_tools
   ensure_node
   ensure_pnpm
   install_deps
