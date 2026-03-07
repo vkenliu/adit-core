@@ -237,13 +237,17 @@ ensure_node() {
 ensure_pnpm() {
   if command -v pnpm &>/dev/null; then
     local pnpm_ver
-    pnpm_ver="$(pnpm -v)"
-    local pnpm_major="${pnpm_ver%%.*}"
-    if version_ge "$pnpm_major" "$REQUIRED_PNPM_MAJOR"; then
-      ok "pnpm v${pnpm_ver} found (>= ${REQUIRED_PNPM_MAJOR} required)"
-      return
+    pnpm_ver="$(pnpm -v 2>/dev/null)" || true
+    if [[ -n "$pnpm_ver" ]]; then
+      local pnpm_major="${pnpm_ver%%.*}"
+      if version_ge "$pnpm_major" "$REQUIRED_PNPM_MAJOR"; then
+        ok "pnpm v${pnpm_ver} found (>= ${REQUIRED_PNPM_MAJOR} required)"
+        return
+      else
+        warn "pnpm v${pnpm_ver} found but >= ${REQUIRED_PNPM_MAJOR} is required"
+      fi
     else
-      warn "pnpm v${pnpm_ver} found but >= ${REQUIRED_PNPM_MAJOR} is required"
+      warn "pnpm found but could not determine version — will attempt reinstall"
     fi
   fi
 
@@ -272,8 +276,8 @@ ensure_pnpm() {
 
   command -v pnpm &>/dev/null || die "pnpm installation failed"
   local final_ver
-  final_ver="$(pnpm -v)"
-  ok "pnpm v${final_ver} ready"
+  final_ver="$(pnpm -v 2>/dev/null)" || true
+  ok "pnpm v${final_ver:-unknown} ready"
 }
 
 # ── Install dependencies ───────────────────────────────────────────
