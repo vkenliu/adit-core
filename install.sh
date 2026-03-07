@@ -235,9 +235,12 @@ ensure_node() {
 
 # ── pnpm ────────────────────────────────────────────────────────────
 ensure_pnpm() {
+  debug "ensure_pnpm: checking command -v pnpm"
   if command -v pnpm &>/dev/null; then
+    debug "ensure_pnpm: pnpm found at $(command -v pnpm)"
     local pnpm_ver
     pnpm_ver="$(pnpm -v 2>/dev/null)" || true
+    debug "ensure_pnpm: pnpm -v returned '${pnpm_ver:-}'"
     if [[ -n "$pnpm_ver" ]]; then
       local pnpm_major="${pnpm_ver%%.*}"
       if version_ge "$pnpm_major" "$REQUIRED_PNPM_MAJOR"; then
@@ -249,6 +252,8 @@ ensure_pnpm() {
     else
       warn "pnpm found but could not determine version — will attempt reinstall"
     fi
+  else
+    debug "ensure_pnpm: pnpm not found"
   fi
 
   info "Installing pnpm …"
@@ -257,14 +262,21 @@ ensure_pnpm() {
   # Try npm first (most reliable), then corepack as fallback.
   # Each method tries without sudo first, then with sudo if needed.
   if command -v npm &>/dev/null; then
+    debug "ensure_pnpm: trying npm install -g pnpm"
     if npm install -g "pnpm@${REQUIRED_PNPM_MAJOR}" 2>/dev/null; then
       pnpm_installed=true
-    elif sudo npm install -g "pnpm@${REQUIRED_PNPM_MAJOR}" 2>/dev/null; then
-      pnpm_installed=true
+    else
+      debug "ensure_pnpm: npm install -g failed (exit $?), trying with sudo"
+      if sudo -n npm install -g "pnpm@${REQUIRED_PNPM_MAJOR}" 2>/dev/null; then
+        pnpm_installed=true
+      else
+        debug "ensure_pnpm: sudo npm install -g also failed (exit $?)"
+      fi
     fi
   fi
 
   if [[ "$pnpm_installed" == "false" ]] && command -v corepack &>/dev/null; then
+    debug "ensure_pnpm: trying corepack"
     if corepack enable 2>/dev/null && corepack prepare "pnpm@${REQUIRED_PNPM_MAJOR}" --activate 2>/dev/null; then
       pnpm_installed=true
     fi
