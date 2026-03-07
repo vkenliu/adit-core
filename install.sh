@@ -230,11 +230,16 @@ ensure_pnpm() {
   fi
 
   info "Installing pnpm …"
-  if command -v corepack &>/dev/null; then
+  # Prefer npm install (most reliable). Corepack's registry fetch can
+  # fail behind proxies or with DNS issues.
+  if command -v npm &>/dev/null; then
+    npm install -g "pnpm@${REQUIRED_PNPM_MAJOR}" 2>/dev/null || npm install -g pnpm
+  elif command -v corepack &>/dev/null; then
     corepack enable
-    corepack prepare "pnpm@latest" --activate
+    corepack prepare "pnpm@${REQUIRED_PNPM_MAJOR}" --activate 2>/dev/null \
+      || corepack prepare pnpm --activate
   else
-    npm install -g pnpm
+    die "Neither npm nor corepack found — cannot install pnpm"
   fi
 
   command -v pnpm &>/dev/null || die "pnpm installation failed"
@@ -367,7 +372,7 @@ verify() {
 main() {
   printf "\n${BOLD}╔══════════════════════════════════════════════╗${NC}\n"
   printf "${BOLD}║     ADIT Core — Installer                    ║${NC}\n"
-  printf "${BOLD}║     AI Development Intent Tracker             ║${NC}\n"
+  printf "${BOLD}║     AI Development Intent Tracker            ║${NC}\n"
   printf "${BOLD}╚══════════════════════════════════════════════╝${NC}\n\n"
 
   HAS_BUILD_TOOLS=true
