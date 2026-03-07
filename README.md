@@ -78,26 +78,49 @@ ADIT ships with **10 Claude Code skills** (in `skills/`) for natural-language in
 
 And a **timeline-analyst** agent (in `agents/`) for deep session analysis, pattern detection, and environment drift reporting.
 
+## Installation
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/vkenliu/adit-core/main/install.sh | bash
+```
+
+This single command clones the repo, detects your OS, installs any missing prerequisites (git, Node.js >= 20, pnpm >= 9, build tools for native modules), builds all packages, and registers the `adit` and `adit-hook` commands on your PATH.
+
+Supports **macOS** and **Linux** (Debian/Ubuntu, Fedora, RHEL, Arch, Alpine, SUSE). Uses your existing Node.js version manager (fnm, nvm) if available, or falls back to Homebrew/NodeSource.
+
+After installation, restart your shell (or run `export PATH="$HOME/.local/bin:$PATH"`) and verify:
+
+```bash
+adit --help
+```
+
+### Manual Installation
+
+If you prefer to install manually or already have Node.js and pnpm:
+
+```bash
+git clone https://github.com/vkenliu/adit-core.git
+cd adit-core
+pnpm install && pnpm build
+```
+
 ## Quick Start
 
 ```bash
-# Install
-pnpm install && pnpm build
-
 # Initialize ADIT in your project
-npx adit init
+adit init
 
 # Check installation health
-npx adit doctor
+adit doctor
 
 # View timeline
-npx adit list
+adit list
 
 # Launch interactive TUI
-npx adit tui
+adit tui
 
 # Authenticate with cloud (optional)
-npx adit cloud login --server <url>
+adit cloud login --server <url>
 ```
 
 ## CLI Commands

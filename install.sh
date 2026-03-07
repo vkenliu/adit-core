@@ -24,9 +24,24 @@ die()   { err "$*"; exit 1; }
 # ── Constants ───────────────────────────────────────────────────────
 REQUIRED_NODE_MAJOR=20
 REQUIRED_PNPM_MAJOR=9
+ADIT_REPO="https://github.com/vkenliu/adit-core.git"
+ADIT_INSTALL_DIR="${ADIT_INSTALL_DIR:-$HOME/.adit-core}"
 
-# Resolve the directory where this script lives (= project root)
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve the project root. When piped via `curl | bash` BASH_SOURCE
+# points nowhere useful, so we clone the repo first.
+if [[ -f "$(dirname "${BASH_SOURCE[0]:-/dev/null}")/package.json" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+else
+  # Running via curl | bash — clone the repo into ADIT_INSTALL_DIR
+  if [[ -d "$ADIT_INSTALL_DIR/.git" ]]; then
+    info "Updating existing clone at $ADIT_INSTALL_DIR …"
+    git -C "$ADIT_INSTALL_DIR" pull --ff-only 2>/dev/null || true
+  else
+    info "Cloning adit-core into $ADIT_INSTALL_DIR …"
+    git clone "$ADIT_REPO" "$ADIT_INSTALL_DIR"
+  fi
+  SCRIPT_DIR="$ADIT_INSTALL_DIR"
+fi
 
 # ── OS / distro detection ──────────────────────────────────────────
 detect_platform() {
