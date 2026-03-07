@@ -15,7 +15,7 @@ ADIT is built on three pillars:
 ## Features
 
 - **Integrated Prompt & CoT Capture** — Records the full dialogue including Chain of Thought
-- **Shadow Git Checkpoints** — Instant revert to any working state via `adit revert <id>`
+- **Shadow Git Checkpoints** — Instant revert to any working state via `adit snapshot revert <id>`
 - **Multi-Actor Timeline** — Distinguishes Assistant (A), User (U), Tool (T), and System (S) actions
 - **Environment Snapshotting** — Captures git state, dependency versions, runtime context, Docker detection, shell info, CPU/memory, and package managers
 - **Environment Drift Detection** — Automatically detects and records environment changes between sessions
@@ -48,6 +48,7 @@ TypeScript pnpm monorepo with six packages:
 ADIT uses a pluggable adapter pattern for AI platform integration. Each adapter maps platform-specific hook events to normalized ADIT handlers:
 
 - **Claude Code** — Fully supported. Hooks: `UserPromptSubmit`, `Stop`, `SessionStart`, `SessionEnd`, `TaskCompleted`, `Notification`, `SubagentStart`, `SubagentStop`
+- **OpenCode** — Fully supported via generated plugin. Events: `chat.message`, `session.idle`, `session.created`, `session.deleted`, `session.error`, `command.executed`, `todo.updated`, `message.part.updated`. Includes process exit/signal safety net for session-end.
 - **Cursor, GitHub Copilot** — Detected by the adapter registry; adapters can be contributed
 
 Adapters are registered via `registerAdapter()` and auto-detected from environment variables.
@@ -67,7 +68,7 @@ Cloud sync uses a cursor-based incremental push model:
 
 ADIT ships with **10 Claude Code skills** (in `skills/`) for natural-language interaction:
 
-`timeline` · `checkpoint` · `revert` · `diff` · `search` · `label` · `env` · `status` · `doctor`
+`timeline` · `checkpoint` · `revert` · `diff` · `search` · `env` · `status` · `doctor`
 
 And a **timeline-analyst** agent (in `agents/`) for deep session analysis, pattern detection, and environment drift reporting.
 
@@ -113,31 +114,25 @@ npx adit cloud login --server <url>
 | `adit search <query>` | Full-text search with `--actor`, `--type`, `--from`/`--to`, `--branch`, `--has-checkpoint`, `--json` |
 | `adit tui` | Interactive terminal UI with keyboard navigation |
 
-### Checkpoints & Revert
+### Prompt
 
 | Command | Description |
 |---------|-------------|
-| `adit revert <id>` | Restore working tree to checkpoint (warns on dependency changes) |
-| `adit undo` | Revert to parent of last checkpoint |
-| `adit diff <id>` | Show diff with `--max-lines`, `--offset-lines`, `--file` |
 | `adit prompt <id>` | Show prompt text with `--max-chars`, `--offset` |
 
-### Labels
+### Snapshot (Git Checkpoints)
+
+All git checkpoint operations are grouped under `adit snapshot` to clearly separate them from read-only timeline commands:
 
 | Command | Description |
 |---------|-------------|
-| `adit label add <id> <label>` | Add a label to an event |
-| `adit label remove <id> <label>` | Remove a label |
-| `adit label list` | List all labels (`--label`, `--json`) |
-
-### Environment Snapshots
-
-| Command | Description |
-|---------|-------------|
-| `adit env show <id>` | Show environment snapshot for an event |
-| `adit env latest` | Show most recent snapshot (`--json`) |
-| `adit env diff <id1> <id2>` | Compare two snapshots with categorized changes and severity (`--json`) |
-| `adit env history` | List snapshot history (`--limit`, `--json`) |
+| `adit snapshot revert <id>` | Restore working tree to checkpoint (warns on dependency changes) |
+| `adit snapshot undo` | Revert to parent of last checkpoint |
+| `adit snapshot diff <id>` | Show diff with `--max-lines`, `--offset-lines`, `--file` |
+| `adit snapshot env show <id>` | Show environment snapshot for an event |
+| `adit snapshot env latest` | Show most recent snapshot (`--json`) |
+| `adit snapshot env diff <id1> <id2>` | Compare two snapshots with categorized changes and severity (`--json`) |
+| `adit snapshot env history` | List snapshot history (`--limit`, `--json`) |
 
 ### Export
 
@@ -176,6 +171,13 @@ npx adit cloud login --server <url>
 |---------|-------------|
 | `adit db clear-events` | Delete all local events, sessions, diffs, and env snapshots (`--yes`, `--json`) |
 
+### Performance
+
+| Command | Description |
+|---------|-------------|
+| `adit perf stats` | Show performance stats report (`--from`, `--to`, `--category`, `--json`) |
+| `adit perf clear` | Clear all performance logs (`--json`) |
+
 ## Interactive TUI
 
 Launch with `adit tui` for a full-screen terminal interface:
@@ -186,11 +188,11 @@ Launch with `adit tui` for a full-screen terminal interface:
 - **Environment screen** — Full snapshot details
 - **Help overlay** — Keybinding reference
 
-**Keyboard shortcuts:** `j`/`k` navigate (detail updates live), `d` diff, `p` prompt, `e` environment, `l` label, `/` search, `f` filter, `s` cycle sort (TIME/ACTOR), `Esc`/`b` back, `q` quit. Auto-refreshes every 2 seconds.
+**Keyboard shortcuts:** `j`/`k` navigate (detail updates live), `d` diff, `p` prompt, `e` environment, `/` search, `f` filter, `s` cycle sort (TIME/ACTOR), `Esc`/`b` back, `q` quit. Auto-refreshes every 2 seconds.
 
 ## Platform Support
 
-Currently supports **Claude Code** via hooks (`UserPromptSubmit`, `Stop`, `SessionStart`, `SessionEnd`, `TaskCompleted`, `Notification`, `SubagentStart`, `SubagentStop`).
+Currently supports **Claude Code** via hooks and **OpenCode** via generated plugin.
 
 Architecture uses a platform adapter pattern — adding a new AI platform (Cursor, Copilot, etc.) requires implementing a `PlatformAdapter` interface, not a rewrite.
 
