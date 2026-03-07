@@ -4,7 +4,13 @@
 #  Detects the system environment, installs required runtimes and
 #  libraries, builds the project, and registers the `adit` and
 #  `adit-hook` commands.
+#
+#  Wrap the entire script in { } so bash reads it fully into memory
+#  before executing. Without this, `curl | bash` can lose the rest
+#  of the script when a sub-command (e.g. nvm, NodeSource) reads
+#  from stdin.
 # ────────────────────────────────────────────────────────────────────
+{
 set -euo pipefail
 
 # ── Colours / helpers ───────────────────────────────────────────────
@@ -415,3 +421,4 @@ main() {
 }
 
 main "$@"
+}
