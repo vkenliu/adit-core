@@ -34,7 +34,7 @@ checkpoints, and provide rewind/recovery.
 | Local vs project settings | `--local` / `--project` flags | Env vars only | Entire |
 | Remove data dir | Manual | `adit plugin uninstall --clean` | **Implemented** |
 | Detect hook managers | Warns about Husky/Lefthook/Overcommit | No | Entire |
-| Hook chaining | Chains with existing git hooks | Overwrites | Entire |
+| Hook chaining | Chains with existing git hooks | Appends alongside existing hooks | **Implemented** |
 
 ### 2. Session & Checkpoint Tracking
 
@@ -153,8 +153,8 @@ checkpoints, and provide rewind/recovery.
 ## Remaining Features to Implement
 
 Features 1 (enable/disable lifecycle), 3 (content-aware redaction),
-4 (interactive rewind), and 5 (session resume) from the original analysis
-have been implemented. The remaining items are:
+4 (interactive rewind), 5 (session resume), and hook chaining from the
+original analysis have been implemented. The remaining items are:
 
 ### P1: Broader Agent Support
 
@@ -169,8 +169,6 @@ have been implemented. The remaining items are:
 
 - **`clean` / `reset` commands**: Cleanup orphaned data and stuck state.
   Our `doctor --fix` partially covers this but dedicated commands are clearer.
-- **Hook chaining**: Entire chains with existing git hooks (Husky, Lefthook)
-  instead of overwriting. Important for teams with existing hook setups.
 - **Accessible mode**: `ACCESSIBLE=1` for screen reader support.
 - **Token usage tracking**: Per-session token/cost metrics.
 - **Styled status output**: Entire's v0.4.6 redesigned `status` with session
