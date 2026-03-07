@@ -11,15 +11,21 @@
 #     nvm, npm, pnpm) cannot read from the pipe's stdin.
 # ────────────────────────────────────────────────────────────────────
 {
-set -euo pipefail
+# No `set -e` — we use explicit error handling instead, because
+# set -e causes silent deaths in pipes that are impossible to debug.
+set -uo pipefail
 
 # Close stdin and reopen from /dev/null so that sub-commands
 # (git clone, nvm, npm, pnpm) cannot accidentally consume the
 # piped script when invoked via `curl | bash`.
 exec </dev/null
 
-# Catch unexpected exits from set -e and report where it happened
-trap 'err "Install failed at line $LINENO (exit code $?). Please report this issue."' ERR
+# Track progress for the EXIT trap
+_INSTALL_STEP="init"
+
+# Always report on exit — catches every failure mode including
+# set -u, pipefail, signals, and explicit exits.
+trap '_exit_code=$?; if [[ $_exit_code -ne 0 ]]; then printf "\033[0;31m[error]\033[0m Install failed during step: %s (exit code %d)\n" "$_INSTALL_STEP" "$_exit_code" >&2; fi' EXIT
 
 # ── Colours / helpers ───────────────────────────────────────────────
 RED='\033[0;31m'
@@ -34,7 +40,8 @@ ok()    { printf "${GREEN}[ok]${NC}    %s\n" "$*"; }
 warn()  { printf "${YELLOW}[warn]${NC}  %s\n" "$*"; }
 err()   { printf "${RED}[error]${NC} %s\n" "$*" >&2; }
 die()   { err "$*"; exit 1; }
-debug() { [[ "${ADIT_DEBUG:-}" == "1" ]] && printf "[debug] %s\n" "$*" || true; }
+# Write debug to stderr so it is unbuffered and visible immediately
+debug() { [[ "${ADIT_DEBUG:-}" == "1" ]] && printf "[debug] %s\n" "$*" >&2 || true; }
 
 # ── Constants ───────────────────────────────────────────────────────
 REQUIRED_NODE_MAJOR=20
@@ -317,7 +324,9 @@ install_deps() {
 build_project() {
   info "Building all packages …"
   cd "$SCRIPT_DIR"
-  pnpm build
+  if ! pnpm build; then
+    die "Build failed"
+  fi
   ok "Build complete"
 }
 
@@ -447,26 +456,37 @@ main() {
 
   HAS_BUILD_TOOLS=true
 
-  debug "starting resolve_project_root"
-  resolve_project_root
-  debug "starting detect_platform"
-  detect_platform
-  debug "starting ensure_git"
-  ensure_git
-  debug "starting check_build_tools"
-  check_build_tools
-  debug "starting ensure_node"
-  ensure_node
-  debug "starting ensure_pnpm"
-  ensure_pnpm
-  debug "starting install_deps"
-  install_deps
-  debug "starting build_project"
-  build_project
-  debug "starting register_commands"
-  register_commands
-  debug "starting verify"
-  verify
+  _INSTALL_STEP="resolve_project_root"; debug "step: $_INSTALL_STEP"
+  resolve_project_root || die "Failed to resolve project root"
+
+  _INSTALL_STEP="detect_platform"; debug "step: $_INSTALL_STEP"
+  detect_platform || die "Failed to detect platform"
+
+  _INSTALL_STEP="ensure_git"; debug "step: $_INSTALL_STEP"
+  ensure_git || die "Failed to ensure git"
+
+  _INSTALL_STEP="check_build_tools"; debug "step: $_INSTALL_STEP"
+  check_build_tools || die "Failed to check build tools"
+
+  _INSTALL_STEP="ensure_node"; debug "step: $_INSTALL_STEP"
+  ensure_node || die "Failed to ensure Node.js"
+
+  _INSTALL_STEP="ensure_pnpm"; debug "step: $_INSTALL_STEP"
+  ensure_pnpm || die "Failed to ensure pnpm"
+
+  _INSTALL_STEP="install_deps"; debug "step: $_INSTALL_STEP"
+  install_deps || die "Failed to install dependencies"
+
+  _INSTALL_STEP="build_project"; debug "step: $_INSTALL_STEP"
+  build_project || die "Failed to build project"
+
+  _INSTALL_STEP="register_commands"; debug "step: $_INSTALL_STEP"
+  register_commands || die "Failed to register commands"
+
+  _INSTALL_STEP="verify"; debug "step: $_INSTALL_STEP"
+  verify || die "Failed to verify installation"
+
+  _INSTALL_STEP="done"
 }
 
 main "$@"
