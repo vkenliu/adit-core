@@ -87,10 +87,14 @@ function isAditPlugin(content: string): boolean {
  * info comes from the chat.message input arg instead.
  *
  * Note: /exit (/quit, /q) does NOT fire session.deleted — OpenCode just
- * terminates the process. We intercept command.executed (which fires for all
- * slash commands) and use spawnSync to block until the session-end hook (and
- * cloud sync) completes before the process exits. The active session ID is
- * tracked via session.created/deleted.
+ * terminates the process. We use two layers of defense:
+ * 1. command.executed: fires for slash commands, uses spawnSync to block until
+ *    the session-end hook (and cloud sync) completes before the process exits.
+ * 2. process.on('exit'): safety net that fires session-end synchronously if
+ *    command.executed never fired (e.g. OpenCode calls process.exit() directly).
+ *    Also handles SIGINT (Ctrl+C) and SIGTERM by flushing then re-raising.
+ * The active session ID is tracked via session.created/deleted, and a
+ * sessionEndFired flag prevents duplicate session-end calls.
  */
 function generatePluginContent(aditBinaryPath: string): string {
   // Split the binary path into command + args for spawning.
@@ -151,6 +155,33 @@ exports.AditPlugin = async (ctx) => {
   // it just terminates the process. We intercept command.executed to
   // detect exit commands and block until the sync finishes.
   let activeSessionId = undefined;
+  let sessionEndFired = false;
+
+  // Safety net: fire session-end synchronously on process exit.
+  // OpenCode may not emit command.executed for /exit — it might call
+  // process.exit() directly. Node's 'exit' event fires synchronously
+  // and spawnSync works inside it, ensuring cloud sync completes
+  // before the process terminates.
+  function flushOnExit() {
+    if (sessionEndFired || !activeSessionId) return;
+    sessionEndFired = true;
+    spawnAditHookSync("session-end", {
+      cwd,
+      session_id: activeSessionId,
+      reason: "exit",
+    });
+    activeSessionId = undefined;
+  }
+  process.on("exit", flushOnExit);
+  // SIGINT (Ctrl+C) and SIGTERM need to re-raise after flushing so the
+  // process actually terminates with the expected exit code / signal.
+  function handleSignal(signal) {
+    flushOnExit();
+    process.removeListener(signal, handleSignal);
+    process.kill(process.pid, signal);
+  }
+  process.on("SIGINT", handleSignal.bind(null, "SIGINT"));
+  process.on("SIGTERM", handleSignal.bind(null, "SIGTERM"));
 
   return {
     // Capture user prompts.
@@ -199,6 +230,7 @@ exports.AditPlugin = async (ctx) => {
           case "session.created": {
             const info = props.info || {};
             activeSessionId = info.id;
+            sessionEndFired = false;
             spawnAditHook("session-start", {
               cwd,
               session_id: info.id,
@@ -208,7 +240,10 @@ exports.AditPlugin = async (ctx) => {
           }
           case "session.deleted": {
             const info = props.info || {};
-            if (activeSessionId === info.id) activeSessionId = undefined;
+            if (activeSessionId === info.id) {
+              activeSessionId = undefined;
+              sessionEndFired = true;
+            }
             spawnAditHook("session-end", {
               cwd,
               session_id: info.id,
@@ -219,7 +254,10 @@ exports.AditPlugin = async (ctx) => {
           case "session.error": {
             // sessionID is optional in session.error — fall back to activeSessionId
             const errorSessionId = props.sessionID || activeSessionId;
-            if (activeSessionId && activeSessionId === errorSessionId) activeSessionId = undefined;
+            if (activeSessionId && activeSessionId === errorSessionId) {
+              activeSessionId = undefined;
+              sessionEndFired = true;
+            }
             if (!errorSessionId) break;
             spawnAditHook("session-end", {
               cwd,
@@ -272,6 +310,20 @@ exports.AditPlugin = async (ctx) => {
           case "todo.updated": {
             const todos = props.todos;
             if (!Array.isArray(todos)) break;
+
+            // Record the full todo list state as a notification so the
+            // complete task plan (pending, in_progress, completed) is
+            // captured and synced to the server.
+            spawnAditHook("notification", {
+              cwd,
+              session_id: props.sessionID,
+              notification_type: "todo_updated",
+              title: "Todo list updated (" + todos.length + " items)",
+              message: JSON.stringify(todos),
+            });
+
+            // Also emit individual task-completed events for completed
+            // todos (backward compatibility + semantic milestone tracking).
             for (let i = 0; i < todos.length; i++) {
               const todo = todos[i];
               if (todo.status === "completed") {
@@ -298,6 +350,7 @@ exports.AditPlugin = async (ctx) => {
             const exitSessionId = props.sessionID || activeSessionId;
             if (!exitSessionId) break;
             activeSessionId = undefined;
+            sessionEndFired = true;
             spawnAditHookSync("session-end", {
               cwd,
               session_id: exitSessionId,

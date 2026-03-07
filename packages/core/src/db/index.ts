@@ -13,6 +13,7 @@ export {
 
 export {
   insertEvent,
+  insertEventAutoSeq,
   getEventById,
   queryEvents,
   getEventsBySession,

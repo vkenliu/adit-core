@@ -226,7 +226,7 @@ export function EventDetail({
       )}
 
       <Box marginTop={1}>
-        <Text dimColor>[d]iff [p]rompt [e]nv [l]abel [r]evert</Text>
+        <Text dimColor>[d]iff [p]rompt [e]nv [r]evert</Text>
       </Box>
     </Box>
   );

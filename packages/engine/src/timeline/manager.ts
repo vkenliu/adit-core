@@ -10,12 +10,10 @@ import {
   generateId,
   createClock,
   serialize,
-  insertEvent,
-  allocateSequence,
+  insertEventAutoSeq,
   getEventById,
   queryEvents,
   updateEventCheckpoint,
-  updateEventLabels,
   searchEvents,
   getLatestCheckpointEvent,
   insertDiff,
@@ -24,8 +22,6 @@ import {
   type EventType,
   type Actor,
   type AditConfig,
-  tick,
-  deserialize,
   withPerf,
 } from "@adit/core";
 import { createSnapshot, getCheckpointDiff } from "../snapshot/creator.js";
@@ -50,9 +46,6 @@ export interface TimelineManager {
 
   /** Undo the last checkpoint */
   undo(): Promise<void>;
-
-  /** Add a label to an event */
-  addLabel(eventId: string, label: string): Promise<void>;
 
   /** Search events by text */
   search(query: string, limit?: number): Promise<AditEvent[]>;
@@ -104,17 +97,18 @@ export function createTimelineManager(
   return {
     async recordEvent(params: RecordEventParams): Promise<AditEvent> {
       const id = generateId();
-      const sequence = allocateSequence(db, params.sessionId);
       const now = new Date().toISOString();
       const branch = await getCurrentBranch(cwd);
       const headSha = await getHeadSha(cwd);
       const vclock = serialize(createClock(config.clientId));
 
-      insertEvent(db, {
+      // Use insertEventAutoSeq to atomically allocate the sequence number
+      // inside the INSERT, preventing duplicate sequences from concurrent
+      // hook processes that could read the same MAX(sequence).
+      insertEventAutoSeq(db, {
         id,
         sessionId: params.sessionId,
         parentEventId: params.parentEventId ?? null,
-        sequence,
         eventType: params.eventType,
         actor: params.actor,
         promptText: params.promptText ?? null,
@@ -134,7 +128,11 @@ export function createTimelineManager(
         vclockJson: vclock,
       });
 
-      return getEventById(db, id)!;
+      const event = getEventById(db, id);
+      if (!event) {
+        throw new Error(`Failed to retrieve event after insert: ${id}`);
+      }
+      return event;
     },
 
     async createCheckpoint(
@@ -188,9 +186,11 @@ export function createTimelineManager(
         throw new Error(`Event ${eventId} has no checkpoint`);
       }
 
-      // Record the revert action itself
+      // Use checkout to restore working tree content from the checkpoint
+      // WITHOUT moving the branch pointer. git reset --hard would move HEAD
+      // to the ADIT-internal checkpoint commit, corrupting branch history.
       await runGitOrThrow(
-        ["reset", "--hard", event.checkpointSha],
+        ["checkout", event.checkpointSha, "--", "."],
         { cwd },
       );
     },
@@ -209,22 +209,10 @@ export function createTimelineManager(
         throw new Error("Cannot find parent of latest checkpoint");
       }
 
-      await runGitOrThrow(["reset", "--hard", parentResult], { cwd });
-    },
-
-    async addLabel(eventId: string, label: string): Promise<void> {
-      const event = getEventById(db, eventId);
-      if (!event) throw new Error(`Event not found: ${eventId}`);
-
-      const labels: string[] = event.labelsJson
-        ? JSON.parse(event.labelsJson)
-        : [];
-      if (!labels.includes(label)) {
-        labels.push(label);
-      }
-
-      const vclock = tick(deserialize(event.vclockJson), config.clientId);
-      updateEventLabels(db, eventId, JSON.stringify(labels), serialize(vclock));
+      // Use checkout to restore working tree content from the parent
+      // WITHOUT moving the branch pointer. git reset --hard would move HEAD
+      // to the ADIT-internal checkpoint commit, corrupting branch history.
+      await runGitOrThrow(["checkout", parentResult, "--", "."], { cwd });
     },
 
     async search(query: string, limit = 20): Promise<AditEvent[]> {

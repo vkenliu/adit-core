@@ -69,6 +69,18 @@ const SAFE_ENV_PREFIXES = [
   "PATH",
 ];
 
+/**
+ * Known secret environment variable names that match safe prefixes but must
+ * never be captured (authentication tokens, registry credentials, etc.).
+ */
+const SECRET_ENV_NAMES = new Set([
+  "NPM_TOKEN",
+  "NPM_CONFIG_AUTHTOKEN",
+  "NPM_CONFIG__AUTH",
+  "NODE_AUTH_TOKEN",
+  "NODE_PRE_GYP_GITHUB_TOKEN",
+]);
+
 /** Pre-computed git state to avoid duplicate git calls within the same hook */
 export interface PreComputedGitState {
   branch?: string | null;
@@ -190,7 +202,7 @@ function hashFile(path: string): string | null {
 function captureSafeEnvVars(): Record<string, string> {
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
-    if (value && SAFE_ENV_PREFIXES.some((p) => key.startsWith(p))) {
+    if (value && !SECRET_ENV_NAMES.has(key) && SAFE_ENV_PREFIXES.some((p) => key.startsWith(p))) {
       result[key] = value;
     }
   }

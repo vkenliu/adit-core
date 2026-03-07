@@ -130,7 +130,6 @@ export function App(): React.ReactElement {
       onSearch: handleSearch,
       onFilter: handleFilter,
       onSort: handleSort,
-      onLabel: () => {},
       onHelp: handleHelp,
       onBack: handleBack,
       onQuit: handleQuit,
@@ -226,7 +225,6 @@ export function App(): React.ReactElement {
           <Text>d{"            "}Show diff for checkpoint</Text>
           <Text>p{"            "}Show prompt text</Text>
           <Text>e{"            "}Show environment snapshot</Text>
-          <Text>l{"            "}Add label</Text>
           <Text>/{"            "}Open search</Text>
           <Text>f{"            "}Toggle filter panel</Text>
           <Text>s{"            "}Cycle sort (TIME→ACTOR)</Text>

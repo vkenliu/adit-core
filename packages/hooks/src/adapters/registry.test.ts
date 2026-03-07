@@ -389,6 +389,13 @@ describe("OpenCode Adapter", () => {
     // command.executed intercepts /exit synchronously
     expect(pluginContent).toContain("command.executed");
     expect(pluginContent).toContain("spawnAditHookSync");
+    // process.on('exit') safety net for reliable cloud sync on exit
+    expect(pluginContent).toContain('process.on("exit"');
+    expect(pluginContent).toContain("flushOnExit");
+    expect(pluginContent).toContain("SIGINT");
+    expect(pluginContent).toContain("SIGTERM");
+    // sessionEndFired flag prevents duplicate session-end calls
+    expect(pluginContent).toContain("sessionEndFired");
     // Notification types — assistant_metadata removed (LLM cost/token tracking not needed)
     expect(pluginContent).not.toContain("message.updated");
     expect(pluginContent).not.toContain("assistant_metadata");

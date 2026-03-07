@@ -1,7 +1,7 @@
 /**
- * `adit diff <id>` — Show the diff for a checkpoint event.
+ * `adit snapshot diff <id>` — Show the diff for a checkpoint event.
  * `adit prompt <id>` — Show the prompt text for an event.
- * `adit env` — Show/compare environment snapshots.
+ * `adit snapshot env` — Show/compare environment snapshots.
  */
 
 import {

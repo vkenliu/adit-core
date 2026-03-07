@@ -1,6 +1,6 @@
 /**
- * `adit revert <id>` — Revert working tree to a checkpoint.
- * `adit undo` — Revert to parent of last checkpoint.
+ * `adit snapshot revert <id>` — Revert working tree to a checkpoint.
+ * `adit snapshot undo` — Revert to parent of last checkpoint.
  */
 
 import { loadConfig, openDatabase, closeDatabase } from "@adit/core";

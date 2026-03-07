@@ -62,6 +62,34 @@ const INSERT_SQL = `
   )
 `;
 
+/**
+ * Atomically allocate a sequence number and insert an event in a single
+ * transaction. This prevents the TOCTOU race in the old allocateSequence +
+ * insertEvent two-step pattern where concurrent hook processes could read
+ * the same MAX(sequence) and produce duplicate sequence numbers.
+ */
+const INSERT_WITH_SEQ_SQL = `
+  INSERT INTO events (
+    id, session_id, parent_event_id, sequence, event_type, actor,
+    prompt_text, cot_text, response_text,
+    tool_name, tool_input_json, tool_output_json,
+    checkpoint_sha, checkpoint_ref, diff_stat_json,
+    git_branch, git_head_sha, env_snapshot_id,
+    started_at, ended_at, status, error_json, labels_json, plan_task_id,
+    client_id, vclock_json
+  ) VALUES (
+    ?, ?, ?,
+    (SELECT COALESCE(MAX(sequence), 0) + 1 FROM events WHERE session_id = ?),
+    ?, ?,
+    ?, ?, ?,
+    ?, ?, ?,
+    ?, ?, ?,
+    ?, ?, ?,
+    ?, ?, ?, ?, ?, ?,
+    ?, ?
+  )
+`;
+
 export function insertEvent(
   db: Database.Database,
   input: InsertEventInput,
@@ -71,6 +99,46 @@ export function insertEvent(
     input.sessionId,
     input.parentEventId ?? null,
     input.sequence,
+    input.eventType,
+    input.actor,
+    input.promptText ?? null,
+    input.cotText ?? null,
+    input.responseText ?? null,
+    input.toolName ?? null,
+    input.toolInputJson ?? null,
+    input.toolOutputJson ?? null,
+    input.checkpointSha ?? null,
+    input.checkpointRef ?? null,
+    input.diffStatJson ?? null,
+    input.gitBranch ?? null,
+    input.gitHeadSha ?? null,
+    input.envSnapshotId ?? null,
+    input.startedAt,
+    input.endedAt ?? null,
+    input.status ?? "running",
+    input.errorJson ?? null,
+    input.labelsJson ?? null,
+    input.planTaskId ?? null,
+    input.clientId ?? null,
+    input.vclockJson,
+  );
+}
+
+/**
+ * Insert an event with an atomically-allocated sequence number.
+ *
+ * Prefer this over the separate allocateSequence + insertEvent pattern
+ * to avoid duplicate sequence numbers under concurrent hook processes.
+ */
+export function insertEventAutoSeq(
+  db: Database.Database,
+  input: Omit<InsertEventInput, "sequence">,
+): void {
+  db.prepare(INSERT_WITH_SEQ_SQL).run(
+    input.id,
+    input.sessionId,
+    input.parentEventId ?? null,
+    input.sessionId, // for the sub-select
     input.eventType,
     input.actor,
     input.promptText ?? null,

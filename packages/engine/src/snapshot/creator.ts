@@ -49,8 +49,15 @@ export async function createSnapshot(
   const env = { GIT_INDEX_FILE: tempIndex };
 
   try {
-    // Start from HEAD's tree in the temp index
-    await runGit(["read-tree", "HEAD"], { cwd, env });
+    // Start from HEAD's tree in the temp index.
+    // On a brand-new repo with no commits (unborn HEAD), read-tree HEAD
+    // fails. In that case we start with an empty index, which is correct —
+    // the subsequent git-add will stage all files as new.
+    const readTreeResult = await runGit(["read-tree", "HEAD"], { cwd, env });
+    if (readTreeResult.exitCode !== 0) {
+      // Unborn HEAD — start from an empty tree
+      await runGitOrThrow(["read-tree", "--empty"], { cwd, env });
+    }
 
     // Stage all changes into temp index
     await stageChanges(cwd, changes, env);
@@ -100,14 +107,17 @@ async function stageChanges(
   env: Record<string, string>,
 ): Promise<void> {
   // Batch into at most 2 git commands instead of N sequential spawns.
+  // Use runGitOrThrow so that staging failures (e.g. files deleted between
+  // getChangedFiles and staging) surface immediately rather than producing
+  // corrupted checkpoint snapshots with missing files.
   const toDelete = changes.filter((c) => c.status === "D").map((c) => c.path);
   const toAdd = changes.filter((c) => c.status !== "D").map((c) => c.path);
 
   if (toDelete.length > 0) {
-    await runGit(["rm", "--cached", "--", ...toDelete], { cwd, env });
+    await runGitOrThrow(["rm", "--cached", "--", ...toDelete], { cwd, env });
   }
   if (toAdd.length > 0) {
-    await runGit(["add", "--", ...toAdd], { cwd, env });
+    await runGitOrThrow(["add", "--", ...toAdd], { cwd, env });
   }
 }
 
@@ -118,9 +128,14 @@ export async function getCheckpointDiff(
   parentSha?: string,
   filePath?: string,
 ): Promise<string> {
+  // When parentSha is provided, diff between the two commits.
+  // When parentSha is absent this is the first checkpoint — use diff-tree
+  // with --root to show the full diff against an empty tree. The old
+  // `diff ${sha}^ ${sha}` approach fails silently when the commit has no
+  // parent, producing an empty string and losing the diff data.
   const args = parentSha
     ? ["diff", parentSha, sha]
-    : ["diff", `${sha}^`, sha];
+    : ["diff-tree", "--root", "-p", sha];
 
   if (filePath) {
     args.push("--", filePath);

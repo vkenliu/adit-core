@@ -12,11 +12,6 @@ import { initCommand } from "./commands/init.js";
 import { listCommand } from "./commands/list.js";
 import { showCommand } from "./commands/show.js";
 import { revertCommand, undoCommand } from "./commands/revert.js";
-import {
-  labelCommand,
-  labelRemoveCommand,
-  labelListCommand,
-} from "./commands/label.js";
 import { searchCommand } from "./commands/search.js";
 import {
   diffCommand,
@@ -98,40 +93,6 @@ program
   .description("Show full event details")
   .action((id) => showCommand(id));
 
-program
-  .command("revert <id>")
-  .description("Revert working tree to a checkpoint")
-  .option("-y, --yes", "Skip confirmation")
-  .action((id, opts) => revertCommand(id, { yes: opts.yes }));
-
-program
-  .command("undo")
-  .description("Revert to parent of last checkpoint")
-  .option("-y, --yes", "Skip confirmation")
-  .action((opts) => undoCommand({ yes: opts.yes }));
-
-// Label management
-const labelCmd = program
-  .command("label")
-  .description("Manage labels on events");
-
-labelCmd
-  .command("add <id> <label>")
-  .description("Add a label to an event")
-  .action((id, label) => labelCommand(id, label));
-
-labelCmd
-  .command("remove <id> <label>")
-  .description("Remove a label from an event")
-  .action((id, label) => labelRemoveCommand(id, label));
-
-labelCmd
-  .command("list")
-  .description("List all labels or events with a specific label")
-  .option("--label <name>", "Filter by label name")
-  .option("--json", "Output as JSON")
-  .action((opts) => labelListCommand({ label: opts.label, json: opts.json }));
-
 // Search
 program
   .command("search <query>")
@@ -160,22 +121,6 @@ program
   );
 
 program
-  .command("diff <id>")
-  .description("Show diff for a checkpoint event")
-  .option("-n, --max-lines <n>", "Max lines to show")
-  .option("-o, --offset-lines <n>", "Skip first N lines")
-  .option("-f, --file <path>", "Filter by file path")
-  .action((id, opts) =>
-    diffCommand(id, {
-      maxLines: opts.maxLines ? parseInt(opts.maxLines, 10) : undefined,
-      offsetLines: opts.offsetLines
-        ? parseInt(opts.offsetLines, 10)
-        : undefined,
-      file: opts.file,
-    }),
-  );
-
-program
   .command("prompt <id>")
   .description("Show prompt text for an event")
   .option("-m, --max-chars <n>", "Max characters to show")
@@ -186,35 +131,6 @@ program
       offset: opts.offset ? parseInt(opts.offset, 10) : undefined,
     }),
   );
-
-// Environment snapshot commands
-const envCmd = program
-  .command("env")
-  .description("Environment snapshot commands");
-
-envCmd
-  .command("show <id>")
-  .description("Show environment snapshot for an event")
-  .action((id) => envCommand(id));
-
-envCmd
-  .command("latest")
-  .description("Show the most recent environment snapshot")
-  .option("--json", "Output as JSON")
-  .action((opts) => envLatestCommand({ json: opts.json }));
-
-envCmd
-  .command("diff <id1> <id2>")
-  .description("Compare two environment snapshots")
-  .option("--json", "Output as JSON")
-  .action((id1, id2, opts) => envDiffCommand(id1, id2, { json: opts.json }));
-
-envCmd
-  .command("history")
-  .description("List environment snapshot history")
-  .option("-l, --limit <n>", "Max results", "20")
-  .option("--json", "Output as JSON")
-  .action((opts) => envHistoryCommand({ limit: parseInt(opts.limit, 10), json: opts.json }));
 
 program
   .command("status")
@@ -411,6 +327,68 @@ perfCmd
   .description("Clear all performance logs")
   .option("--json", "Output as JSON")
   .action((opts) => perfClearCommand({ json: opts.json }));
+
+// Snapshot — git checkpoint features (revert, undo, diff, env)
+const snapshotCmd = program
+  .command("snapshot")
+  .description("Git checkpoint snapshot commands (revert, undo, diff, env)");
+
+snapshotCmd
+  .command("revert <id>")
+  .description("Revert working tree to a checkpoint")
+  .option("-y, --yes", "Skip confirmation")
+  .action((id, opts) => revertCommand(id, { yes: opts.yes }));
+
+snapshotCmd
+  .command("undo")
+  .description("Revert to parent of last checkpoint")
+  .option("-y, --yes", "Skip confirmation")
+  .action((opts) => undoCommand({ yes: opts.yes }));
+
+snapshotCmd
+  .command("diff <id>")
+  .description("Show diff for a checkpoint event")
+  .option("-n, --max-lines <n>", "Max lines to show")
+  .option("-o, --offset-lines <n>", "Skip first N lines")
+  .option("-f, --file <path>", "Filter by file path")
+  .action((id, opts) =>
+    diffCommand(id, {
+      maxLines: opts.maxLines ? parseInt(opts.maxLines, 10) : undefined,
+      offsetLines: opts.offsetLines
+        ? parseInt(opts.offsetLines, 10)
+        : undefined,
+      file: opts.file,
+    }),
+  );
+
+// Environment snapshot commands (under snapshot)
+const envCmd = snapshotCmd
+  .command("env")
+  .description("Environment snapshot commands");
+
+envCmd
+  .command("show <id>")
+  .description("Show environment snapshot for an event")
+  .action((id) => envCommand(id));
+
+envCmd
+  .command("latest")
+  .description("Show the most recent environment snapshot")
+  .option("--json", "Output as JSON")
+  .action((opts) => envLatestCommand({ json: opts.json }));
+
+envCmd
+  .command("diff <id1> <id2>")
+  .description("Compare two environment snapshots")
+  .option("--json", "Output as JSON")
+  .action((id1, id2, opts) => envDiffCommand(id1, id2, { json: opts.json }));
+
+envCmd
+  .command("history")
+  .description("List environment snapshot history")
+  .option("-l, --limit <n>", "Max results", "20")
+  .option("--json", "Output as JSON")
+  .action((opts) => envHistoryCommand({ limit: parseInt(opts.limit, 10), json: opts.json }));
 
 // TUI — interactive terminal interface
 program
