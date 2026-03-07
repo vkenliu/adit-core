@@ -231,10 +231,11 @@ export const claudeCodeAdapter: PlatformAdapter = {
 
       // Remove stale ADIT entries (same logic as uninstallHooks)
       const nonAditEntries = existing.filter(
-        (entry: Record<string, unknown>) => {
+        (raw) => {
+          const entry = raw as { command?: string; hooks?: Array<{ command?: string }> };
           if (typeof entry.command === "string" && isAditHookCommand(entry.command)) return false;
           if (Array.isArray(entry.hooks)) {
-            return !(entry.hooks as Array<{ command?: string }>).some(
+            return !entry.hooks.some(
               (h) => typeof h.command === "string" && isAditHookCommand(h.command),
             );
           }

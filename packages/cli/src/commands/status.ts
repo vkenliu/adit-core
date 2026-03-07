@@ -1,11 +1,13 @@
 /**
  * `adit status` — Show ADIT status for the current project.
  *
- * Quick overview of whether ADIT is active, hook configuration state,
- * active session info, and recent checkpoint count.
+ * Displays a styled overview with session cards, git state, sync info,
+ * and hook configuration. Inspired by Entire CLI's v0.4.6 session card
+ * format but adapted for ADIT's richer event model.
  */
 
 import { existsSync } from "node:fs";
+import pc from "picocolors";
 import {
   loadConfig,
   openDatabase,
@@ -23,6 +25,17 @@ import {
   getHeadSha,
 } from "@adit/engine";
 import { detectPlatform, getAdapter, listAdapters } from "@adit/hooks/adapters";
+import { statusDot, joinDim, sectionHeader, horizontalRule, timeAgo } from "../utils/format.js";
+import { truncate } from "../utils/summary.js";
+
+/** Display-name map for platforms (matches adapter displayName but avoids import) */
+const platformLabel: Record<string, string> = {
+  "claude-code": "Claude Code",
+  cursor: "Cursor",
+  copilot: "Copilot",
+  opencode: "OpenCode",
+  codex: "Codex",
+};
 
 export async function statusCommand(opts?: { json?: boolean }): Promise<void> {
   const config = loadConfig();
@@ -40,8 +53,11 @@ export async function statusCommand(opts?: { json?: boolean }): Promise<void> {
     if (opts?.json) {
       console.log(JSON.stringify({ initialized: false }, null, 2));
     } else {
-      console.log("ADIT is not initialized in this project.");
-      console.log("Run 'adit init' to get started.");
+      console.log();
+      console.log(`${statusDot(false)} ${pc.bold("Not initialized")}`);
+      console.log();
+      console.log(pc.dim("Run 'adit init' to get started."));
+      console.log();
     }
     return;
   }
@@ -79,6 +95,8 @@ export async function statusCommand(opts?: { json?: boolean }): Promise<void> {
 
   // 3. Database + session info
   const db = openDatabase(config.dbPath);
+  let latestPromptText: string | null = null;
+
   try {
     // Active session
     const session = getActiveSession(db, config.projectId, config.clientId);
@@ -90,6 +108,16 @@ export async function statusCommand(opts?: { json?: boolean }): Promise<void> {
           status: session.status,
         }
       : null;
+
+    // Fetch latest prompt text for the session card
+    if (session) {
+      const latestPrompts = queryEvents(db, {
+        sessionId: session.id,
+        eventType: "prompt_submit",
+        limit: 1,
+      });
+      latestPromptText = latestPrompts[0]?.promptText ?? null;
+    }
 
     // Event counts — use countEvents() for accurate total
     const totalEvents = countEvents(db, config.projectId);
@@ -148,12 +176,16 @@ export async function statusCommand(opts?: { json?: boolean }): Promise<void> {
     dirty,
   };
 
+  // ──────────────────────────────────────────────
   // Output
+  // ──────────────────────────────────────────────
+
   if (opts?.json) {
     console.log(JSON.stringify(status, null, 2));
     return;
   }
 
+  const ruleWidth = 50;
   const hooksStatus = status.hooks as {
     allInstalled: boolean;
     installed: string[];
@@ -176,40 +208,89 @@ export async function statusCommand(opts?: { json?: boolean }): Promise<void> {
     dirty: boolean;
   };
 
-  console.log("ADIT Status");
-  console.log("===========");
+  // ── Status line ──────────────────────────────
+  console.log();
+  const isActive = session !== null;
+  const hooksList = hooksStatus.installed.length > 0
+    ? hooksStatus.installed.join(", ")
+    : null;
+  const branchLabel = git.branch ? pc.cyan(git.branch) : pc.yellow("detached");
+
+  console.log(
+    joinDim([
+      `${statusDot(isActive)} ${pc.bold(isActive ? "Active" : "Idle")}`,
+      hooksList,
+      `branch ${branchLabel}`,
+    ]),
+  );
+
+  // ── Session card ─────────────────────────────
+  console.log();
+  console.log(sectionHeader("Session", ruleWidth));
   console.log();
 
-  // Hooks
-  if (hooksStatus.allInstalled) {
-    console.log(`Hooks:        ${hooksStatus.installed.join(", ")} installed`);
-  } else if (hooksStatus.installed.length > 0) {
-    console.log(`Hooks:        ${hooksStatus.installed.join(", ")} installed; missing: ${hooksStatus.missing.join(", ")}`);
-  } else if (hooksStatus.missing.length > 0) {
-    console.log(`Hooks:        Not installed (${hooksStatus.missing.join(", ")} detected but incomplete)`);
-  } else {
-    console.log("Hooks:        No platforms detected");
-  }
-
-  // Session
   if (session) {
-    console.log(`Session:      ${session.id.substring(0, 10)}... (${session.platform}, started ${session.startedAt})`);
+    const label = platformLabel[session.platform] ?? session.platform;
+    const shortId = session.id.substring(0, 12);
+    console.log(joinDim([pc.bold(label), pc.dim(shortId)]));
+
+    // Latest prompt (Entire-style quoted line)
+    if (latestPromptText) {
+      const cleaned = latestPromptText.replace(/\n/g, " ").trim();
+      console.log(pc.dim("> ") + `"${truncate(cleaned, 60)}"`);
+    }
+
+    // Stats line
+    const statsLine = joinDim([
+      `started ${timeAgo(session.startedAt)}`,
+      `${events.total} events`,
+      `${events.checkpoints} checkpoints`,
+    ]);
+    console.log(pc.dim(statsLine));
   } else {
-    console.log("Session:      No active session");
+    console.log(pc.dim("No active session"));
   }
 
-  // Events
-  console.log(`Events:       ${events.total} total, ${events.checkpoints} checkpoints, ${events.unsynced} unsynced`);
+  // ── Git ──────────────────────────────────────
+  console.log();
+  console.log(sectionHeader("Git", ruleWidth));
+  console.log();
 
-  // Latest checkpoint
+  const headShort = git.head ?? "unknown";
+  const treeStatus = git.dirty
+    ? pc.yellow("dirty")
+    : pc.green("clean");
+  console.log(joinDim([
+    `branch ${branchLabel}`,
+    headShort,
+    treeStatus,
+  ]));
+
   if (latestCp) {
-    console.log(`Last CP:      ${latestCp.sha} at ${latestCp.at}`);
-  } else {
-    console.log("Last CP:      None");
+    console.log(pc.dim(`last checkpoint ${latestCp.sha} ${timeAgo(latestCp.at)}`));
   }
 
-  // Git
-  console.log(`Branch:       ${git.branch ?? "detached"}`);
-  console.log(`HEAD:         ${git.head ?? "unknown"}`);
-  console.log(`Working tree: ${git.dirty ? "dirty" : "clean"}`);
+  // ── Sync ─────────────────────────────────────
+  console.log();
+  console.log(sectionHeader("Sync", ruleWidth));
+  console.log();
+
+  if (events.unsynced === 0) {
+    console.log(pc.green("all events synced"));
+  } else {
+    console.log(pc.yellow(`${events.unsynced} events unsynced`));
+  }
+
+  // ── Hooks warnings (only if issues) ──────────
+  if (missingPlatforms.length > 0) {
+    console.log();
+    console.log(sectionHeader("Warnings", ruleWidth));
+    console.log();
+    console.log(pc.yellow(`hooks incomplete: ${missingPlatforms.join(", ")}`));
+  }
+
+  // ── Footer ───────────────────────────────────
+  console.log();
+  console.log(horizontalRule(ruleWidth));
+  console.log();
 }

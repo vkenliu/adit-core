@@ -117,7 +117,7 @@ checkpoints, and provide rewind/recovery.
 | Interactive TUI | No | Full Ink-based TUI | **ADIT** |
 | `explain` command | AI-powered session explanation | On cloud server | Both |
 | `doctor` command | Fix stuck sessions | Health checks with `--fix` | Both |
-| `status` command | Styled output with session cards | Yes | Entire (UX) |
+| `status` command | Styled output with session cards | Styled session cards, sectioned layout | **Implemented** |
 | `clean` command | Orphaned data cleanup | No | Entire |
 | `reset` command | Delete shadow branch + state | No | Entire |
 | Export formats | Not documented | JSON, JSONL, Markdown, gzip | **ADIT** |
@@ -153,8 +153,9 @@ checkpoints, and provide rewind/recovery.
 ## Remaining Features to Implement
 
 Features 1 (enable/disable lifecycle), 3 (content-aware redaction),
-4 (interactive rewind), 5 (session resume), and hook chaining from the
-original analysis have been implemented. The remaining items are:
+4 (interactive rewind), 5 (session resume), hook chaining, and styled
+status output from the original analysis have been implemented.
+The remaining items are:
 
 ### P1: Broader Agent Support
 
@@ -171,8 +172,6 @@ original analysis have been implemented. The remaining items are:
   Our `doctor --fix` partially covers this but dedicated commands are clearer.
 - **Accessible mode**: `ACCESSIBLE=1` for screen reader support.
 - **Token usage tracking**: Per-session token/cost metrics.
-- **Styled status output**: Entire's v0.4.6 redesigned `status` with session
-  cards looks better than our plain text output.
 - **Squash-merge support**: Entire handles resume/rewind after squash merges
   since v0.5.0. We should handle this if we implement resume.
 
