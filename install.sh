@@ -13,6 +13,9 @@
 {
 set -euo pipefail
 
+# Catch unexpected exits from set -e and report where it happened
+trap 'err "Install failed at line $LINENO (exit code $?). Please report this issue."' ERR
+
 # ── Colours / helpers ───────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -236,16 +239,26 @@ ensure_pnpm() {
   fi
 
   info "Installing pnpm …"
-  # Prefer npm install (most reliable). Corepack's registry fetch can
-  # fail behind proxies or with DNS issues.
+  local pnpm_installed=false
+
+  # Try npm first (most reliable), then corepack as fallback.
+  # Each method tries without sudo first, then with sudo if needed.
   if command -v npm &>/dev/null; then
-    npm install -g "pnpm@${REQUIRED_PNPM_MAJOR}" 2>/dev/null || npm install -g pnpm
-  elif command -v corepack &>/dev/null; then
-    corepack enable
-    corepack prepare "pnpm@${REQUIRED_PNPM_MAJOR}" --activate 2>/dev/null \
-      || corepack prepare pnpm --activate
-  else
-    die "Neither npm nor corepack found — cannot install pnpm"
+    if npm install -g "pnpm@${REQUIRED_PNPM_MAJOR}" 2>/dev/null; then
+      pnpm_installed=true
+    elif sudo npm install -g "pnpm@${REQUIRED_PNPM_MAJOR}" 2>/dev/null; then
+      pnpm_installed=true
+    fi
+  fi
+
+  if [[ "$pnpm_installed" == "false" ]] && command -v corepack &>/dev/null; then
+    if corepack enable 2>/dev/null && corepack prepare "pnpm@${REQUIRED_PNPM_MAJOR}" --activate 2>/dev/null; then
+      pnpm_installed=true
+    fi
+  fi
+
+  if [[ "$pnpm_installed" == "false" ]]; then
+    die "Could not install pnpm. Please install it manually: npm install -g pnpm"
   fi
 
   command -v pnpm &>/dev/null || die "pnpm installation failed"
