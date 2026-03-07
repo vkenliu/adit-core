@@ -175,6 +175,37 @@ have been implemented. The remaining items are:
 
 ---
 
+## Implementation Notes (This Branch)
+
+The following features were implemented on `feature/competitive-analysis-entireio`:
+
+### Hook Chaining (`packages/hooks/src/adapters/claude-code.ts`)
+`installHooks()` now merges per event key instead of overwriting. Stale ADIT
+entries are filtered out using `isAditHookCommand()`, then new entries are
+appended after other tools' hooks. This mirrors Entire's `addHookToMatcher()`
+approach. The `uninstallHooks()` method was already hook-chaining-aware.
+12 tests in `claude-code.test.ts`.
+
+### Styled Status Output (`packages/cli/src/commands/status.ts`)
+Redesigned `adit status` with picocolors-based session cards inspired by
+Entire's v0.4.6 format: status line with colored dot, session card with
+platform name + latest prompt + relative timestamps, sectioned layout with
+box-drawing characters for Git/Sync/Warnings sections. Shared formatting
+utilities extracted to `packages/cli/src/utils/format.ts` (padRight,
+timeAgo, sectionHeader, statusDot, joinDim). 21 tests in `format.test.ts`.
+
+### Squash-Merge Support (`packages/cli/src/commands/resume.ts`, `manager.ts`)
+Different approach from Entire (which uses git trailers on an orphan branch).
+ADIT leverages SQLite — when no checkpoint found on the current branch,
+`resume` searches across deleted branches via
+`getRecentCheckpointsExcludingBranch()`, filters to branches that no longer
+exist locally (`branchExists()`), and verifies checkpoint SHA reachability
+(`shaExists()`). `revertTo()` validates SHA reachability before checkout.
+`undo()` has a three-tier fallback: git parent → previous DB checkpoint → HEAD.
+4 new tests across events and manager test files.
+
+---
+
 ## Where ADIT Is Stronger (Do Not Change)
 
 - **Event granularity** -- 16 event types with nested parent hierarchy vs
@@ -193,6 +224,11 @@ have been implemented. The remaining items are:
 - **Export capabilities** -- JSON, JSONL, Markdown, gzip export formats
 - **Content-aware redaction** -- Configurable entropy threshold, custom patterns,
   extensible skip rules (Entire's is always-on with fixed settings)
+- **Hook chaining** -- Appends ADIT hooks alongside other tools instead of
+  overwriting (same behavior as Entire's `addHookToMatcher()`)
+- **Squash-merge resilience** -- SQLite-based cross-branch fallback with SHA
+  reachability checks (Entire uses git trailers; ADIT's approach is simpler
+  and doesn't require a prepare-commit-msg hook)
 - **Temp index technique** -- Cleaner checkpoint creation than shadow branches
 - **Data privacy** -- Local SQLite is safer than a git branch that might
   accidentally be pushed to a public repository
