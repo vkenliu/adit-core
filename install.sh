@@ -241,6 +241,12 @@ ensure_node() {
 }
 
 # ── pnpm ────────────────────────────────────────────────────────────
+# Validate that a pnpm version string is actually a version (digits.digits.digits)
+# and not an error message dumped to stdout (e.g. corepack errors).
+is_valid_version() {
+  [[ "$1" =~ ^[0-9]+\.[0-9]+ ]]
+}
+
 ensure_pnpm() {
   debug "ensure_pnpm: checking command -v pnpm"
   if command -v pnpm &>/dev/null; then
@@ -248,7 +254,7 @@ ensure_pnpm() {
     local pnpm_ver
     pnpm_ver="$(pnpm -v 2>/dev/null)" || true
     debug "ensure_pnpm: pnpm -v returned '${pnpm_ver:-}'"
-    if [[ -n "$pnpm_ver" ]]; then
+    if is_valid_version "${pnpm_ver:-}"; then
       local pnpm_major="${pnpm_ver%%.*}"
       if version_ge "$pnpm_major" "$REQUIRED_PNPM_MAJOR"; then
         ok "pnpm v${pnpm_ver} found (>= ${REQUIRED_PNPM_MAJOR} required)"
@@ -257,7 +263,7 @@ ensure_pnpm() {
         warn "pnpm v${pnpm_ver} found but >= ${REQUIRED_PNPM_MAJOR} is required"
       fi
     else
-      warn "pnpm found but could not determine version (likely a broken corepack shim)"
+      warn "pnpm found but broken (corepack shim failing) — will reinstall"
       # Disable corepack's pnpm shim so npm-installed pnpm takes precedence
       if command -v corepack &>/dev/null; then
         debug "ensure_pnpm: disabling corepack pnpm shim"
@@ -268,43 +274,54 @@ ensure_pnpm() {
     debug "ensure_pnpm: pnpm not found"
   fi
 
-  info "Installing pnpm via npm …"
+  info "Installing pnpm …"
   local pnpm_installed=false
 
+  # Method 1: npm install -g (try without sudo, then with sudo)
   if command -v npm &>/dev/null; then
     debug "ensure_pnpm: trying npm install -g pnpm"
     if npm install -g "pnpm@${REQUIRED_PNPM_MAJOR}" 2>/dev/null; then
       pnpm_installed=true
     else
-      debug "ensure_pnpm: npm install -g failed (exit $?), trying with sudo"
+      debug "ensure_pnpm: npm install -g failed, trying with sudo -n"
       if sudo -n npm install -g "pnpm@${REQUIRED_PNPM_MAJOR}" 2>/dev/null; then
         pnpm_installed=true
       else
-        debug "ensure_pnpm: sudo npm install -g also failed (exit $?)"
+        debug "ensure_pnpm: sudo npm install -g also failed"
       fi
     fi
   fi
 
-  # Only try corepack as a last resort — it requires network access
-  # to the npm registry and fails in restricted environments.
-  if [[ "$pnpm_installed" == "false" ]] && command -v corepack &>/dev/null; then
-    debug "ensure_pnpm: trying corepack as last resort"
-    if corepack enable 2>/dev/null && corepack prepare "pnpm@${REQUIRED_PNPM_MAJOR}" --activate 2>/dev/null; then
-      pnpm_installed=true
+  # Method 2: standalone pnpm install script (no sudo needed)
+  if [[ "$pnpm_installed" == "false" ]]; then
+    debug "ensure_pnpm: trying standalone install via curl"
+    if curl -fsSL https://get.pnpm.io/install.sh 2>/dev/null | env PNPM_VERSION="${REQUIRED_PNPM_MAJOR}" bash - 2>/dev/null; then
+      # The standalone installer puts pnpm in $PNPM_HOME or $HOME/.local/share/pnpm
+      local pnpm_home="${PNPM_HOME:-$HOME/.local/share/pnpm}"
+      if [[ -x "$pnpm_home/pnpm" ]]; then
+        export PNPM_HOME="$pnpm_home"
+        export PATH="$pnpm_home:$PATH"
+        pnpm_installed=true
+        debug "ensure_pnpm: standalone install succeeded at $pnpm_home"
+      fi
     fi
   fi
 
   if [[ "$pnpm_installed" == "false" ]]; then
-    die "Could not install pnpm. Please install it manually: npm install -g pnpm"
+    die "Could not install pnpm. Please install it manually: https://pnpm.io/installation"
   fi
 
   # Clear bash's command hash so it finds the newly installed pnpm
   hash -r 2>/dev/null || true
 
-  command -v pnpm &>/dev/null || die "pnpm installation failed"
+  command -v pnpm &>/dev/null || die "pnpm not found in PATH after installation"
   local final_ver
   final_ver="$(pnpm -v 2>/dev/null)" || true
-  ok "pnpm v${final_ver:-unknown} ready"
+  if is_valid_version "${final_ver:-}"; then
+    ok "pnpm v${final_ver} ready"
+  else
+    die "pnpm installed but not working — run 'pnpm -v' to diagnose"
+  fi
 }
 
 # ── Install dependencies ───────────────────────────────────────────
