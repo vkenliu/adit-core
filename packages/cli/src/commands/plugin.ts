@@ -5,6 +5,7 @@
  * for different AI platforms.
  */
 
+import { existsSync, rmSync } from "node:fs";
 import { loadConfig } from "@adit/core";
 import {
   getAdapter,
@@ -51,9 +52,66 @@ export async function pluginInstallCommand(
 /** adit plugin uninstall [platform] */
 export async function pluginUninstallCommand(
   platformArg?: string,
-  opts?: { json?: boolean },
+  opts?: { json?: boolean; all?: boolean; clean?: boolean },
 ): Promise<void> {
   const config = loadConfig();
+
+  if (opts?.all) {
+    // Uninstall hooks for all installed platforms
+    const uninstalled: string[] = [];
+    const errors: string[] = [];
+
+    for (const adapter of listAdapters()) {
+      if (adapter.hookMappings.length === 0) continue;
+      try {
+        const result = await adapter.validateInstallation(config.projectRoot);
+        if (result.valid) {
+          await adapter.uninstallHooks(config.projectRoot);
+          uninstalled.push(adapter.displayName);
+        }
+      } catch (err) {
+        errors.push(`${adapter.platform}: ${(err as Error).message}`);
+      }
+    }
+
+    // Optionally remove .adit/ data directory
+    let dataRemoved = false;
+    if (opts.clean && existsSync(config.dataDir)) {
+      try {
+        rmSync(config.dataDir, { recursive: true, force: true });
+        dataRemoved = true;
+      } catch (err) {
+        errors.push(`Failed to remove data directory: ${(err as Error).message}`);
+      }
+    }
+
+    if (opts.json) {
+      console.log(JSON.stringify({
+        ok: errors.length === 0,
+        action: "uninstall",
+        uninstalled,
+        dataRemoved,
+        errors: errors.length > 0 ? errors : undefined,
+      }));
+    } else {
+      if (uninstalled.length === 0) {
+        console.log("No ADIT hooks found to remove.");
+      } else {
+        for (const name of uninstalled) {
+          console.log(`Uninstalled ADIT hooks for ${name}`);
+        }
+      }
+      if (dataRemoved) {
+        console.log(`Removed data directory: ${config.dataDir}`);
+      }
+      for (const err of errors) {
+        console.error(err);
+      }
+    }
+    return;
+  }
+
+  // Single platform uninstall
   const platform = (platformArg ?? detectPlatform()) as Platform;
   const adapter = getAdapterSafe(platform);
   if (!adapter) return;
@@ -61,10 +119,20 @@ export async function pluginUninstallCommand(
   try {
     await adapter.uninstallHooks(config.projectRoot);
 
+    // Optionally remove .adit/ data directory
+    let dataRemoved = false;
+    if (opts?.clean && existsSync(config.dataDir)) {
+      rmSync(config.dataDir, { recursive: true, force: true });
+      dataRemoved = true;
+    }
+
     if (opts?.json) {
-      console.log(JSON.stringify({ ok: true, platform, action: "uninstall" }));
+      console.log(JSON.stringify({ ok: true, platform, action: "uninstall", dataRemoved }));
     } else {
       console.log(`Uninstalled ADIT hooks for ${adapter.displayName}`);
+      if (dataRemoved) {
+        console.log(`Removed data directory: ${config.dataDir}`);
+      }
     }
   } catch (err) {
     console.error(`Failed to uninstall hooks for ${platform}: ${(err as Error).message}`);

@@ -180,6 +180,7 @@ export interface EventQueryOptions {
   actor?: Actor;
   status?: EventStatus;
   hasCheckpoint?: boolean;
+  gitBranch?: string;
   limit?: number;
   afterSequence?: number;
 }
@@ -209,6 +210,10 @@ export function queryEvents(
   }
   if (opts.hasCheckpoint) {
     conditions.push("checkpoint_sha IS NOT NULL");
+  }
+  if (opts.gitBranch) {
+    conditions.push("git_branch = ?");
+    params.push(opts.gitBranch);
   }
   if (opts.afterSequence !== undefined) {
     conditions.push("sequence > ?");
@@ -325,6 +330,54 @@ export function getLatestCheckpointEvent(
     | Record<string, unknown>
     | undefined;
   return row ? rowToEvent(row) : null;
+}
+
+/**
+ * Find the most recent checkpoint event on a given git branch.
+ *
+ * Orders by started_at DESC to get the latest checkpoint regardless
+ * of session boundaries.
+ */
+export function getLatestCheckpointByBranch(
+  db: Database.Database,
+  branch: string,
+): AditEvent | null {
+  const row = db
+    .prepare(
+      `SELECT * FROM events
+       WHERE checkpoint_sha IS NOT NULL
+         AND git_branch = ?
+         AND deleted_at IS NULL
+       ORDER BY started_at DESC LIMIT 1`,
+    )
+    .get(branch) as Record<string, unknown> | undefined;
+  return row ? rowToEvent(row) : null;
+}
+
+/**
+ * Find recent checkpoint events across all branches, excluding a specific branch.
+ *
+ * Used as a fallback when the current branch has no checkpoints — typically
+ * after a squash merge where the feature branch's checkpoints are recorded
+ * under the old branch name that no longer exists.
+ *
+ * Returns checkpoints ordered by started_at DESC so the most recent comes first.
+ */
+export function getRecentCheckpointsExcludingBranch(
+  db: Database.Database,
+  excludeBranch: string,
+  limit = 10,
+): AditEvent[] {
+  const rows = db
+    .prepare(
+      `SELECT * FROM events
+       WHERE checkpoint_sha IS NOT NULL
+         AND git_branch != ?
+         AND deleted_at IS NULL
+       ORDER BY started_at DESC LIMIT ?`,
+    )
+    .all(excludeBranch, limit) as Record<string, unknown>[];
+  return rows.map(rowToEvent);
 }
 
 /**

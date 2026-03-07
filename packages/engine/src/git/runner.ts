@@ -89,3 +89,15 @@ export async function isGitRepo(cwd: string): Promise<boolean> {
   const result = await runGit(["rev-parse", "--git-dir"], { cwd });
   return result.exitCode === 0;
 }
+
+/** Check if a local branch exists */
+export async function branchExists(cwd: string, branch: string): Promise<boolean> {
+  const result = await runGit(["rev-parse", "--verify", `refs/heads/${branch}`], { cwd });
+  return result.exitCode === 0;
+}
+
+/** Check if a git object (commit, tree, blob) exists in the object store */
+export async function shaExists(cwd: string, sha: string): Promise<boolean> {
+  const result = await runGit(["cat-file", "-t", sha], { cwd });
+  return result.exitCode === 0;
+}

@@ -11,7 +11,8 @@ import { Command } from "commander";
 import { initCommand } from "./commands/init.js";
 import { listCommand } from "./commands/list.js";
 import { showCommand } from "./commands/show.js";
-import { revertCommand, undoCommand } from "./commands/revert.js";
+import { revertCommand, interactiveRevertCommand, undoCommand } from "./commands/revert.js";
+import { resumeCommand } from "./commands/resume.js";
 import { searchCommand } from "./commands/search.js";
 import {
   diffCommand,
@@ -61,7 +62,8 @@ program
   .command("init")
   .description("Initialize ADIT in the current project")
   .option("-p, --platform <platform>", "Target platform (claude-code, opencode, cursor, copilot, codex)")
-  .action((opts) => initCommand({ cwd: process.cwd(), platform: opts.platform }));
+  .option("-f, --force", "Force reinstall hooks (removes existing ADIT hooks first)")
+  .action((opts) => initCommand({ cwd: process.cwd(), platform: opts.platform, force: opts.force }));
 
 program
   .command("list")
@@ -145,6 +147,7 @@ program
   .option("--json", "Output as JSON")
   .action((opts) => doctorCommand({ fix: opts.fix, json: opts.json }));
 
+
 // Export commands
 const exportCmd = program
   .command("export")
@@ -202,8 +205,10 @@ pluginCmd
 pluginCmd
   .command("uninstall [platform]")
   .description("Remove ADIT hooks for a platform")
+  .option("-a, --all", "Uninstall hooks for all installed platforms")
+  .option("--clean", "Also remove the .adit/ data directory")
   .option("--json", "Output as JSON")
-  .action((platform, opts) => pluginUninstallCommand(platform, { json: opts.json }));
+  .action((platform, opts) => pluginUninstallCommand(platform, { json: opts.json, all: opts.all, clean: opts.clean }));
 
 pluginCmd
   .command("list")
@@ -334,16 +339,29 @@ const snapshotCmd = program
   .description("Git checkpoint snapshot commands (revert, undo, diff, env)");
 
 snapshotCmd
-  .command("revert <id>")
-  .description("Revert working tree to a checkpoint")
+  .command("revert [id]")
+  .description("Revert working tree to a checkpoint (interactive picker if no ID given)")
   .option("-y, --yes", "Skip confirmation")
-  .action((id, opts) => revertCommand(id, { yes: opts.yes }));
+  .option("-l, --limit <n>", "Max checkpoints to show in picker", "20")
+  .action((id, opts) => {
+    if (id) {
+      revertCommand(id, { yes: opts.yes });
+    } else {
+      interactiveRevertCommand({ yes: opts.yes, limit: parseInt(opts.limit, 10) });
+    }
+  });
 
 snapshotCmd
   .command("undo")
   .description("Revert to parent of last checkpoint")
   .option("-y, --yes", "Skip confirmation")
   .action((opts) => undoCommand({ yes: opts.yes }));
+
+snapshotCmd
+  .command("resume [branch]")
+  .description("Resume a session from the latest checkpoint on a branch")
+  .option("-y, --yes", "Skip confirmation and force-switch branches")
+  .action((branch, opts) => resumeCommand(branch, { yes: opts.yes }));
 
 snapshotCmd
   .command("diff <id>")

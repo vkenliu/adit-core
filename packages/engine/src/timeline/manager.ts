@@ -26,7 +26,7 @@ import {
 } from "@adit/core";
 import { createSnapshot, getCheckpointDiff } from "../snapshot/creator.js";
 import type { FileChange } from "../detector/working-tree.js";
-import { getHeadSha, getCurrentBranch } from "../git/runner.js";
+import { getHeadSha, getCurrentBranch, shaExists } from "../git/runner.js";
 import { getRefPrefix } from "../git/refs.js";
 import { runGitOrThrow } from "../git/runner.js";
 
@@ -186,6 +186,16 @@ export function createTimelineManager(
         throw new Error(`Event ${eventId} has no checkpoint`);
       }
 
+      // Verify the checkpoint commit object is reachable (may have been
+      // garbage collected if the ref was deleted after a squash merge).
+      const reachable = await shaExists(cwd, event.checkpointSha);
+      if (!reachable) {
+        throw new Error(
+          `Checkpoint ${event.checkpointSha.substring(0, 8)} is no longer reachable in the git object store. ` +
+          `The checkpoint ref may have been deleted and the object garbage collected.`,
+        );
+      }
+
       // Use checkout to restore working tree content from the checkpoint
       // WITHOUT moving the branch pointer. git reset --hard would move HEAD
       // to the ADIT-internal checkpoint commit, corrupting branch history.
@@ -201,18 +211,43 @@ export function createTimelineManager(
         throw new Error("No checkpoints to undo");
       }
 
-      // Find parent of latest checkpoint
+      // Find the target SHA to restore to. Try the git parent first;
+      // if that fails (e.g., after a squash merge where the parent commit
+      // is unreachable), fall back to the previous checkpoint in the DB
+      // by sequence order, or HEAD as a last resort.
+      let targetSha: string | null = null;
+
+      // Attempt 1: git parent of latest checkpoint commit
       const parentResult = await import("../git/refs.js").then((m) =>
         m.getParentSha(cwd, latest.checkpointSha!),
       );
-      if (!parentResult) {
-        throw new Error("Cannot find parent of latest checkpoint");
+      if (parentResult && (await shaExists(cwd, parentResult))) {
+        targetSha = parentResult;
       }
 
-      // Use checkout to restore working tree content from the parent
+      // Attempt 2: previous checkpoint in DB sequence
+      if (!targetSha) {
+        const allCheckpoints = queryEvents(db, { hasCheckpoint: true, limit: 2 });
+        // allCheckpoints is ordered by started_at DESC; [0] is latest, [1] is previous
+        const previous = allCheckpoints.find((e) => e.id !== latest.id);
+        if (previous?.checkpointSha && (await shaExists(cwd, previous.checkpointSha))) {
+          targetSha = previous.checkpointSha;
+        }
+      }
+
+      // Attempt 3: fall back to HEAD
+      if (!targetSha) {
+        targetSha = await getHeadSha(cwd);
+      }
+
+      if (!targetSha) {
+        throw new Error("Cannot find a valid target to undo to");
+      }
+
+      // Use checkout to restore working tree content from the target
       // WITHOUT moving the branch pointer. git reset --hard would move HEAD
       // to the ADIT-internal checkpoint commit, corrupting branch history.
-      await runGitOrThrow(["checkout", parentResult, "--", "."], { cwd });
+      await runGitOrThrow(["checkout", targetSha, "--", "."], { cwd });
     },
 
     async search(query: string, limit = 20): Promise<AditEvent[]> {

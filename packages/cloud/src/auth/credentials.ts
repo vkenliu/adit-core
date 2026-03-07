@@ -33,6 +33,8 @@ export interface CloudCredentials {
   syncErrorCount?: number;
   /** True when circuit breaker has tripped (sync disabled) */
   syncDisabled?: boolean;
+  /** ISO 8601 timestamp of the first error in the current failure window */
+  firstSyncErrorAt?: string;
 }
 
 const CREDENTIALS_FILE = "cloud-credentials.json";
@@ -109,19 +111,43 @@ export function credentialsFromEnvToken(
   };
 }
 
+/** Default circuit breaker window in milliseconds (1 hour) */
+const CIRCUIT_BREAKER_WINDOW_MS = 60 * 60 * 1000;
+
 /**
  * Increment the sync error counter in stored credentials.
- * Returns true if sync is now disabled (threshold reached).
+ *
+ * The circuit breaker uses a time-windowed approach: errors are only
+ * counted within a rolling window (default 1 hour). If the first error
+ * in the current window is older than the window, the counter resets
+ * before incrementing. This ensures that transient outages don't
+ * permanently disable auto-sync.
+ *
+ * Returns true if sync is now disabled (threshold reached within window).
  */
 export function incrementSyncErrors(threshold = 5): boolean {
   const creds = loadCredentials();
   if (!creds) return false;
-  const count = (creds.syncErrorCount ?? 0) + 1;
+
+  const now = new Date().toISOString();
+  let count = creds.syncErrorCount ?? 0;
+  let firstErrorAt = creds.firstSyncErrorAt ?? now;
+
+  // If the first error is outside the window, reset the counter
+  const elapsed = Date.now() - new Date(firstErrorAt).getTime();
+  if (elapsed > CIRCUIT_BREAKER_WINDOW_MS) {
+    count = 0;
+    firstErrorAt = now;
+  }
+
+  count += 1;
   const disabled = count >= threshold;
+
   saveCredentials({
     ...creds,
     syncErrorCount: count,
     syncDisabled: disabled,
+    firstSyncErrorAt: firstErrorAt,
   });
   return disabled;
 }
@@ -135,11 +161,30 @@ export function clearSyncErrors(): void {
     ...creds,
     syncErrorCount: 0,
     syncDisabled: false,
+    firstSyncErrorAt: undefined,
   });
 }
 
-/** Check if sync has been disabled by the circuit breaker. */
+/**
+ * Check if sync has been disabled by the circuit breaker.
+ *
+ * If the breaker is tripped but the error window has expired (>1 hour
+ * since the first error), automatically resets the breaker and returns
+ * false — giving auto-sync another chance.
+ */
 export function isSyncDisabled(): boolean {
   const creds = loadCredentials();
-  return creds?.syncDisabled === true;
+  if (creds?.syncDisabled !== true) return false;
+
+  // Auto-reset if the error window has expired
+  const firstErrorAt = creds.firstSyncErrorAt;
+  if (firstErrorAt) {
+    const elapsed = Date.now() - new Date(firstErrorAt).getTime();
+    if (elapsed > CIRCUIT_BREAKER_WINDOW_MS) {
+      clearSyncErrors();
+      return false;
+    }
+  }
+
+  return true;
 }

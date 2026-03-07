@@ -16,16 +16,21 @@ ADIT is built on three pillars:
 
 - **Integrated Prompt & CoT Capture** — Records the full dialogue including Chain of Thought
 - **Shadow Git Checkpoints** — Instant revert to any working state via `adit snapshot revert <id>`
-- **Multi-Actor Timeline** — Distinguishes Assistant (A), User (U), Tool (T), and System (S) actions
+- **Interactive Revert Picker** — `adit snapshot revert` (no ID) shows a numbered list of checkpoints with SHA, timestamp, file count, and summary
+- **Session Resume** — `adit snapshot resume [branch]` restores working tree from the latest checkpoint on a branch, prints session context, and outputs platform-specific continue commands
+- **Squash-Merge Support** — Resume and revert work after squash merges; automatically finds checkpoints from deleted branches with SHA reachability validation and graceful fallbacks
+- **Content-Aware Secret Redaction** — Shannon entropy scoring with 35+ regex patterns (AWS, GitHub, Stripe, etc.), configurable thresholds and skip rules, custom pattern support
+- **Hook Chaining** — Installs alongside other tools' hooks (Entire CLI, linters, formatters) without overwriting; reinstalls cleanly replace only ADIT entries
+- **Multi-Actor Timeline** — Distinguishes assistant, user, tool, and system actions
 - **Environment Snapshotting** — Captures git state, dependency versions, runtime context, Docker detection, shell info, CPU/memory, and package managers
 - **Environment Drift Detection** — Automatically detects and records environment changes between sessions
-- **Cloud Sync** — Device-code authentication, cursor-based incremental push, auto-sync after hook events, and transcript upload
+- **Cloud Sync** — Device-code authentication, cursor-based incremental push, auto-sync after hook events, transcript upload, and rolling-window circuit breaker
 - **Auto-Sync** — Fire-and-forget cloud sync triggered by record count threshold or time elapsed, with fail-open error handling
 - **Platform Session Tracking** — Correlates events to platform-native session IDs for accurate multi-session handling
 - **SpecFlow Planning** — Structured Intent → Roadmap → Tasks workflow
 - **Interactive TUI** — Full terminal UI built with React/Ink with live detail updates, search, diffs, and environment snapshots
-- **Platform Adapter System** — Pluggable architecture for AI platform integration (Claude Code supported, extensible to Cursor, Copilot, and others)
-- **Plugin Management** — Install, validate, and manage platform hooks via `adit plugin`
+- **Platform Adapter System** — Pluggable architecture for AI platform integration (Claude Code and OpenCode fully supported, extensible to Cursor, Copilot, Codex, and others)
+- **Plugin Management** — Install, validate, and manage platform hooks via `adit plugin` with `--all` auto-detect and `--clean` data removal
 - **Advanced Search** — Full-text search with actor, type, date range, branch, and checkpoint filters
 - **Flexible Export** — Export events and sessions as JSON, JSONL, or Markdown reports with optional gzip compression
 - **Fail-Open Hooks** — Recording errors never block the AI agent
@@ -36,7 +41,7 @@ TypeScript pnpm monorepo with six packages:
 
 | Package | Description |
 |---------|-------------|
-| `@adit/core` | Types, SQLite database, config, sync primitives (ULID, vector clocks) |
+| `@adit/core` | Types, SQLite database, config, sync primitives (ULID, vector clocks), content-aware secret redaction |
 | `@adit/engine` | Git operations, temp-index snapshots, change detection, timeline management, environment capture |
 | `@adit/hooks` | Hook handlers with platform adapter registry (Claude Code adapter implemented) |
 | `@adit/cli` | Commander.js CLI with interactive TUI (React/Ink) |
@@ -47,9 +52,9 @@ TypeScript pnpm monorepo with six packages:
 
 ADIT uses a pluggable adapter pattern for AI platform integration. Each adapter maps platform-specific hook events to normalized ADIT handlers:
 
-- **Claude Code** — Fully supported. Hooks: `UserPromptSubmit`, `Stop`, `SessionStart`, `SessionEnd`, `TaskCompleted`, `Notification`, `SubagentStart`, `SubagentStop`
+- **Claude Code** — Fully supported with hook chaining (installs alongside other tools' hooks). Hooks: `UserPromptSubmit`, `Stop`, `SessionStart`, `SessionEnd`, `TaskCompleted`, `Notification`, `SubagentStart`, `SubagentStop`
 - **OpenCode** — Fully supported via generated plugin. Events: `chat.message`, `session.idle`, `session.created`, `session.deleted`, `session.error`, `command.executed`, `todo.updated`, `message.part.updated`. Includes process exit/signal safety net for session-end.
-- **Cursor, GitHub Copilot** — Detected by the adapter registry; adapters can be contributed
+- **Cursor, GitHub Copilot, Codex** — Detected by the adapter registry; adapters can be contributed
 
 Adapters are registered via `registerAdapter()` and auto-detected from environment variables.
 
@@ -61,6 +66,7 @@ Cloud sync uses a cursor-based incremental push model:
 - **Count-based trigger** — syncs when unsynced records reach the threshold (default: 20, configurable via `ADIT_CLOUD_SYNC_THRESHOLD`)
 - **Time-based trigger** — syncs when time since last sync exceeds timeout (default: 2 hours, configurable via `ADIT_CLOUD_SYNC_TIMEOUT_HOURS`)
 - **Transcript upload** — incremental upload of AI conversation transcripts
+- **Circuit breaker** — Auto-sync disables after repeated failures within a 1-hour rolling window and auto-recovers when the window expires
 - All sync errors are fail-open — network or auth failures are silently retried on the next trigger
 - Disable auto-sync with `ADIT_CLOUD_AUTO_SYNC=false` or `ADIT_CLOUD_ENABLED=false`
 
@@ -100,8 +106,8 @@ npx adit cloud login --server <url>
 
 | Command | Description |
 |---------|-------------|
-| `adit init` | Initialize hooks + data directory |
-| `adit status` | Show initialization state, hooks, active session, event/checkpoint/unsynced counts, and git state (`--json`) |
+| `adit init` | Initialize hooks + data directory (`--platform`, `--force` to reinstall) |
+| `adit status` | Styled status with session card, git state, sync info, and hook configuration (`--json`) |
 | `adit config` | Show current configuration (`--json`) |
 | `adit doctor` | Validate installation: SQLite integrity, hooks, stale sessions, disk usage (`--fix`, `--json`) |
 
@@ -126,8 +132,9 @@ All git checkpoint operations are grouped under `adit snapshot` to clearly separ
 
 | Command | Description |
 |---------|-------------|
-| `adit snapshot revert <id>` | Restore working tree to checkpoint (warns on dependency changes) |
+| `adit snapshot revert [id]` | Restore working tree to checkpoint; interactive picker if no ID given (`--yes`, `--limit`) |
 | `adit snapshot undo` | Revert to parent of last checkpoint |
+| `adit snapshot resume [branch]` | Resume session from latest checkpoint on a branch; supports squash-merged branches; prints continue commands (`--yes`) |
 | `adit snapshot diff <id>` | Show diff with `--max-lines`, `--offset-lines`, `--file` |
 | `adit snapshot env show <id>` | Show environment snapshot for an event |
 | `adit snapshot env latest` | Show most recent snapshot (`--json`) |
@@ -161,7 +168,7 @@ All git checkpoint operations are grouped under `adit snapshot` to clearly separ
 | Command | Description |
 |---------|-------------|
 | `adit plugin install [platform]` | Install hooks for a platform |
-| `adit plugin uninstall [platform]` | Remove hooks |
+| `adit plugin uninstall [platform]` | Remove hooks (`--all` for all platforms, `--clean` to remove data dir) |
 | `adit plugin list` | List available platform adapters |
 | `adit plugin validate [platform]` | Validate hook installation |
 

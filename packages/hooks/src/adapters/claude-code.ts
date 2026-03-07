@@ -220,12 +220,39 @@ export const claudeCodeAdapter: PlatformAdapter = {
     }
 
     const hookConfig = this.generateHookConfig(aditBinaryPath);
-    settings.hooks = {
-      ...((settings.hooks as Record<string, unknown>) ?? {}),
-      ...(hookConfig.content.hooks as Record<string, unknown>),
-    };
+    const existingHooks = (settings.hooks as Record<string, unknown[]>) ?? {};
+    const newHooks = hookConfig.content.hooks as Record<string, unknown[]>;
 
+    // Merge hook entries per event key: preserve other tools' hooks,
+    // remove stale ADIT entries, then append new ADIT entries.
+    const mergedHooks: Record<string, unknown[]> = { ...existingHooks };
+    for (const [eventKey, aditEntries] of Object.entries(newHooks)) {
+      const existing = Array.isArray(mergedHooks[eventKey]) ? mergedHooks[eventKey] : [];
+
+      // Remove stale ADIT entries (same logic as uninstallHooks)
+      const nonAditEntries = existing.filter(
+        (raw) => {
+          const entry = raw as { command?: string; hooks?: Array<{ command?: string }> };
+          if (typeof entry.command === "string" && isAditHookCommand(entry.command)) return false;
+          if (Array.isArray(entry.hooks)) {
+            return !entry.hooks.some(
+              (h) => typeof h.command === "string" && isAditHookCommand(h.command),
+            );
+          }
+          return true;
+        },
+      );
+
+      // Append new ADIT entries after other tools' hooks
+      mergedHooks[eventKey] = [...nonAditEntries, ...aditEntries];
+    }
+
+    settings.hooks = mergedHooks;
     writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+  },
+
+  getResumeCommand(_projectRoot: string): string | null {
+    return "claude --continue";
   },
 
   async uninstallHooks(projectRoot: string): Promise<void> {

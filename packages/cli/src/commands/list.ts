@@ -6,6 +6,7 @@
 
 import { loadConfig, openDatabase, closeDatabase, type AditEvent, type Actor, type EventType } from "@adit/core";
 import { getEventSummary } from "../utils/summary.js";
+import { padRight, formatDateTime } from "../utils/format.js";
 import { createTimelineManager } from "@adit/engine";
 import pc from "picocolors";
 
@@ -70,7 +71,7 @@ export async function listCommand(opts: ListCommandOptions): Promise<void> {
 
     for (const event of events) {
       const actor = actorSymbol(event.actor);
-      const time = formatTime(event.startedAt);
+      const time = formatDateTime(event.startedAt);
       const summary = getSummary(event, opts.expand);
       const idShort = event.id.substring(0, 10);
       const checkpoint = event.checkpointSha ? " " + pc.green("*") : "";
@@ -121,24 +122,8 @@ function colorActor(text: string, actor: string): string {
   }
 }
 
-function formatTime(iso: string): string {
-  try {
-    const d = new Date(iso);
-    const month = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    const time = d.toLocaleTimeString("en-US", { hour12: false });
-    return `${month}/${day} ${time}`;
-  } catch {
-    return iso.substring(5, 19).replace("T", " ");
-  }
-}
-
 function getSummary(event: AditEvent, expand?: boolean): string {
   return getEventSummary(event, expand ? 200 : 60);
-}
-
-function padRight(s: string, len: number): string {
-  return s.length >= len ? s.substring(0, len) : s + " ".repeat(len - s.length);
 }
 
 export function sortEvents(events: AditEvent[], field: SortField): AditEvent[] {

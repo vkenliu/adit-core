@@ -23,6 +23,8 @@ export {
   allocateSequence,
   searchEvents,
   getLatestCheckpointEvent,
+  getLatestCheckpointByBranch,
+  getRecentCheckpointsExcludingBranch,
   clearEvents,
   countEvents,
   type InsertEventInput,

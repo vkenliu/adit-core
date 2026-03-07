@@ -42,7 +42,11 @@ function detectPlatforms(projectRoot: string): Platform[] {
   return Array.from(platforms);
 }
 
-export async function initCommand(opts: { cwd?: string; platform?: string }): Promise<void> {
+export async function initCommand(opts: {
+  cwd?: string;
+  platform?: string;
+  force?: boolean;
+}): Promise<void> {
   const cwd = opts.cwd ?? process.cwd();
 
   // Verify we're in a git repo
@@ -52,6 +56,24 @@ export async function initCommand(opts: { cwd?: string; platform?: string }): Pr
   }
 
   const config = loadConfig(cwd);
+  const gitRoot = findGitRoot(cwd) ?? cwd;
+
+  // If --force, uninstall existing hooks first
+  if (opts.force) {
+    const { listAdapters: listAll } = await import("@adit/hooks/adapters");
+    for (const adapter of listAll()) {
+      if (adapter.hookMappings.length === 0) continue;
+      try {
+        const result = await adapter.validateInstallation(gitRoot);
+        if (result.valid) {
+          await adapter.uninstallHooks(gitRoot);
+          console.log(`Removed existing ${adapter.displayName} hooks`);
+        }
+      } catch {
+        // best-effort cleanup
+      }
+    }
+  }
 
   // Create data directory
   mkdirSync(config.dataDir, { recursive: true });
@@ -63,7 +85,6 @@ export async function initCommand(opts: { cwd?: string; platform?: string }): Pr
   console.log(`Initialized database: ${config.dbPath}`);
 
   // Add .adit/ to .gitignore if not already there
-  const gitRoot = findGitRoot(cwd) ?? cwd;
   const gitignorePath = join(gitRoot, ".gitignore");
   if (existsSync(gitignorePath)) {
     const content = readFileSync(gitignorePath, "utf-8");

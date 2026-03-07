@@ -35,6 +35,16 @@ export interface PlatformAdapter {
 
   /** Uninstall/deregister hooks */
   uninstallHooks(projectRoot: string): Promise<void>;
+
+  /**
+   * Get the platform-specific command to resume/continue an AI session.
+   *
+   * Returns a human-readable command string (e.g., "claude --continue")
+   * that the user can run to resume working with the AI agent after
+   * restoring a checkpoint. Returns null if the platform does not
+   * support a resume command.
+   */
+  getResumeCommand?(projectRoot: string): string | null;
 }
 
 /** Maps a platform event to an ADIT handler */

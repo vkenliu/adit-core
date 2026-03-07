@@ -468,6 +468,10 @@ export const opencodeAdapter: PlatformAdapter = {
     writeFileSync(pluginPath, content);
   },
 
+  getResumeCommand(_projectRoot: string): string | null {
+    return "opencode";
+  },
+
   async uninstallHooks(projectRoot: string): Promise<void> {
     const pluginPath = join(projectRoot, ".opencode", "plugins", PLUGIN_FILENAME);
     if (!existsSync(pluginPath)) return;
