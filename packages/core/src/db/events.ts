@@ -180,6 +180,7 @@ export interface EventQueryOptions {
   actor?: Actor;
   status?: EventStatus;
   hasCheckpoint?: boolean;
+  gitBranch?: string;
   limit?: number;
   afterSequence?: number;
 }
@@ -209,6 +210,10 @@ export function queryEvents(
   }
   if (opts.hasCheckpoint) {
     conditions.push("checkpoint_sha IS NOT NULL");
+  }
+  if (opts.gitBranch) {
+    conditions.push("git_branch = ?");
+    params.push(opts.gitBranch);
   }
   if (opts.afterSequence !== undefined) {
     conditions.push("sequence > ?");
@@ -324,6 +329,28 @@ export function getLatestCheckpointEvent(
   const row = db.prepare(sql).get(...params) as
     | Record<string, unknown>
     | undefined;
+  return row ? rowToEvent(row) : null;
+}
+
+/**
+ * Find the most recent checkpoint event on a given git branch.
+ *
+ * Orders by started_at DESC to get the latest checkpoint regardless
+ * of session boundaries.
+ */
+export function getLatestCheckpointByBranch(
+  db: Database.Database,
+  branch: string,
+): AditEvent | null {
+  const row = db
+    .prepare(
+      `SELECT * FROM events
+       WHERE checkpoint_sha IS NOT NULL
+         AND git_branch = ?
+         AND deleted_at IS NULL
+       ORDER BY started_at DESC LIMIT 1`,
+    )
+    .get(branch) as Record<string, unknown> | undefined;
   return row ? rowToEvent(row) : null;
 }
 

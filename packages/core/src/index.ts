@@ -53,6 +53,7 @@ export {
   allocateSequence,
   searchEvents,
   getLatestCheckpointEvent,
+  getLatestCheckpointByBranch,
   clearEvents,
   countEvents,
   insertDiff,
@@ -101,6 +102,20 @@ export {
   redactSensitiveKeys,
   type AditConfig,
 } from "./config/index.js";
+
+// Security — content-aware secret redaction
+export {
+  shannonEntropy,
+  redactContent,
+  redactObject,
+  shouldSkipField,
+  builtinPatterns,
+  defaultSkipFields,
+  type RedactionResult,
+  type SecretDetection,
+  type RedactionConfig,
+  type SecretPattern,
+} from "./security/content-redaction.js";
 
 // Performance logging
 export {

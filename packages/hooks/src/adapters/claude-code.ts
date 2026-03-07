@@ -228,6 +228,10 @@ export const claudeCodeAdapter: PlatformAdapter = {
     writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
   },
 
+  getResumeCommand(_projectRoot: string): string | null {
+    return "claude --continue";
+  },
+
   async uninstallHooks(projectRoot: string): Promise<void> {
     const settingsPath = join(projectRoot, ".claude", "settings.local.json");
     if (!existsSync(settingsPath)) return;

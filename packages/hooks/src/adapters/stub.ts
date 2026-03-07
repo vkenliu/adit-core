@@ -66,6 +66,10 @@ export function createStubAdapter(
     async uninstallHooks(_projectRoot: string): Promise<void> {
       notSupported("uninstallHooks");
     },
+
+    getResumeCommand(_projectRoot: string): string | null {
+      return null;
+    },
   };
 }
 
