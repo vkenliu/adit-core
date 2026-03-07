@@ -282,16 +282,21 @@ register_commands() {
   info "Registering adit and adit-hook commands …"
   cd "$SCRIPT_DIR"
 
-  # Determine a bin directory on the user's PATH
+  # Determine a bin directory that is already on PATH.
+  # On macOS /usr/local/bin is standard; on Linux check common locations.
   local bin_dir=""
-  if [[ -d "$HOME/.local/bin" ]] && echo "$PATH" | tr ':' '\n' | grep -q "$HOME/.local/bin"; then
+  for candidate in /usr/local/bin "$HOME/.local/bin" "$HOME/bin"; do
+    if echo "$PATH" | tr ':' '\n' | grep -q "^${candidate}$"; then
+      bin_dir="$candidate"
+      break
+    fi
+  done
+
+  # Fallback: use ~/.local/bin and add it to the shell profile
+  if [[ -z "$bin_dir" ]]; then
     bin_dir="$HOME/.local/bin"
-  elif [[ -d "$HOME/.local/bin" ]]; then
-    bin_dir="$HOME/.local/bin"
-  else
-    bin_dir="$HOME/.local/bin"
-    mkdir -p "$bin_dir"
   fi
+  mkdir -p "$bin_dir"
 
   # Resolve absolute paths to the built entry points
   local adit_bin="$SCRIPT_DIR/packages/cli/dist/index.js"
@@ -321,13 +326,34 @@ EOF
   ok "adit     → $bin_dir/adit"
   ok "adit-hook → $bin_dir/adit-hook"
 
-  # Check if bin_dir is on PATH
+  # If bin_dir is not on PATH, add it to the shell profile automatically
   if ! echo "$PATH" | tr ':' '\n' | grep -q "^${bin_dir}$"; then
-    echo
-    warn "$bin_dir is not in your PATH"
-    printf "  Add the following to your shell profile (~/.bashrc, ~/.zshrc, etc.):\n"
-    printf "    ${BOLD}export PATH=\"%s:\$PATH\"${NC}\n" "$bin_dir"
-    echo
+    local shell_profile=""
+    if [[ -n "${ZSH_VERSION:-}" ]] || [[ "$SHELL" == */zsh ]]; then
+      shell_profile="$HOME/.zshrc"
+    elif [[ -f "$HOME/.bashrc" ]]; then
+      shell_profile="$HOME/.bashrc"
+    elif [[ -f "$HOME/.bash_profile" ]]; then
+      shell_profile="$HOME/.bash_profile"
+    elif [[ -f "$HOME/.profile" ]]; then
+      shell_profile="$HOME/.profile"
+    fi
+
+    local path_line="export PATH=\"${bin_dir}:\$PATH\""
+    if [[ -n "$shell_profile" ]]; then
+      # Only add if not already present
+      if ! grep -qF "$bin_dir" "$shell_profile" 2>/dev/null; then
+        printf '\n# Added by ADIT installer\n%s\n' "$path_line" >> "$shell_profile"
+        ok "Added $bin_dir to PATH in $shell_profile"
+      fi
+      # Also export for the current session
+      export PATH="${bin_dir}:$PATH"
+    else
+      warn "$bin_dir is not in your PATH"
+      printf "  Add the following to your shell profile:\n"
+      printf "    ${BOLD}%s${NC}\n" "$path_line"
+      echo
+    fi
   fi
 }
 
