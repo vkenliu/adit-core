@@ -5,13 +5,18 @@
 #  libraries, builds the project, and registers the `adit` and
 #  `adit-hook` commands.
 #
-#  Wrap the entire script in { } so bash reads it fully into memory
-#  before executing. Without this, `curl | bash` can lose the rest
-#  of the script when a sub-command (e.g. nvm, NodeSource) reads
-#  from stdin.
+#  Two protections for `curl | bash` piped execution:
+#  1. Wrap in { } so bash reads the entire script before executing.
+#  2. `exec </dev/null` inside the block so child processes (git,
+#     nvm, npm, pnpm) cannot read from the pipe's stdin.
 # ────────────────────────────────────────────────────────────────────
 {
 set -euo pipefail
+
+# Close stdin and reopen from /dev/null so that sub-commands
+# (git clone, nvm, npm, pnpm) cannot accidentally consume the
+# piped script when invoked via `curl | bash`.
+exec </dev/null
 
 # Catch unexpected exits from set -e and report where it happened
 trap 'err "Install failed at line $LINENO (exit code $?). Please report this issue."' ERR
@@ -29,6 +34,7 @@ ok()    { printf "${GREEN}[ok]${NC}    %s\n" "$*"; }
 warn()  { printf "${YELLOW}[warn]${NC}  %s\n" "$*"; }
 err()   { printf "${RED}[error]${NC} %s\n" "$*" >&2; }
 die()   { err "$*"; exit 1; }
+debug() { [[ "${ADIT_DEBUG:-}" == "1" ]] && printf "[debug] %s\n" "$*" || true; }
 
 # ── Constants ───────────────────────────────────────────────────────
 REQUIRED_NODE_MAJOR=20
@@ -36,21 +42,24 @@ REQUIRED_PNPM_MAJOR=9
 ADIT_REPO="https://github.com/vkenliu/adit-core.git"
 ADIT_INSTALL_DIR="${ADIT_INSTALL_DIR:-$HOME/.adit-core}"
 
-# Resolve the project root. When piped via `curl | bash` BASH_SOURCE
-# points nowhere useful, so we clone the repo first.
-if [[ -f "$(dirname "${BASH_SOURCE[0]:-/dev/null}")/package.json" ]]; then
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-else
-  # Running via curl | bash — clone the repo into ADIT_INSTALL_DIR
-  if [[ -d "$ADIT_INSTALL_DIR/.git" ]]; then
-    info "Updating existing clone at $ADIT_INSTALL_DIR …"
-    git -C "$ADIT_INSTALL_DIR" pull --ff-only 2>/dev/null || true
+# ── Resolve project root ───────────────────────────────────────────
+# Must be inside a function so bash fully parses the script before
+# executing when piped via `curl | bash`.
+resolve_project_root() {
+  if [[ -f "$(dirname "${BASH_SOURCE[0]:-/dev/null}")/package.json" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   else
-    info "Cloning adit-core into $ADIT_INSTALL_DIR …"
-    git clone "$ADIT_REPO" "$ADIT_INSTALL_DIR"
+    # Running via curl | bash — clone the repo into ADIT_INSTALL_DIR
+    if [[ -d "$ADIT_INSTALL_DIR/.git" ]]; then
+      info "Updating existing clone at $ADIT_INSTALL_DIR …"
+      git -C "$ADIT_INSTALL_DIR" pull --ff-only </dev/null 2>/dev/null || true
+    else
+      info "Cloning adit-core into $ADIT_INSTALL_DIR …"
+      git clone "$ADIT_REPO" "$ADIT_INSTALL_DIR" </dev/null
+    fi
+    SCRIPT_DIR="$ADIT_INSTALL_DIR"
   fi
-  SCRIPT_DIR="$ADIT_INSTALL_DIR"
-fi
+}
 
 # ── OS / distro detection ──────────────────────────────────────────
 detect_platform() {
@@ -422,14 +431,25 @@ main() {
 
   HAS_BUILD_TOOLS=true
 
+  debug "starting resolve_project_root"
+  resolve_project_root
+  debug "starting detect_platform"
   detect_platform
+  debug "starting ensure_git"
   ensure_git
+  debug "starting check_build_tools"
   check_build_tools
+  debug "starting ensure_node"
   ensure_node
+  debug "starting ensure_pnpm"
   ensure_pnpm
+  debug "starting install_deps"
   install_deps
+  debug "starting build_project"
   build_project
+  debug "starting register_commands"
   register_commands
+  debug "starting verify"
   verify
 }
 
