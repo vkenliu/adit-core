@@ -13,7 +13,7 @@ import type Database from "better-sqlite3";
 import { getSyncState, upsertSyncState, withPerf } from "@adit/core";
 import type { SyncState } from "@adit/core";
 import type { CloudClient } from "../http/client.js";
-import { buildSyncBatch, batchRecordCount } from "./serializer.js";
+import { buildSyncBatch, batchRecordCount, countUnsyncedRecords } from "./serializer.js";
 import { handleConflicts, type SyncConflict } from "./conflicts.js";
 
 export type { SyncConflict } from "./conflicts.js";
@@ -41,10 +41,25 @@ interface PushResponse {
   newSyncVersion: number;
 }
 
+/** Per-project cursor entry returned by the server in projectCursors. */
+interface ProjectCursor {
+  lastSyncedEventId: string | null;
+  lastSyncedAt: string | null;
+}
+
+/**
+ * Response from GET /api/sync/status.
+ *
+ * The server tracks cursors per (clientId, projectId) pair and returns them
+ * in the `projectCursors` map. The top-level `lastSyncedEventId` and
+ * `syncVersion` remain for backward compatibility.
+ */
 interface StatusResponse {
   lastSyncedEventId: string | null;
   syncVersion: number;
   lastSyncedAt: string | null;
+  /** Per-project cursor map. Key is projectId. Present on updated servers. */
+  projectCursors?: Record<string, ProjectCursor>;
 }
 
 export class SyncEngine {
@@ -87,11 +102,63 @@ export class SyncEngine {
       // 1. Get server's current cursor
       const serverStatus = await this.getRemoteStatus();
 
-      // 2. Compare with local state and adopt server's cursor
-      //    (server is authoritative for cursor position)
-      let cursor = serverStatus.lastSyncedEventId;
+      // 2. Extract per-project cursor (preferred) or fall back to global cursor.
+      //    The server returns projectCursors[projectId] with the watermark
+      //    for this specific project. If the server hasn't seen any events
+      //    for this project yet, the entry will be absent — meaning send all.
+      let cursor: string | null;
+      let lastSyncedAt: string | null;
       let syncVersion = serverStatus.syncVersion;
-      const lastSyncedAt = serverStatus.lastSyncedAt;
+
+      const projectEntry = serverStatus.projectCursors?.[this.projectId];
+      if (projectEntry !== undefined) {
+        // Server has a per-project cursor — use it directly.
+        cursor = projectEntry.lastSyncedEventId;
+        lastSyncedAt = projectEntry.lastSyncedAt;
+        if (process.env.ADIT_DEBUG) {
+          process.stderr.write(
+            `[adit-cloud] sync: using per-project cursor for ${this.projectId}: ${cursor ?? "null"}\n`,
+          );
+        }
+      } else if (serverStatus.projectCursors !== undefined) {
+        // Server supports per-project cursors but has no entry for this
+        // project — it has never seen events for it. Send everything.
+        cursor = null;
+        lastSyncedAt = null;
+        if (process.env.ADIT_DEBUG) {
+          process.stderr.write(
+            `[adit-cloud] sync: no per-project cursor for ${this.projectId} — full push\n`,
+          );
+        }
+      } else {
+        // Legacy server without projectCursors — fall back to global cursor
+        // with the cursor-ahead guard for safety.
+        cursor = serverStatus.lastSyncedEventId;
+        lastSyncedAt = serverStatus.lastSyncedAt;
+
+        if (cursor) {
+          const unsyncedWithCursor = countUnsyncedRecords(
+            this.db,
+            cursor,
+            lastSyncedAt,
+            this.projectId,
+          );
+          const totalLocal = countUnsyncedRecords(
+            this.db,
+            null,
+            null,
+            this.projectId,
+          );
+          if (unsyncedWithCursor === 0 && totalLocal > 0) {
+            if (process.env.ADIT_DEBUG) {
+              process.stderr.write(
+                `[adit-cloud] sync: legacy global cursor ${cursor} is ahead of all ${totalLocal} local records — resetting to full push\n`,
+              );
+            }
+            cursor = null;
+          }
+        }
+      }
 
       const result: SyncResult = {
         accepted: 0,
@@ -166,6 +233,7 @@ export class SyncEngine {
         if (count < this.batchSize) break;
       }
 
+
       return result;
     };
 
@@ -175,9 +243,10 @@ export class SyncEngine {
     return doSync();
   }
 
-  /** Get sync status from server */
+  /** Get sync status from server, scoped to this project. */
   async getRemoteStatus(): Promise<StatusResponse> {
-    return this.client.get<StatusResponse>("/api/sync/status");
+    const params = new URLSearchParams({ projectId: this.projectId });
+    return this.client.get<StatusResponse>(`/api/sync/status?${params.toString()}`);
   }
 
   /** Get local sync state */

@@ -350,7 +350,7 @@ function generatePluginContent(aditBinaryPath: string): string {
 // hook dispatcher via child process. All errors are swallowed (fail-open).
 
 const { spawn, spawnSync } = require("child_process");
-const { mkdirSync, writeFileSync, existsSync, readFileSync } = require("fs");
+const { mkdirSync, writeFileSync, appendFileSync, existsSync, readFileSync } = require("fs");
 const path = require("path");
 
 const ADIT_CMD = ${JSON.stringify(cmd)};
@@ -406,55 +406,140 @@ function spawnAditHookSync(hookType, data) {
  * (.meta.json) to track how many messages were written on the previous
  * call and only appends new ones.
  */
-async function fetchTranscript(client, cwd, sessionID) {
+/**
+ * Export session messages via "opencode export <sessionID>" CLI command
+ * and write them as JSONL for the transcript upload pipeline.
+ *
+ * OpenCode TUI does not expose an HTTP API — the SDK client's baseUrl
+ * defaults to localhost:4096 which is only used by "opencode serve".
+ * The "opencode export" command reads directly from OpenCode's SQLite
+ * database, so it works regardless of whether a server is running.
+ *
+ * The function is incremental: a .meta.json sidecar tracks how many
+ * messages were written previously, and only new messages are appended.
+ */
+function fetchTranscript(cwd, sessionID) {
   try {
-    const result = await client.session.messages({ sessionID });
-    const messages = (result && result.data) || [];
-    if (messages.length === 0) return null;
+    if (process.env.ADIT_DEBUG) {
+      process.stderr.write("[adit-transcript] exporting session " + sessionID + "\\n");
+    }
+
+    var exportResult = spawnSync("opencode", ["export", sessionID], {
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 15000,
+      env: { ...process.env },
+    });
+
+    if (exportResult.status !== 0 || !exportResult.stdout) {
+      if (process.env.ADIT_DEBUG) {
+        var errOut = exportResult.stderr ? exportResult.stderr.toString().trim() : "";
+        process.stderr.write("[adit-transcript] export failed (exit " + exportResult.status + "): " + errOut.substring(0, 500) + "\\n");
+      }
+      return null;
+    }
+
+    var rawOutput = exportResult.stdout.toString().trim();
+    if (!rawOutput) {
+      if (process.env.ADIT_DEBUG) {
+        process.stderr.write("[adit-transcript] export returned empty output\\n");
+      }
+      return null;
+    }
+
+    var exportData;
+    try {
+      exportData = JSON.parse(rawOutput);
+    } catch (parseErr) {
+      if (process.env.ADIT_DEBUG) {
+        process.stderr.write("[adit-transcript] JSON parse error: " + parseErr.message + "\\n");
+        process.stderr.write("[adit-transcript] raw output (first 300 chars): " + rawOutput.substring(0, 300) + "\\n");
+      }
+      return null;
+    }
+
+    if (process.env.ADIT_DEBUG) {
+      var topKeys = Array.isArray(exportData) ? "[array:" + exportData.length + "]" : Object.keys(exportData).join(",");
+      process.stderr.write("[adit-transcript] export data shape: " + topKeys + "\\n");
+    }
+
+    // The export format may vary — handle multiple shapes:
+    // 1. Array of messages directly
+    // 2. Object with .messages array
+    // 3. Object with .data array
+    var messages = [];
+    if (Array.isArray(exportData)) {
+      messages = exportData;
+    } else if (exportData.messages && Array.isArray(exportData.messages)) {
+      messages = exportData.messages;
+    } else if (exportData.data && Array.isArray(exportData.data)) {
+      messages = exportData.data;
+    }
+
+    if (messages.length === 0) {
+      if (process.env.ADIT_DEBUG) {
+        process.stderr.write("[adit-transcript] no messages found in export\\n");
+      }
+      return null;
+    }
+
+    if (process.env.ADIT_DEBUG) {
+      process.stderr.write("[adit-transcript] found " + messages.length + " messages\\n");
+      // Log shape of first message to understand the format
+      var firstMsg = messages[0];
+      var firstKeys = firstMsg ? Object.keys(firstMsg).join(",") : "empty";
+      process.stderr.write("[adit-transcript] first message keys: " + firstKeys + "\\n");
+    }
 
     // Ensure transcript directory exists
-    const transcriptDir = path.join(cwd, ".adit", "transcripts");
+    var transcriptDir = path.join(cwd, ".adit", "transcripts");
     mkdirSync(transcriptDir, { recursive: true });
 
-    const filePath = path.join(transcriptDir, "opencode-" + sessionID + ".jsonl");
-    const metaPath = filePath + ".meta.json";
+    var filePath = path.join(transcriptDir, "opencode-" + sessionID + ".jsonl");
+    var metaPath = filePath + ".meta.json";
 
     // Read previous write count from sidecar
-    let prevCount = 0;
+    var prevCount = 0;
     if (existsSync(metaPath)) {
       try {
-        const meta = JSON.parse(readFileSync(metaPath, "utf-8"));
+        var meta = JSON.parse(readFileSync(metaPath, "utf-8"));
         prevCount = meta.messageCount || 0;
       } catch (e) { /* ignore corrupt meta */ }
     }
 
     // Only append new messages
-    if (messages.length <= prevCount) return filePath;
+    if (messages.length <= prevCount) {
+      if (process.env.ADIT_DEBUG) {
+        process.stderr.write("[adit-transcript] no new messages (prev: " + prevCount + ", current: " + messages.length + ")\\n");
+      }
+      return filePath;
+    }
 
-    const newMessages = messages.slice(prevCount);
-    const lines = [];
-    for (let i = 0; i < newMessages.length; i++) {
-      const msg = newMessages[i];
-      const info = msg.info || {};
-      const parts = (msg.parts || []).map(function(p) {
-        // Normalize parts to a compact representation
-        if (p.type === "text") return { type: "text", text: p.text };
+    var newMessages = messages.slice(prevCount);
+    var lines = [];
+    for (var i = 0; i < newMessages.length; i++) {
+      var msg = newMessages[i];
+
+      // Normalize: the export may use { info, parts } or flat { role, ... }
+      var info = msg.info || msg;
+      var parts = msg.parts || [];
+
+      var normalizedParts = parts.map(function(p) {
+        if (p.type === "text") return { type: "text", text: p.text || p.content };
         if (p.type === "tool") return { type: "tool", tool: p.tool, callID: p.callID, state: p.state };
         if (p.type === "reasoning") return { type: "reasoning", text: p.text };
         if (p.type === "step-start") return { type: "step-start" };
         if (p.type === "step-finish") return { type: "step-finish", cost: p.cost, tokens: p.tokens };
-        return { type: p.type };
+        return { type: p.type || "unknown" };
       });
 
       var entry = {
         role: info.role,
-        messageID: info.id,
-        sessionID: info.sessionID,
-        time: info.time,
-        parts: parts,
+        messageID: info.id || info.messageID,
+        sessionID: info.sessionID || sessionID,
+        time: info.time || info.createdAt,
+        parts: normalizedParts,
       };
 
-      // Assistant-specific fields
       if (info.role === "assistant") {
         if (info.modelID) entry.modelID = info.modelID;
         if (info.providerID) entry.providerID = info.providerID;
@@ -463,7 +548,6 @@ async function fetchTranscript(client, cwd, sessionID) {
         if (info.finishReason) entry.finishReason = info.finishReason;
       }
 
-      // User-specific fields
       if (info.role === "user") {
         if (info.model) entry.model = info.model;
         if (info.agent) entry.agent = info.agent;
@@ -473,16 +557,22 @@ async function fetchTranscript(client, cwd, sessionID) {
     }
 
     // Append new lines to the JSONL file
-    const appendData = lines.join("\\n") + "\\n";
-    const { appendFileSync } = require("fs");
+    var NL = String.fromCharCode(10);
+    var appendData = lines.join(NL) + NL;
     appendFileSync(filePath, appendData);
 
     // Update sidecar with total count
     writeFileSync(metaPath, JSON.stringify({ messageCount: messages.length }));
 
+    if (process.env.ADIT_DEBUG) {
+      process.stderr.write("[adit-transcript] wrote " + newMessages.length + " new messages to " + filePath + "\\n");
+    }
     return filePath;
   } catch (e) {
-    // fail-open — transcript fetch is best-effort
+    // fail-open — transcript export is best-effort
+    if (process.env.ADIT_DEBUG) {
+      process.stderr.write("[adit-transcript] error: " + (e && e.message ? e.message : String(e)) + "\\n");
+    }
     return null;
   }
 }
@@ -537,6 +627,11 @@ exports.AditPlugin = async (ctx) => {
           .map(function(p) { return p.text || ""; })
           .join("\\n")
           .trim();
+
+        // Skip slash commands — they are not real user prompts.
+        // OpenCode fires chat.message for everything including /adit, /help, etc.
+        if (!prompt || prompt.startsWith("/")) return;
+
         spawnAditHook("prompt-submit", {
           cwd,
           prompt: prompt,
@@ -559,17 +654,22 @@ exports.AditPlugin = async (ctx) => {
         switch (event.type) {
           // --- Assistant finished responding (replaces missing "stop" hook) ---
           case "session.idle": {
-            // Fetch transcript from OpenCode API and write JSONL for upload.
-            // This runs async — the stop hook fires immediately with whatever
-            // transcript path is available (may be null on first call).
+            // Use activeSessionId (captured from session.created with the
+            // proper "ses..." format) rather than props.sessionID which may
+            // use a different internal format.
+            var idleSessionId = activeSessionId || props.sessionID;
+
+            // Export transcript via "opencode export" CLI and write JSONL.
             var transcriptPath = null;
-            try {
-              transcriptPath = await fetchTranscript(client, cwd, props.sessionID);
-            } catch (e) { /* fail-open */ }
+            if (idleSessionId) {
+              try {
+                transcriptPath = fetchTranscript(cwd, idleSessionId);
+              } catch (e) { /* fail-open */ }
+            }
 
             spawnAditHook("stop", {
               cwd,
-              session_id: props.sessionID,
+              session_id: idleSessionId,
               stop_reason: "completed",
               transcript_path: transcriptPath,
             });

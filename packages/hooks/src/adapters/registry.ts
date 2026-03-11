@@ -2,8 +2,12 @@
  * Platform adapter registry.
  *
  * Discovers, registers, and retrieves platform adapters.
+ * Provides both env-var-based detection (for hook dispatching) and
+ * directory-based detection (for CLI commands like init/plugin install).
  */
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { Platform } from "@adit/core";
 import type { PlatformAdapter } from "./types.js";
 import { claudeCodeAdapter } from "./claude-code.js";
@@ -85,4 +89,43 @@ export function detectPlatform(): Platform {
   // Callers that need a concrete adapter should check for "other" and handle
   // it explicitly rather than silently assuming a specific platform.
   return "other";
+}
+
+/**
+ * Detect which platforms are present in a project by checking for their
+ * config directories on disk. Falls back to env-based detection if no
+ * platform directories are found.
+ *
+ * This is the preferred detection method for CLI commands (init, plugin
+ * install/uninstall) because env vars are only set inside AI tool sessions,
+ * whereas config directories persist on disk.
+ */
+export function detectPlatforms(projectRoot: string): Platform[] {
+  const platforms = new Set<Platform>();
+
+  // Check for Claude Code config directory
+  if (existsSync(join(projectRoot, ".claude"))) {
+    platforms.add("claude-code");
+  }
+
+  // Check for OpenCode config directory or config file
+  if (
+    existsSync(join(projectRoot, ".opencode")) ||
+    existsSync(join(projectRoot, "opencode.json")) ||
+    existsSync(join(projectRoot, "opencode.jsonc"))
+  ) {
+    platforms.add("opencode");
+  }
+
+  // If no platform directories found, fall back to env detection.
+  // This handles cases where adit is run from within an AI tool session
+  // (e.g. the AI agent running `adit plugin install`).
+  if (platforms.size === 0) {
+    const envPlatform = detectPlatform();
+    if (envPlatform !== "other") {
+      platforms.add(envPlatform);
+    }
+  }
+
+  return Array.from(platforms);
 }
