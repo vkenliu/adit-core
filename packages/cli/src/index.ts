@@ -49,6 +49,7 @@ import {
   transcriptResetCommand,
 } from "./commands/transcript.js";
 import { perfCommand, perfClearCommand } from "./commands/perf.js";
+import { projectLinkCliHandler, projectIntentCliHandler } from "./commands/project-link.js";
 import { launchTui } from "./tui/index.js";
 
 const program = new Command();
@@ -293,6 +294,41 @@ transcriptCmd
   .description("Reset a failed transcript for re-upload")
   .option("--json", "Output as JSON")
   .action((id, opts) => transcriptResetCommand(id, { json: opts.json }));
+
+// Project link (under cloud)
+const projectCmd = cloudCmd
+  .command("project")
+  .description("Project cloud connection commands");
+
+projectCmd
+  .command("link")
+  .description("Link this project to adit-cloud")
+  .option("-f, --force", "Clear cache and re-link from scratch")
+  .option("--skip-docs", "Skip document upload")
+  .option("--skip-commits", "Skip commit history upload")
+  .option("--skip-qualify", "Skip document quality check")
+  .option("--dry-run", "Preview without uploading")
+  .option("--json", "Output result as JSON")
+  .action((opts) => projectLinkCliHandler({
+    force: opts.force,
+    skipDocs: opts.skipDocs,
+    skipCommits: opts.skipCommits,
+    skipQualify: opts.skipQualify,
+    dryRun: opts.dryRun,
+    json: opts.json,
+  }));
+
+projectCmd
+  .command("intent")
+  .description("List intents and tasks from connected project")
+  .option("--id <id>", "Show detailed intent with tasks")
+  .option("--state <state>", "Filter by intent state")
+  .option("--json", "Output as JSON")
+  .action((opts) => projectIntentCliHandler({
+    id: opts.id,
+    state: opts.state,
+    json: opts.json,
+  }));
 
 // Database management
 const dbCmd = program

@@ -221,4 +221,23 @@ export const migrations: Migration[] = [
         ON sessions(platform_session_id) WHERE platform_session_id IS NOT NULL;
     `,
   },
+  {
+    id: 11,
+    name: "create_project_link_cache",
+    sql: `
+      CREATE TABLE IF NOT EXISTS project_link_cache (
+        project_id TEXT NOT NULL,
+        server_url TEXT NOT NULL,
+        confirmed_project_id TEXT,
+        last_commit_sha TEXT,
+        last_branch_sync_at TEXT,
+        last_doc_sync_at TEXT,
+        doc_hashes_json TEXT DEFAULT '{}',
+        qualified INTEGER DEFAULT 0,
+        initialized_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, server_url)
+      );
+    `,
+  },
 ];

@@ -85,4 +85,37 @@ describe("loadCloudConfig", () => {
     const config = loadCloudConfig();
     expect(config.syncTimeoutHours).toBe(2);
   });
+
+  it("returns project-link defaults when no env vars are set", () => {
+    delete process.env.ADIT_PROJECT_LINK_AUTO_SYNC;
+    delete process.env.ADIT_PROJECT_LINK_STALE_HOURS;
+
+    const config = loadCloudConfig();
+    expect(config.projectLink.autoSync).toBe(true);
+    expect(config.projectLink.staleHours).toBe(2);
+  });
+
+  it("disables project-link auto-sync via env var", () => {
+    process.env.ADIT_PROJECT_LINK_AUTO_SYNC = "false";
+    const config = loadCloudConfig();
+    expect(config.projectLink.autoSync).toBe(false);
+  });
+
+  it("reads project-link stale hours from env var", () => {
+    process.env.ADIT_PROJECT_LINK_STALE_HOURS = "6";
+    const config = loadCloudConfig();
+    expect(config.projectLink.staleHours).toBe(6);
+  });
+
+  it("supports fractional project-link stale hours", () => {
+    process.env.ADIT_PROJECT_LINK_STALE_HOURS = "0.5";
+    const config = loadCloudConfig();
+    expect(config.projectLink.staleHours).toBe(0.5);
+  });
+
+  it("falls back to 2 for invalid project-link stale hours", () => {
+    process.env.ADIT_PROJECT_LINK_STALE_HOURS = "not-a-number";
+    const config = loadCloudConfig();
+    expect(config.projectLink.staleHours).toBe(2);
+  });
 });

@@ -70,13 +70,11 @@ Cloud sync uses a cursor-based incremental push model:
 - All sync errors are fail-open — network or auth failures are silently retried on the next trigger
 - Disable auto-sync with `ADIT_CLOUD_AUTO_SYNC=false` or `ADIT_CLOUD_ENABLED=false`
 
-### Skills & Agents
+### Skills
 
 ADIT ships with **10 Claude Code skills** (in `skills/`) for natural-language interaction:
 
 `timeline` · `checkpoint` · `revert` · `diff` · `search` · `env` · `status` · `doctor`
-
-And a **timeline-analyst** agent (in `agents/`) for deep session analysis, pattern detection, and environment drift reporting.
 
 ## Installation
 
@@ -186,6 +184,15 @@ All git checkpoint operations are grouped under `adit snapshot` to clearly separ
 | `adit cloud transcript upload` | Manually trigger transcript uploads (`--json`) |
 | `adit cloud transcript reset <id>` | Reset a failed transcript for re-upload (`--json`) |
 
+### Project Link
+
+| Command | Description |
+|---------|-------------|
+| `adit cloud project link` | Link project to adit-cloud — uploads git metadata and documents (`--force`, `--skip-docs`, `--skip-commits`, `--dry-run`, `--json`) |
+| `adit cloud project intent` | List intents and tasks from connected project (`--id <id>`, `--state <state>`, `--json`) |
+
+Also available as `/adit link` and `/adit intent` slash commands in Claude Code and OpenCode.
+
 ### Plugins
 
 | Command | Description |
@@ -235,6 +242,37 @@ ADIT stores its data in `.adit/` at the project root:
 Cloud credentials are stored in `~/.adit/cloud-credentials.json` (file permissions 0600).
 
 ## Configuration
+
+### Project Link — Document Discovery
+
+When linking a project, ADIT scans for markdown documents to upload. You can customize which files are discovered by creating a `settings.json` in your project root:
+
+```json
+{
+  "projectLink": {
+    "docPatterns": [
+      "*.md",
+      "docs/**/*.md",
+      "wiki/**/*.md",
+      "my-custom-docs/**/*.md"
+    ],
+    "excludePatterns": [
+      "node_modules/**",
+      ".git/**",
+      "dist/**",
+      "build/**",
+      "test-fixtures/**"
+    ]
+  }
+}
+```
+
+- **`docPatterns`** — Glob patterns for files to include. Replaces the defaults (does not merge). Default patterns scan `*.md` at root plus `docs/`, `doc/`, `documentation/`, `specs/`, `design/`, `wiki/`, `guides/`, `rfcs/`, and `adrs/` directories.
+- **`excludePatterns`** — Glob patterns to exclude. Replaces the defaults (does not merge). Default excludes `node_modules`, `.git`, `vendor`, `dist`, `build`, `out`, `coverage`, `.adit`, and `CHANGELOG.md`.
+
+Files in hidden directories (any path segment starting with `.`) are always skipped. Files larger than 500 KB are skipped with a warning.
+
+### Environment Variables
 
 | Environment Variable | Description | Default |
 |----------------------|-------------|---------|

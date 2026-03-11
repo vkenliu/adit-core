@@ -211,6 +211,29 @@ async function handleSessionStart(ctx: HookContext, input: NormalizedHookInput):
       // Fail-open
     }
   }
+
+  // Trigger auto-sync on session start to ensure the Project record
+  // exists server-side before the user runs `/adit link`.
+  try {
+    const { triggerAutoSync } = await import("@adit/cloud");
+    triggerAutoSync(ctx.db, ctx.config.projectId).catch(() => {});
+  } catch {
+    // Fail-open — cloud package may not be available
+  }
+
+  // Trigger project-link auto-sync (fire-and-forget, fail-open).
+  // Spawns a detached background process to sync branches, commits,
+  // and documents — won't be killed by the 10s hook timeout.
+  try {
+    const cloudModuleName = ["@adit", "cloud"].join("/");
+    const { triggerProjectLinkSync } = await import(cloudModuleName) as {
+      triggerProjectLinkSync: (db: unknown, projectId: string, projectRoot: string) => Promise<void>;
+    };
+    triggerProjectLinkSync(ctx.db, ctx.config.projectId, ctx.config.projectRoot)
+      .catch(() => {});
+  } catch {
+    // Fail-open — cloud package may not be available
+  }
 }
 
 /** Handle session end — capture final env snapshot and close session */
