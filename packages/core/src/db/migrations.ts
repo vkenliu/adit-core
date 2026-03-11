@@ -21,7 +21,7 @@ export const migrations: Migration[] = [
         project_id    TEXT NOT NULL,
         client_id     TEXT NOT NULL,
         session_type  TEXT NOT NULL DEFAULT 'interactive',
-        platform      TEXT NOT NULL DEFAULT 'claude-code',
+        platform      TEXT NOT NULL DEFAULT 'other',
         started_at    TEXT NOT NULL,
         ended_at      TEXT,
         status        TEXT NOT NULL DEFAULT 'active',

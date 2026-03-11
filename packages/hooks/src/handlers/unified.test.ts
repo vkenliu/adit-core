@@ -37,6 +37,11 @@ vi.mock("@adit/engine", () => ({
   diffEnvironments: vi.fn().mockReturnValue({ changes: [], severity: "none" }),
 }));
 
+vi.mock("@adit/cloud", () => ({
+  triggerTranscriptUpload: vi.fn().mockResolvedValue(undefined),
+  triggerAutoSync: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("../common/context.js", () => ({
   initHookContext: vi.fn().mockResolvedValue({
     db: { close: vi.fn() },

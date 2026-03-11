@@ -17,6 +17,7 @@ import type Database from "better-sqlite3";
 import {
   generateId,
   getTranscriptUpload,
+  getSessionById,
   upsertTranscriptUpload,
   listPendingTranscriptUploads,
   markTranscriptUploaded,
@@ -38,8 +39,6 @@ export interface TranscriptManagerOptions {
   serverUrl: string;
   /** Upload type discriminator (default: "transcript") */
   type?: SyncUploadType;
-  /** CLI identifier (default: "claude-code") */
-  cli?: string;
 }
 
 export interface TranscriptProcessResult {
@@ -103,7 +102,6 @@ export async function processTranscriptUploads(
     config,
     serverUrl,
     type = "transcript",
-    cli = "claude-code",
   } = opts;
 
   const result: TranscriptProcessResult = {
@@ -153,6 +151,11 @@ export async function processTranscriptUploads(
     }
 
     activeCount++;
+
+    // Derive cli from the session's platform (falls back to "other"
+    // if the session is missing — e.g. orphaned transcript_uploads row)
+    const session = getSessionById(db, upload.sessionId);
+    const cli = session?.platform ?? "other";
 
     try {
       const response = await uploadChunk(client, {

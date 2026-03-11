@@ -354,14 +354,12 @@ async function triggerTranscriptUploadIfEnabled(
         db: unknown,
         sessionId: string,
         transcriptPath: string,
-        cli?: string,
       ) => Promise<void>;
     };
     await cloudModule.triggerTranscriptUpload(
       ctx.db,
       ctx.session.id,
       input.transcriptPath,
-      input.platformCli,
     );
   } catch {
     // @adit/cloud not installed or other error — silently skip
