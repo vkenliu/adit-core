@@ -350,6 +350,8 @@ function generatePluginContent(aditBinaryPath: string): string {
 // hook dispatcher via child process. All errors are swallowed (fail-open).
 
 const { spawn, spawnSync } = require("child_process");
+const { mkdirSync, writeFileSync, existsSync, readFileSync } = require("fs");
+const path = require("path");
 
 const ADIT_CMD = ${JSON.stringify(cmd)};
 const ADIT_BASE_ARGS = ${JSON.stringify(baseArgs)};
@@ -387,8 +389,107 @@ function spawnAditHookSync(hookType, data) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Transcript collection — fetch messages from OpenCode's local HTTP API
+// and write them as JSONL so the existing transcript upload pipeline can
+// handle them identically to Claude Code transcripts.
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch session messages via the SDK client and append new ones to a JSONL file.
+ * Returns the absolute path to the JSONL file, or null if nothing was written.
+ *
+ * Each line is a JSON object:
+ *   { role, messageID, parentID?, model?, agent?, parts: [...], tokens?, cost?, time }
+ *
+ * The function is incremental: it reads a small metadata sidecar
+ * (.meta.json) to track how many messages were written on the previous
+ * call and only appends new ones.
+ */
+async function fetchTranscript(client, cwd, sessionID) {
+  try {
+    const result = await client.session.messages({ sessionID });
+    const messages = (result && result.data) || [];
+    if (messages.length === 0) return null;
+
+    // Ensure transcript directory exists
+    const transcriptDir = path.join(cwd, ".adit", "transcripts");
+    mkdirSync(transcriptDir, { recursive: true });
+
+    const filePath = path.join(transcriptDir, "opencode-" + sessionID + ".jsonl");
+    const metaPath = filePath + ".meta.json";
+
+    // Read previous write count from sidecar
+    let prevCount = 0;
+    if (existsSync(metaPath)) {
+      try {
+        const meta = JSON.parse(readFileSync(metaPath, "utf-8"));
+        prevCount = meta.messageCount || 0;
+      } catch (e) { /* ignore corrupt meta */ }
+    }
+
+    // Only append new messages
+    if (messages.length <= prevCount) return filePath;
+
+    const newMessages = messages.slice(prevCount);
+    const lines = [];
+    for (let i = 0; i < newMessages.length; i++) {
+      const msg = newMessages[i];
+      const info = msg.info || {};
+      const parts = (msg.parts || []).map(function(p) {
+        // Normalize parts to a compact representation
+        if (p.type === "text") return { type: "text", text: p.text };
+        if (p.type === "tool") return { type: "tool", tool: p.tool, callID: p.callID, state: p.state };
+        if (p.type === "reasoning") return { type: "reasoning", text: p.text };
+        if (p.type === "step-start") return { type: "step-start" };
+        if (p.type === "step-finish") return { type: "step-finish", cost: p.cost, tokens: p.tokens };
+        return { type: p.type };
+      });
+
+      var entry = {
+        role: info.role,
+        messageID: info.id,
+        sessionID: info.sessionID,
+        time: info.time,
+        parts: parts,
+      };
+
+      // Assistant-specific fields
+      if (info.role === "assistant") {
+        if (info.modelID) entry.modelID = info.modelID;
+        if (info.providerID) entry.providerID = info.providerID;
+        if (info.tokens) entry.tokens = info.tokens;
+        if (info.cost) entry.cost = info.cost;
+        if (info.finishReason) entry.finishReason = info.finishReason;
+      }
+
+      // User-specific fields
+      if (info.role === "user") {
+        if (info.model) entry.model = info.model;
+        if (info.agent) entry.agent = info.agent;
+      }
+
+      lines.push(JSON.stringify(entry));
+    }
+
+    // Append new lines to the JSONL file
+    const appendData = lines.join("\\n") + "\\n";
+    const { appendFileSync } = require("fs");
+    appendFileSync(filePath, appendData);
+
+    // Update sidecar with total count
+    writeFileSync(metaPath, JSON.stringify({ messageCount: messages.length }));
+
+    return filePath;
+  } catch (e) {
+    // fail-open — transcript fetch is best-effort
+    return null;
+  }
+}
+
 exports.AditPlugin = async (ctx) => {
   const cwd = ctx.directory || ctx.worktree || process.cwd();
+  const client = ctx.client;
 
   // Track the active session ID so we can fire session-end on /exit.
   // OpenCode does not fire session.deleted when the user types /exit —
@@ -458,10 +559,19 @@ exports.AditPlugin = async (ctx) => {
         switch (event.type) {
           // --- Assistant finished responding (replaces missing "stop" hook) ---
           case "session.idle": {
+            // Fetch transcript from OpenCode API and write JSONL for upload.
+            // This runs async — the stop hook fires immediately with whatever
+            // transcript path is available (may be null on first call).
+            var transcriptPath = null;
+            try {
+              transcriptPath = await fetchTranscript(client, cwd, props.sessionID);
+            } catch (e) { /* fail-open */ }
+
             spawnAditHook("stop", {
               cwd,
               session_id: props.sessionID,
               stop_reason: "completed",
+              transcript_path: transcriptPath,
             });
             break;
           }
@@ -624,6 +734,8 @@ export const opencodeAdapter: PlatformAdapter = {
       hookType: aditHookType,
       platformCli: "opencode",
       platformSessionId: raw.session_id as string | undefined,
+      // Transcript (JSONL written by plugin from OpenCode API)
+      transcriptPath: raw.transcript_path as string | undefined,
       // Prompt
       prompt: raw.prompt as string | undefined,
       // Stop

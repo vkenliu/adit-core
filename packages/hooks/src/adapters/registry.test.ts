@@ -359,7 +359,15 @@ describe("OpenCode Adapter", () => {
     expect(input.taskDescription).toBe("Priority: high");
   });
 
-  it("parseInput does not set transcriptPath (OpenCode has no transcript file)", () => {
+  it("parseInput maps transcriptPath when plugin provides it", () => {
+    const input = opencodeAdapter.parseInput(
+      { cwd: "/project", stop_reason: "completed", transcript_path: "/project/.adit/transcripts/opencode-abc.jsonl" },
+      "stop",
+    );
+    expect(input.transcriptPath).toBe("/project/.adit/transcripts/opencode-abc.jsonl");
+  });
+
+  it("parseInput leaves transcriptPath undefined when not provided", () => {
     const input = opencodeAdapter.parseInput(
       { cwd: "/project", stop_reason: "completed" },
       "stop",
@@ -405,6 +413,10 @@ describe("OpenCode Adapter", () => {
     expect(pluginContent).not.toContain("step_finish");
     expect(pluginContent).not.toContain("session_diff");
     expect(pluginContent).not.toContain("session.diff");
+    // Transcript collection: plugin fetches messages from OpenCode API
+    expect(pluginContent).toContain("fetchTranscript");
+    expect(pluginContent).toContain("transcript_path");
+    expect(pluginContent).toContain('"transcripts"'); // path.join(cwd, ".adit", "transcripts")
   });
 
   it("generateHookConfig handles resolved binary path", () => {

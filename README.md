@@ -70,12 +70,6 @@ Cloud sync uses a cursor-based incremental push model:
 - All sync errors are fail-open — network or auth failures are silently retried on the next trigger
 - Disable auto-sync with `ADIT_CLOUD_AUTO_SYNC=false` or `ADIT_CLOUD_ENABLED=false`
 
-### Skills
-
-ADIT ships with **10 Claude Code skills** (in `skills/`) for natural-language interaction:
-
-`timeline` · `checkpoint` · `revert` · `diff` · `search` · `env` · `status` · `doctor`
-
 ## Installation
 
 ```bash

@@ -13,7 +13,7 @@ export type {
 
 export { claudeCodeAdapter } from "./claude-code.js";
 export { opencodeAdapter } from "./opencode.js";
-export { createStubAdapter, cursorAdapter, copilotAdapter, codexAdapter } from "./stub.js";
+export { createStubAdapter, cursorAdapter, copilotAdapter, codexAdapter, otherAdapter } from "./stub.js";
 export { getAdapter, listAdapters, registerAdapter, detectPlatform } from "./registry.js";
 
 /**

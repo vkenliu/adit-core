@@ -93,3 +93,10 @@ export const codexAdapter = createStubAdapter(
   "Codex",
   ["CODEX", "CODEX_SESSION"],
 );
+
+/** Unknown / undetected platform */
+export const otherAdapter = createStubAdapter(
+  "other",
+  "Unknown Platform",
+  [],
+);

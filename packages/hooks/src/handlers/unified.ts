@@ -24,7 +24,7 @@ import type { NormalizedHookInput } from "../adapters/types.js";
  * This is the single entry point for all platform hook events.
  */
 export async function dispatchHook(input: NormalizedHookInput): Promise<void> {
-  const ctx = await initHookContext(input.cwd, input.platformCli ?? "claude-code", input.platformSessionId);
+  const ctx = await initHookContext(input.cwd, input.platformCli ?? "other", input.platformSessionId);
   const dataDir = ctx.config.dataDir;
 
   try {

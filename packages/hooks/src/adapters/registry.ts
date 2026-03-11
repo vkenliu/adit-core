@@ -11,6 +11,7 @@ import {
   cursorAdapter,
   copilotAdapter,
   codexAdapter,
+  otherAdapter,
 } from "./stub.js";
 import { opencodeAdapter } from "./opencode.js";
 
@@ -27,6 +28,7 @@ adapters.set("opencode", opencodeAdapter);
 adapters.set("cursor", cursorAdapter);
 adapters.set("copilot", copilotAdapter);
 adapters.set("codex", codexAdapter);
+adapters.set("other", otherAdapter);
 
 /** Get the adapter for a platform */
 export function getAdapter(platform: Platform): PlatformAdapter {
@@ -51,7 +53,7 @@ export function registerAdapter(adapter: PlatformAdapter): void {
 
 /**
  * Detect the current platform from environment clues.
- * Falls back to "claude-code" as the default.
+ * Falls back to "other" when no platform is detected.
  */
 export function detectPlatform(): Platform {
   // Claude Code sets specific env vars
@@ -79,6 +81,8 @@ export function detectPlatform(): Platform {
     return "codex";
   }
 
-  // Default to claude-code (the only fully supported platform)
-  return "claude-code";
+  // No platform env vars detected — return "other" to stay platform-neutral.
+  // Callers that need a concrete adapter should check for "other" and handle
+  // it explicitly rather than silently assuming a specific platform.
+  return "other";
 }

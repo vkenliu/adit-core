@@ -30,7 +30,7 @@ export interface HookContext {
 /** Initialize the hook context (DB + session) */
 export async function initHookContext(
   cwd: string,
-  platform: string = "claude-code",
+  platform: string,
   platformSessionId?: string,
 ): Promise<HookContext> {
   const config = loadConfig(cwd);
