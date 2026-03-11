@@ -156,11 +156,20 @@ export class CloudClient {
         }
 
         if (!response.ok) {
+          // Read body as text first (always safe), then try to parse as JSON.
+          // This avoids the "Body is unusable: Body has already been read"
+          // error that occurs when response.json() fails on an empty body
+          // and then response.text() tries to read the already-consumed stream.
           let responseBody: unknown;
           try {
-            responseBody = await response.json();
+            const text = await response.text();
+            try {
+              responseBody = JSON.parse(text);
+            } catch {
+              responseBody = text || null;
+            }
           } catch {
-            responseBody = await response.text();
+            responseBody = null;
           }
 
           if (response.status === 401 || response.status === 403) {

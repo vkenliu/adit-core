@@ -24,8 +24,11 @@ describe("loadCloudConfig", () => {
 
     const config = loadCloudConfig();
     expect(config.serverUrl).toBeNull();
-    expect(config.enabled).toBe(false);
-    expect(config.autoSync).toBe(false);
+    // enabled and autoSync default to true — they are only disabled
+    // when explicitly set to "false". Actual activation depends on
+    // credentials existing (checked by auto-sync at runtime).
+    expect(config.enabled).toBe(true);
+    expect(config.autoSync).toBe(true);
     expect(config.batchSize).toBe(500);
     expect(config.syncThreshold).toBe(20);
     expect(config.syncTimeoutHours).toBe(2);

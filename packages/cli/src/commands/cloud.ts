@@ -338,7 +338,8 @@ export async function cloudStatusCommand(opts?: {
   console.log("Cloud Sync Status");
   console.log("==================");
   console.log();
-  console.log(`Server:       ${cloudConfig.serverUrl ?? "(not configured)"}`);
+  const effectiveServerUrl = cloudConfig.serverUrl ?? credentials?.serverUrl ?? null;
+  console.log(`Server:       ${effectiveServerUrl ?? "(not configured)"}`);
   console.log(`Enabled:      ${cloudConfig.enabled ? "yes" : "no"}`);
   console.log(`Auto-sync:    ${cloudConfig.autoSync ? "yes" : "no"}`);
   console.log(`Logged in:    ${credentials ? "yes" : "no"}`);
