@@ -269,11 +269,20 @@ export async function cloudStatusCommand(opts?: {
   if (serverUrl && credentials) {
     try {
       const client = new CloudClient(serverUrl, credentials);
+      const params = new URLSearchParams();
+      if (config.projectId) params.set("projectId", config.projectId);
+      const statusPath = params.toString()
+        ? `/api/sync/status?${params.toString()}`
+        : "/api/sync/status";
       const remoteStatus = await client.get<{
         lastSyncedEventId: string | null;
         syncVersion: number;
         lastSyncedAt: string | null;
-      }>("/api/sync/status");
+        projectCursors?: Record<string, {
+          lastSyncedEventId: string | null;
+          lastSyncedAt: string | null;
+        }>;
+      }>(statusPath);
       status.serverOnline = true;
       status.remoteStatus = remoteStatus;
     } catch (error) {
@@ -329,7 +338,8 @@ export async function cloudStatusCommand(opts?: {
   console.log("Cloud Sync Status");
   console.log("==================");
   console.log();
-  console.log(`Server:       ${cloudConfig.serverUrl ?? "(not configured)"}`);
+  const effectiveServerUrl = cloudConfig.serverUrl ?? credentials?.serverUrl ?? null;
+  console.log(`Server:       ${effectiveServerUrl ?? "(not configured)"}`);
   console.log(`Enabled:      ${cloudConfig.enabled ? "yes" : "no"}`);
   console.log(`Auto-sync:    ${cloudConfig.autoSync ? "yes" : "no"}`);
   console.log(`Logged in:    ${credentials ? "yes" : "no"}`);
@@ -377,14 +387,29 @@ export async function cloudStatusCommand(opts?: {
     lastSyncedEventId: string | null;
     syncVersion: number;
     lastSyncedAt: string | null;
+    projectCursors?: Record<string, {
+      lastSyncedEventId: string | null;
+      lastSyncedAt: string | null;
+    }>;
   } | undefined;
   if (remoteStatus) {
     const localCursor = syncState?.lastSyncedEventId ?? null;
-    const remoteCursor = remoteStatus.lastSyncedEventId;
+    // Prefer per-project cursor when available
+    const projectEntry = config.projectId
+      ? remoteStatus.projectCursors?.[config.projectId]
+      : undefined;
+    const remoteCursor = projectEntry !== undefined
+      ? projectEntry.lastSyncedEventId
+      : remoteStatus.lastSyncedEventId;
+    const cursorSource = projectEntry !== undefined ? "project" : "global";
+
     if (localCursor !== remoteCursor) {
       console.log(
-        `Remote cursor: ${remoteCursor ?? "none"} (differs from local)`,
+        `Remote cursor: ${remoteCursor ?? "none"} (${cursorSource}, differs from local)`,
       );
+    }
+    if (projectEntry !== undefined) {
+      console.log(`Project:      ${config.projectId}`);
     }
   }
 

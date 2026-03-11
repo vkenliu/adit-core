@@ -62,7 +62,7 @@ export interface NormalizedHookInput {
   cwd: string;
   hookType: AditHookType;
   /** CLI identifier for upload routing (e.g., "claude-code", "cursor") */
-  platformCli?: string;
+  platformCli?: Platform;
   /** Session ID from the platform (e.g., Claude Code session_id) */
   platformSessionId?: string;
   /** Path to the session transcript file (JSONL) */

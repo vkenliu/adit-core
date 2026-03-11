@@ -57,6 +57,9 @@ importers:
       '@adit/core':
         specifier: workspace:*
         version: link:../core
+      '@adit/engine':
+        specifier: workspace:*
+        version: link:../engine
     devDependencies:
       '@types/better-sqlite3':
         specifier: ^7.6.13

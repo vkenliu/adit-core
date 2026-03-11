@@ -21,6 +21,15 @@ export interface CloudConfig {
   syncTimeoutHours: number;
   /** Transcript upload configuration */
   transcriptUpload: TranscriptUploadConfig;
+  /** Project-link auto-sync configuration */
+  projectLink: ProjectLinkConfig;
+}
+
+export interface ProjectLinkConfig {
+  /** Whether project-link auto-sync is enabled on session-start (default: true) */
+  autoSync: boolean;
+  /** Hours before cached project-link data is considered stale (default: 2) */
+  staleHours: number;
 }
 
 export interface TranscriptUploadConfig {
@@ -42,15 +51,20 @@ export const DEFAULT_SERVER_URL = "https://adit-cloud.varve.ai";
 /** Load cloud configuration from environment variables */
 export function loadCloudConfig(): CloudConfig {
   const serverUrl = process.env.ADIT_CLOUD_URL ?? null;
-  const enabled =
-    process.env.ADIT_CLOUD_ENABLED !== undefined
-      ? process.env.ADIT_CLOUD_ENABLED !== "false"
-      : serverUrl !== null;
+
+  // Cloud is enabled unless explicitly disabled via env var.
+  // When ADIT_CLOUD_ENABLED is not set, enabled is true — actual
+  // activation depends on credentials existing (checked by auto-sync).
+  const enabled = process.env.ADIT_CLOUD_ENABLED !== "false";
+
+  // Auto-sync is enabled by default when credentials exist.
+  // Only disabled when explicitly set to "false".
+  const autoSync = process.env.ADIT_CLOUD_AUTO_SYNC !== "false";
 
   return {
     serverUrl,
     enabled,
-    autoSync: process.env.ADIT_CLOUD_AUTO_SYNC === "true",
+    autoSync,
     batchSize: Math.min(
       parseInt(process.env.ADIT_CLOUD_BATCH_SIZE ?? "500", 10) || 500,
       500, // Server hard limit
@@ -62,6 +76,7 @@ export function loadCloudConfig(): CloudConfig {
       process.env.ADIT_CLOUD_SYNC_TIMEOUT_HOURS,
     ),
     transcriptUpload: loadTranscriptUploadConfig(),
+    projectLink: loadProjectLinkConfig(),
   };
 }
 
@@ -85,6 +100,23 @@ function loadTranscriptUploadConfig(): TranscriptUploadConfig {
       1024,
     ),
   };
+}
+
+function loadProjectLinkConfig(): ProjectLinkConfig {
+  return {
+    autoSync: process.env.ADIT_PROJECT_LINK_AUTO_SYNC !== "false",
+    staleHours: parsePositiveFloat(
+      process.env.ADIT_PROJECT_LINK_STALE_HOURS,
+      2,
+    ),
+  };
+}
+
+function parsePositiveFloat(raw: string | undefined, defaultVal: number): number {
+  if (raw === undefined) return defaultVal;
+  const parsed = parseFloat(raw);
+  if (Number.isNaN(parsed) || parsed <= 0) return defaultVal;
+  return parsed;
 }
 
 function parseSyncTimeoutHours(raw: string | undefined): number {

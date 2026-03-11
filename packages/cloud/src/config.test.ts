@@ -24,8 +24,11 @@ describe("loadCloudConfig", () => {
 
     const config = loadCloudConfig();
     expect(config.serverUrl).toBeNull();
-    expect(config.enabled).toBe(false);
-    expect(config.autoSync).toBe(false);
+    // enabled and autoSync default to true — they are only disabled
+    // when explicitly set to "false". Actual activation depends on
+    // credentials existing (checked by auto-sync at runtime).
+    expect(config.enabled).toBe(true);
+    expect(config.autoSync).toBe(true);
     expect(config.batchSize).toBe(500);
     expect(config.syncThreshold).toBe(20);
     expect(config.syncTimeoutHours).toBe(2);
@@ -84,5 +87,38 @@ describe("loadCloudConfig", () => {
     process.env.ADIT_CLOUD_SYNC_TIMEOUT_HOURS = "0";
     const config = loadCloudConfig();
     expect(config.syncTimeoutHours).toBe(2);
+  });
+
+  it("returns project-link defaults when no env vars are set", () => {
+    delete process.env.ADIT_PROJECT_LINK_AUTO_SYNC;
+    delete process.env.ADIT_PROJECT_LINK_STALE_HOURS;
+
+    const config = loadCloudConfig();
+    expect(config.projectLink.autoSync).toBe(true);
+    expect(config.projectLink.staleHours).toBe(2);
+  });
+
+  it("disables project-link auto-sync via env var", () => {
+    process.env.ADIT_PROJECT_LINK_AUTO_SYNC = "false";
+    const config = loadCloudConfig();
+    expect(config.projectLink.autoSync).toBe(false);
+  });
+
+  it("reads project-link stale hours from env var", () => {
+    process.env.ADIT_PROJECT_LINK_STALE_HOURS = "6";
+    const config = loadCloudConfig();
+    expect(config.projectLink.staleHours).toBe(6);
+  });
+
+  it("supports fractional project-link stale hours", () => {
+    process.env.ADIT_PROJECT_LINK_STALE_HOURS = "0.5";
+    const config = loadCloudConfig();
+    expect(config.projectLink.staleHours).toBe(0.5);
+  });
+
+  it("falls back to 2 for invalid project-link stale hours", () => {
+    process.env.ADIT_PROJECT_LINK_STALE_HOURS = "not-a-number";
+    const config = loadCloudConfig();
+    expect(config.projectLink.staleHours).toBe(2);
   });
 });

@@ -1,0 +1,291 @@
+/**
+ * Project document discovery for project link.
+ *
+ * Scans the project root for markdown documents matching configurable
+ * glob patterns, computes content hashes, and classifies each document
+ * as new, changed, or unchanged relative to cached hashes.
+ */
+
+import { readdirSync, readFileSync, existsSync } from "node:fs";
+import { join, basename, relative } from "node:path";
+import { createHash } from "node:crypto";
+import type { DiscoveredDocument } from "./types.js";
+
+/** Maximum file size for document upload (500 KB) */
+const MAX_DOC_SIZE = 500 * 1024;
+
+/** Default glob patterns for project documents */
+const DEFAULT_DOC_PATTERNS = [
+  // Root-level documentation files (case-insensitive matching handled by glob)
+  "*.md",
+  // Common documentation directories
+  "docs/**/*.md",
+  "doc/**/*.md",
+  "documentation/**/*.md",
+  "specs/**/*.md",
+  "design/**/*.md",
+  "wiki/**/*.md",
+  "guides/**/*.md",
+  "rfcs/**/*.md",
+  "adrs/**/*.md",
+];
+
+/** Default patterns to exclude from document discovery */
+const DEFAULT_EXCLUDE_PATTERNS = [
+  "node_modules/**",
+  ".git/**",
+  "vendor/**",
+  "dist/**",
+  "build/**",
+  "out/**",
+  "coverage/**",
+  ".adit/**",
+  "**/CHANGELOG.md",
+  "**/changelog.md",
+];
+
+/** Check if a relative path contains any hidden (dot-prefixed) directory or file */
+function isInHiddenPath(relativePath: string): boolean {
+  return relativePath.split("/").some((segment) => segment.startsWith("."));
+}
+
+/**
+ * Convert a simple glob pattern to a RegExp.
+ *
+ * Supports:
+ * - `*` matches any non-separator characters
+ * - `**` matches any path segment(s), including nested directories
+ * - `?` matches a single non-separator character
+ * - `{a,b}` alternation (one level, no nesting)
+ */
+function globToRegex(pattern: string): RegExp {
+  let re = "";
+  let i = 0;
+  while (i < pattern.length) {
+    const ch = pattern[i];
+    if (ch === "*") {
+      if (pattern[i + 1] === "*") {
+        // ** matches everything including path separators
+        if (pattern[i + 2] === "/") {
+          re += "(?:.+/)?"; // **/ matches zero or more directories
+          i += 3;
+        } else {
+          re += ".*";
+          i += 2;
+        }
+      } else {
+        re += "[^/]*"; // * matches within a single segment
+        i += 1;
+      }
+    } else if (ch === "?") {
+      re += "[^/]";
+      i += 1;
+    } else if (ch === "{") {
+      const close = pattern.indexOf("}", i);
+      if (close !== -1) {
+        const alternatives = pattern.slice(i + 1, close).split(",");
+        re += "(?:" + alternatives.map(escapeRegex).join("|") + ")";
+        i = close + 1;
+      } else {
+        re += escapeRegex(ch);
+        i += 1;
+      }
+    } else {
+      re += escapeRegex(ch);
+      i += 1;
+    }
+  }
+  return new RegExp("^" + re + "$");
+}
+
+/** Escape a character for use in a RegExp */
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * List all files under projectRoot recursively, returning POSIX-style
+ * relative paths. Uses `readdirSync({ recursive: true })` which is
+ * stable since Node 18.17.
+ */
+function listAllFiles(projectRoot: string): string[] {
+  try {
+    const entries = readdirSync(projectRoot, { recursive: true, withFileTypes: true });
+    const files: string[] = [];
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      // Build relative path from the dirent. parentPath is stable since Node 20.12.
+      const fullPath = join(entry.parentPath, entry.name);
+      const rel = relative(projectRoot, fullPath).split("\\").join("/");
+      files.push(rel);
+    }
+    return files;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Match files against include/exclude glob patterns.
+ *
+ * Replaces `node:fs` experimental `globSync` with stable
+ * `readdirSync({ recursive: true })` + pattern matching, ensuring
+ * compatibility with Node >= 20.
+ */
+function matchFiles(
+  projectRoot: string,
+  includePatterns: string[],
+  excludePatterns: string[],
+): Set<string> {
+  const allFiles = listAllFiles(projectRoot);
+  const includeRegexes = includePatterns.map(globToRegex);
+  const excludeRegexes = excludePatterns.map(globToRegex);
+
+  const matched = new Set<string>();
+  for (const file of allFiles) {
+    // Check if file matches any include pattern
+    const included = includeRegexes.some((re) => re.test(file));
+    if (!included) continue;
+
+    // Check if file matches any exclude pattern
+    const excluded = excludeRegexes.some((re) => re.test(file));
+    if (excluded) continue;
+
+    matched.add(file);
+  }
+  return matched;
+}
+
+/** Options for document discovery */
+export interface DocDiscoveryOptions {
+  /** Override default include patterns (replaces, does not merge) */
+  patterns?: string[];
+  /** Override default exclude patterns (replaces, does not merge) */
+  excludePatterns?: string[];
+}
+
+/**
+ * Discover project documents by scanning the project root.
+ *
+ * Returns documents sorted: new first, then changed, then unchanged.
+ * Files > 500KB or containing null bytes (binary) are skipped with
+ * a warning to stderr.
+ */
+export function discoverDocuments(
+  projectRoot: string,
+  cachedHashes: Record<string, string>,
+  options?: DocDiscoveryOptions,
+): DiscoveredDocument[] {
+  const patterns = options?.patterns ?? DEFAULT_DOC_PATTERNS;
+  const excludePatterns = options?.excludePatterns ?? DEFAULT_EXCLUDE_PATTERNS;
+
+  // Collect matching files via recursive directory listing + pattern matching.
+  // Uses readdirSync({ recursive: true }) which is stable since Node 18.17,
+  // avoiding the experimental node:fs globSync (Node 22+).
+  const matchedPaths = matchFiles(projectRoot, patterns, excludePatterns);
+
+  const documents: DiscoveredDocument[] = [];
+  const skipped: string[] = [];
+
+  for (const sourcePath of matchedPaths) {
+    // Skip files in hidden (dot-prefixed) directories or hidden files
+    if (isInHiddenPath(sourcePath)) continue;
+
+    const fullPath = join(projectRoot, sourcePath);
+    if (!existsSync(fullPath)) continue;
+
+    // Read file and check constraints
+    let content: string;
+    let sizeBytes: number;
+    try {
+      const buffer = readFileSync(fullPath);
+      sizeBytes = buffer.length;
+
+      // Skip files exceeding size limit
+      if (sizeBytes > MAX_DOC_SIZE) {
+        const sizeMB = (sizeBytes / (1024 * 1024)).toFixed(1);
+        skipped.push(`Skipping ${sourcePath} (${sizeMB} MB) — exceeds 500KB limit`);
+        continue;
+      }
+
+      // Skip binary files (null byte check)
+      if (buffer.includes(0)) {
+        skipped.push(`Skipping ${sourcePath} — binary file`);
+        continue;
+      }
+
+      content = buffer.toString("utf-8");
+    } catch {
+      continue; // Unreadable file — skip silently
+    }
+
+    // Compute content hash
+    const contentHash = createHash("sha256").update(content).digest("hex");
+
+    // Classify relative to cache
+    const cachedHash = cachedHashes[sourcePath];
+    let status: DiscoveredDocument["status"];
+    if (!cachedHash) {
+      status = "new";
+    } else if (cachedHash !== contentHash) {
+      status = "changed";
+    } else {
+      status = "unchanged";
+    }
+
+    documents.push({
+      fileName: basename(sourcePath),
+      sourcePath,
+      content,
+      contentHash,
+      sizeBytes,
+      status,
+    });
+  }
+
+  // Report skipped files
+  for (const msg of skipped) {
+    process.stderr.write(`[adit] ${msg}\n`);
+  }
+
+  // Sort: new first, then changed, then unchanged
+  const order: Record<string, number> = { new: 0, changed: 1, unchanged: 2 };
+  documents.sort((a, b) => order[a.status] - order[b.status]);
+
+  return documents;
+}
+
+/**
+ * Load custom document discovery settings from the project's settings.json.
+ *
+ * The settings file is at `{projectRoot}/settings.json` and may contain:
+ * ```json
+ * { "projectLink": { "docPatterns": [...], "excludePatterns": [...] } }
+ * ```
+ *
+ * Returns undefined if no custom settings are found.
+ */
+export function loadDocSettings(
+  projectRoot: string,
+): DocDiscoveryOptions | undefined {
+  const settingsPath = join(projectRoot, "settings.json");
+  if (!existsSync(settingsPath)) return undefined;
+
+  try {
+    const raw = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+    const projectLink = raw.projectLink as Record<string, unknown> | undefined;
+    if (!projectLink) return undefined;
+
+    const opts: DocDiscoveryOptions = {};
+    if (Array.isArray(projectLink.docPatterns)) {
+      opts.patterns = projectLink.docPatterns as string[];
+    }
+    if (Array.isArray(projectLink.excludePatterns)) {
+      opts.excludePatterns = projectLink.excludePatterns as string[];
+    }
+
+    return Object.keys(opts).length > 0 ? opts : undefined;
+  } catch {
+    return undefined;
+  }
+}

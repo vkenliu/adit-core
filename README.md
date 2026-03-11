@@ -24,8 +24,9 @@ ADIT is built on three pillars:
 - **Multi-Actor Timeline** — Distinguishes assistant, user, tool, and system actions
 - **Environment Snapshotting** — Captures git state, dependency versions, runtime context, Docker detection, shell info, CPU/memory, and package managers
 - **Environment Drift Detection** — Automatically detects and records environment changes between sessions
-- **Cloud Sync** — Device-code authentication, cursor-based incremental push, auto-sync after hook events, transcript upload, and rolling-window circuit breaker
+- **Cloud Sync** — Device-code and token-based authentication, cursor-based incremental push with per-project cursors, auto-sync after hook events, transcript upload, and rolling-window circuit breaker
 - **Auto-Sync** — Fire-and-forget cloud sync triggered by record count threshold or time elapsed, with fail-open error handling
+- **Auto Project-Link** — Background sync of git metadata and project documents on session-start, with staleness-based caching
 - **Platform Session Tracking** — Correlates events to platform-native session IDs for accurate multi-session handling
 - **SpecFlow Planning** — Structured Intent → Roadmap → Tasks workflow
 - **Interactive TUI** — Full terminal UI built with React/Ink with live detail updates, search, diffs, and environment snapshots
@@ -53,30 +54,24 @@ TypeScript pnpm monorepo with six packages:
 ADIT uses a pluggable adapter pattern for AI platform integration. Each adapter maps platform-specific hook events to normalized ADIT handlers:
 
 - **Claude Code** — Fully supported with hook chaining (installs alongside other tools' hooks). Hooks: `UserPromptSubmit`, `Stop`, `SessionStart`, `SessionEnd`, `TaskCompleted`, `Notification`, `SubagentStart`, `SubagentStop`
-- **OpenCode** — Fully supported via generated plugin. Events: `chat.message`, `session.idle`, `session.created`, `session.deleted`, `session.error`, `command.executed`, `todo.updated`, `message.part.updated`. Includes process exit/signal safety net for session-end.
+- **OpenCode** — Fully supported via generated plugin with custom tools and slash commands. Events: `chat.message`, `session.idle`, `session.created`, `session.deleted`, `session.diff`, `command.executed`, `todo.updated`, `message.part.updated`. Includes process exit/signal safety net for session-end. Also installs LLM-callable tools (`adit_link`, `adit_intent`) in `.opencode/tools/adit.ts`.
 - **Cursor, GitHub Copilot, Codex** — Detected by the adapter registry; adapters can be contributed
 
 Adapters are registered via `registerAdapter()` and auto-detected from environment variables.
 
 ### Cloud Sync
 
-Cloud sync uses a cursor-based incremental push model:
+Cloud sync uses a cursor-based incremental push model with per-project cursors:
 
 - **Auto-sync** triggers after every hook event when credentials exist (opt-in via `adit cloud login`)
+- **Per-project cursors** — each project tracks its own sync cursor independently, with fallback to global cursors for legacy servers
 - **Count-based trigger** — syncs when unsynced records reach the threshold (default: 20, configurable via `ADIT_CLOUD_SYNC_THRESHOLD`)
 - **Time-based trigger** — syncs when time since last sync exceeds timeout (default: 2 hours, configurable via `ADIT_CLOUD_SYNC_TIMEOUT_HOURS`)
-- **Transcript upload** — incremental upload of AI conversation transcripts
-- **Circuit breaker** — Auto-sync disables after repeated failures within a 1-hour rolling window and auto-recovers when the window expires
+- **Transcript upload** — incremental upload of AI conversation transcripts with configurable poll interval, concurrency, and retry limits
+- **Circuit breaker** — Auto-sync disables after repeated failures (default: 5) within a 1-hour rolling window and auto-recovers when the window expires
+- **Token auth** — supports `ADIT_AUTH_TOKEN` environment variable for CI/CD pipelines (bypasses device-code login)
 - All sync errors are fail-open — network or auth failures are silently retried on the next trigger
 - Disable auto-sync with `ADIT_CLOUD_AUTO_SYNC=false` or `ADIT_CLOUD_ENABLED=false`
-
-### Skills & Agents
-
-ADIT ships with **10 Claude Code skills** (in `skills/`) for natural-language interaction:
-
-`timeline` · `checkpoint` · `revert` · `diff` · `search` · `env` · `status` · `doctor`
-
-And a **timeline-analyst** agent (in `agents/`) for deep session analysis, pattern detection, and environment drift reporting.
 
 ## Installation
 
@@ -138,7 +133,7 @@ adit cloud login --server <url>
 
 | Command | Description |
 |---------|-------------|
-| `adit list` | Show timeline entries with `--limit`, `--actor`, `--type`, `--sort` (ACTOR/TIME), `--json` |
+| `adit list` (alias: `ls`) | Show timeline entries with `--limit`, `--actor`, `--type`, `--sort` (ACTOR/TIME), `--checkpoints`, `--query <text>`, `--expand`, `--json` |
 | `adit show <id>` | Full event detail with prompt, CoT, and diff |
 | `adit search <query>` | Full-text search with `--actor`, `--type`, `--from`/`--to`, `--branch`, `--has-checkpoint`, `--json` |
 | `adit tui` | Interactive terminal UI with keyboard navigation |
@@ -156,7 +151,7 @@ All git checkpoint operations are grouped under `adit snapshot` to clearly separ
 | Command | Description |
 |---------|-------------|
 | `adit snapshot revert [id]` | Restore working tree to checkpoint; interactive picker if no ID given (`--yes`, `--limit`) |
-| `adit snapshot undo` | Revert to parent of last checkpoint |
+| `adit snapshot undo` | Revert to parent of last checkpoint (`--yes`) |
 | `adit snapshot resume [branch]` | Resume session from latest checkpoint on a branch; supports squash-merged branches; prints continue commands (`--yes`) |
 | `adit snapshot diff <id>` | Show diff with `--max-lines`, `--offset-lines`, `--file` |
 | `adit snapshot env show <id>` | Show environment snapshot for an event |
@@ -177,6 +172,7 @@ All git checkpoint operations are grouped under `adit snapshot` to clearly separ
 |---------|-------------|
 | `adit cloud login` | Authenticate via device code flow (`--server <url>`) |
 | `adit cloud logout` | Clear stored cloud credentials |
+| `adit cloud auth-token <token>` | Authenticate with a static JWT token (for CI/CD) |
 | `adit cloud sync` | Push unsynced records to cloud (`--json`) |
 | `adit cloud status` | Show cloud sync status with server reachability (`--json`) |
 | `adit cloud reset-credentials` | Force-clear all credentials and sync state (`--yes`) |
@@ -185,6 +181,17 @@ All git checkpoint operations are grouped under `adit snapshot` to clearly separ
 | `adit cloud transcript status` | Show transcript upload status (`--json`) |
 | `adit cloud transcript upload` | Manually trigger transcript uploads (`--json`) |
 | `adit cloud transcript reset <id>` | Reset a failed transcript for re-upload (`--json`) |
+
+### Project Link
+
+| Command | Description |
+|---------|-------------|
+| `adit cloud project link` | Link project to adit-cloud — uploads git metadata and documents (`--force`, `--skip-docs`, `--skip-commits`, `--skip-qualify`, `--dry-run`, `--json`) |
+| `adit cloud project intent` | List intents and tasks from connected project (`--id <id>`, `--state <state>`, `--json`) |
+
+Also available as `/adit link` and `/adit intent` slash commands in Claude Code and OpenCode.
+
+**Auto-link** — On session-start, ADIT automatically runs a background project-link sync (as a detached child process) to keep git metadata and documents up to date. Staleness is checked against a configurable threshold (default: 2 hours, via `ADIT_PROJECT_LINK_STALE_HOURS`). Disable with `ADIT_PROJECT_LINK_AUTO_SYNC=false`.
 
 ### Plugins
 
@@ -236,16 +243,50 @@ Cloud credentials are stored in `~/.adit/cloud-credentials.json` (file permissio
 
 ## Configuration
 
+### Project Link — Document Discovery
+
+ADIT reads a `settings.json` file in your project root for project-level configuration:
+
+```json
+{
+  "captureEnv": true,
+  "projectLink": {
+    "docPatterns": [
+      "*.md",
+      "docs/**/*.md",
+      "wiki/**/*.md",
+      "my-custom-docs/**/*.md"
+    ],
+    "excludePatterns": [
+      "node_modules/**",
+      ".git/**",
+      "dist/**",
+      "build/**",
+      "test-fixtures/**"
+    ]
+  }
+}
+```
+
+- **`captureEnv`** — Set to `false` to disable environment snapshots project-wide (equivalent to `ADIT_CAPTURE_ENV=false`).
+
+- **`docPatterns`** — Glob patterns for files to include. Replaces the defaults (does not merge). Default patterns scan `*.md` at root plus `docs/`, `doc/`, `documentation/`, `specs/`, `design/`, `wiki/`, `guides/`, `rfcs/`, and `adrs/` directories.
+- **`excludePatterns`** — Glob patterns to exclude. Replaces the defaults (does not merge). Default excludes `node_modules`, `.git`, `vendor`, `dist`, `build`, `out`, `coverage`, `.adit`, and `CHANGELOG.md`.
+
+Files in hidden directories (any path segment starting with `.`) are always skipped. Files larger than 500 KB are skipped with a warning.
+
+### Environment Variables
+
 | Environment Variable | Description | Default |
 |----------------------|-------------|---------|
-| `ADIT_CLOUD_URL` | Cloud server URL | *(from credentials)* |
-| `ADIT_CLOUD_AUTO_SYNC` | Set to `false` to disable auto-sync | enabled |
-| `ADIT_CLOUD_ENABLED` | Set to `false` to disable all cloud features | enabled |
-| `ADIT_CLOUD_SYNC_THRESHOLD` | Unsynced record count before auto-sync triggers | `20` |
-| `ADIT_CLOUD_SYNC_TIMEOUT_HOURS` | Hours since last sync before auto-sync triggers | `2` |
-| `ADIT_CLOUD_BATCH_SIZE` | Max records per sync batch | `500` |
+| `ADIT_DATA_DIR` | Override `.adit/` data directory location | `<project>/.adit` |
 | `ADIT_CAPTURE_ENV` | Set to `false` to disable environment snapshots | `true` |
 | `ADIT_DEBUG` | Enable debug output for cloud sync errors | *(off)* |
+| `ADIT_CLOUD_URL` | Cloud server URL | *(from credentials)* |
+| `ADIT_CLOUD_ENABLED` | Set to `false` to disable all cloud features | `true` |
+| `ADIT_CLOUD_AUTO_SYNC` | Set to `false` to disable auto-sync | `true` |
+| `ADIT_AUTH_TOKEN` | Static JWT token for CI/CD auth (bypasses device-code login) | *(none)* |
+| `ADIT_TRANSCRIPT_UPLOAD` | Set to `false` to disable transcript upload | *(enabled)* |
 
 ## Requirements
 

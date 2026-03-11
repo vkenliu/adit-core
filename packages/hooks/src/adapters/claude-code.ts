@@ -5,7 +5,7 @@
  * Handles installation into .claude/settings.local.json.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import type { Platform } from "@adit/core";
 import type {
@@ -32,6 +32,70 @@ const HOOK_MAPPINGS: HookMapping[] = [
 const PLATFORM_TO_ADIT: Record<string, AditHookType> = Object.fromEntries(
   HOOK_MAPPINGS.map((m) => [m.platformEvent, m.aditHandler]),
 ) as Record<string, AditHookType>;
+
+/** Slash command installed into .claude/commands/ */
+const ADIT_COMMAND = {
+  filename: "adit.md",
+  content: `---
+name: adit
+description: ADIT — manage cloud project linking and development intents
+---
+
+**Requested action:** \`$ARGUMENTS\`
+
+## Routing
+
+Parse the requested action above and follow the **first matching rule**:
+
+1. Action is \`link\` (with optional flags) → run \`npx adit cloud project link\` with the appropriate flags mapped from the arguments: \`--force\`, \`--skip-docs\`, \`--skip-commits\`, \`--dry-run\`.
+2. Action is \`intent\` (with optional flags) → run \`npx adit cloud project intent\` with the appropriate flags mapped from the arguments: \`--id <value>\`, \`--state <value>\`. Add \`--json\` for structured output.
+3. No action, empty arguments, or unrecognized action → display the **Help** section below as your response. Do not run any commands.
+
+---
+
+## Help
+
+Display the following when no valid action is provided:
+
+### ADIT Cloud
+
+ADIT tracks your AI-assisted development sessions, links project context to the cloud, and helps you manage development intents (plans).
+
+**Usage:** \`/adit <action> [options]\`
+
+#### \`link\` — Sync project to adit-cloud
+
+Uploads git metadata (branches, commits) and project documents for intent planning.
+
+| Option | Description |
+|---|---|
+| \`--force\` | Clear cache and re-link from scratch |
+| \`--skip-docs\` | Only upload git metadata, skip documents |
+| \`--skip-commits\` | Skip commit history upload |
+| \`--dry-run\` | Preview what would be uploaded |
+
+#### \`intent\` — View development intents
+
+Shows intents (development plans) and tasks from the connected adit-cloud project.
+
+| Option | Description |
+|---|---|
+| \`--id <id>\` | Show a specific intent by ID |
+| \`--state <state>\` | Filter by state (e.g. \`capture\`, \`execution\`, \`shipped\`) |
+
+#### Examples
+
+- \`/adit link\` — link the project with defaults
+- \`/adit link --force --skip-docs\` — re-link, git metadata only
+- \`/adit intent\` — list all intents
+- \`/adit intent --state execution\` — show active intents
+
+> **Tip:** Not logged in? Run \`npx adit cloud login\` in your terminal first.
+`,
+};
+
+/** Filenames of old command files to clean up during install */
+const LEGACY_COMMAND_FILES = ["adit-link.md", "adit-intent.md"];
 
 /** Check if a command string is an ADIT hook (matches both npx and resolved-path formats) */
 function isAditHookCommand(command: string): boolean {
@@ -196,6 +260,15 @@ export const claudeCodeAdapter: PlatformAdapter = {
       detail: hooksDetail,
     });
 
+    // Check slash command file
+    const cmdPath = join(projectRoot, ".claude", "commands", ADIT_COMMAND.filename);
+    const cmdExists = existsSync(cmdPath);
+    checks.push({
+      name: "Command /adit",
+      ok: cmdExists,
+      detail: cmdExists ? cmdPath : "Not found",
+    });
+
     return {
       valid: checks.every((c) => c.ok),
       checks,
@@ -249,6 +322,16 @@ export const claudeCodeAdapter: PlatformAdapter = {
 
     settings.hooks = mergedHooks;
     writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+
+    // Install slash command
+    const commandsDir = join(claudeDir, "commands");
+    mkdirSync(commandsDir, { recursive: true });
+    writeFileSync(join(commandsDir, ADIT_COMMAND.filename), ADIT_COMMAND.content);
+
+    // Clean up legacy command files from previous versions
+    for (const legacy of LEGACY_COMMAND_FILES) {
+      try { unlinkSync(join(commandsDir, legacy)); } catch { /* best-effort */ }
+    }
   },
 
   getResumeCommand(_projectRoot: string): string | null {
@@ -292,6 +375,15 @@ export const claudeCodeAdapter: PlatformAdapter = {
       writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
     } catch {
       // Ignore parse errors
+    }
+
+    // Remove slash command
+    const commandsDir = join(projectRoot, ".claude", "commands");
+    try { unlinkSync(join(commandsDir, ADIT_COMMAND.filename)); } catch { /* best-effort */ }
+
+    // Clean up legacy command files
+    for (const legacy of LEGACY_COMMAND_FILES) {
+      try { unlinkSync(join(commandsDir, legacy)); } catch { /* best-effort */ }
     }
   },
 };

@@ -21,7 +21,7 @@ export const migrations: Migration[] = [
         project_id    TEXT NOT NULL,
         client_id     TEXT NOT NULL,
         session_type  TEXT NOT NULL DEFAULT 'interactive',
-        platform      TEXT NOT NULL DEFAULT 'claude-code',
+        platform      TEXT NOT NULL DEFAULT 'other',
         started_at    TEXT NOT NULL,
         ended_at      TEXT,
         status        TEXT NOT NULL DEFAULT 'active',
@@ -219,6 +219,25 @@ export const migrations: Migration[] = [
 
       CREATE INDEX IF NOT EXISTS idx_sessions_platform_session_id
         ON sessions(platform_session_id) WHERE platform_session_id IS NOT NULL;
+    `,
+  },
+  {
+    id: 11,
+    name: "create_project_link_cache",
+    sql: `
+      CREATE TABLE IF NOT EXISTS project_link_cache (
+        project_id TEXT NOT NULL,
+        server_url TEXT NOT NULL,
+        confirmed_project_id TEXT,
+        last_commit_sha TEXT,
+        last_branch_sync_at TEXT,
+        last_doc_sync_at TEXT,
+        doc_hashes_json TEXT DEFAULT '{}',
+        qualified INTEGER DEFAULT 0,
+        initialized_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, server_url)
+      );
     `,
   },
 ];

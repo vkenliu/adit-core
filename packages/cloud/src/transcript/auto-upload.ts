@@ -26,41 +26,35 @@ import type { SyncUploadType } from "./uploader.js";
  * @param db - Open database connection
  * @param sessionId - Current session ID
  * @param transcriptPath - Absolute path to the transcript JSONL file
- * @param cli - CLI identifier (e.g. "claude-code", "cursor", "windsurf")
  * @param type - Upload type (default: "transcript")
  */
 export async function triggerTranscriptUpload(
   db: Database.Database,
   sessionId: string,
   transcriptPath: string,
-  cli: string = "claude-code",
   type: SyncUploadType = "transcript",
 ): Promise<void> {
   const cloudConfig = loadCloudConfig();
 
-  // 1. Check transcript upload is enabled
-  if (
-    !cloudConfig.serverUrl ||
-    !cloudConfig.enabled ||
-    !cloudConfig.transcriptUpload.enabled
-  ) {
-    return;
-  }
+  // 1. Check transcript upload is not explicitly disabled
+  if (!cloudConfig.transcriptUpload.enabled) return;
+  if (process.env.ADIT_CLOUD_ENABLED === "false") return;
 
-  // 2. Check credentials exist
+  // 2. Check credentials exist — credentials are the implicit opt-in
+  //    (same pattern as auto-sync: stored credentials enable the feature)
   const credentials = loadCredentials();
   if (!credentials) return;
 
-  // 3. Verify credentials belong to the configured server
-  if (credentials.serverUrl !== cloudConfig.serverUrl) return;
+  // 3. Resolve server URL: env var takes priority, fall back to credentials
+  //    (same resolution strategy as triggerAutoSync)
+  const serverUrl = cloudConfig.serverUrl ?? credentials.serverUrl;
+  if (!serverUrl) return;
+
+  // 3a. If env var specifies a different server than credentials, skip
+  if (cloudConfig.serverUrl && credentials.serverUrl !== cloudConfig.serverUrl) return;
 
   // 4. Register the transcript (idempotent)
-  registerTranscript(
-    db,
-    sessionId,
-    transcriptPath,
-    cloudConfig.serverUrl,
-  );
+  registerTranscript(db, sessionId, transcriptPath, serverUrl);
 
   // 5. Process any pending uploads
   if (isTokenExpired(credentials)) {
@@ -68,14 +62,13 @@ export async function triggerTranscriptUpload(
   }
 
   try {
-    const client = new CloudClient(cloudConfig.serverUrl, credentials);
+    const client = new CloudClient(serverUrl, credentials);
     await processTranscriptUploads({
       db,
       client,
       config: cloudConfig.transcriptUpload,
-      serverUrl: cloudConfig.serverUrl,
+      serverUrl,
       type,
-      cli,
     });
   } catch (error) {
     // Fail silently — this is fire-and-forget

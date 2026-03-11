@@ -6,7 +6,7 @@
  */
 
 // Config
-export { loadCloudConfig, DEFAULT_SERVER_URL, type CloudConfig } from "./config.js";
+export { loadCloudConfig, DEFAULT_SERVER_URL, type CloudConfig, type ProjectLinkConfig } from "./config.js";
 
 // Auth
 export {
@@ -68,3 +68,39 @@ export {
 } from "./transcript/index.js";
 
 export { type TranscriptUploadConfig } from "./config.js";
+
+// Project Link
+export {
+  linkCommand,
+  intentCommand,
+  formatIntentList,
+  formatIntentDetail,
+  triggerProjectLinkSync,
+  checkQuality,
+  formatQualityFeedback,
+  collectRemoteUrl,
+  collectBranches,
+  collectCommitLogs,
+  collectCommitCount,
+  collectDefaultBranch,
+  collectCurrentBranch,
+  projectNameFromRemoteUrl,
+  discoverDocuments,
+  loadDocSettings,
+  getProjectLinkCache,
+  upsertProjectLinkCache,
+  clearProjectLinkCache,
+  type LinkResult,
+  type IntentResult,
+  type LinkOptions,
+  type IntentOptions,
+  type IntentSummary,
+  type IntentDetail,
+  type TaskSlice,
+  type StepTiming,
+  type GitBranch,
+  type GitCommit,
+  type DiscoveredDocument,
+  type ProjectLinkCache,
+  type QualifyResponse,
+} from "./project-link/index.js";

@@ -16,6 +16,7 @@ vi.mock("@adit/core", () => ({
 vi.mock("./serializer.js", () => ({
   buildSyncBatch: vi.fn(),
   batchRecordCount: vi.fn(),
+  countUnsyncedRecords: vi.fn(() => 0),
 }));
 
 vi.mock("./conflicts.js", () => ({
@@ -24,18 +25,26 @@ vi.mock("./conflicts.js", () => ({
 
 import { SyncEngine } from "./engine.js";
 import { upsertSyncState } from "@adit/core";
-import { buildSyncBatch, batchRecordCount } from "./serializer.js";
+import { buildSyncBatch, batchRecordCount, countUnsyncedRecords } from "./serializer.js";
 
 const mockBuildSyncBatch = vi.mocked(buildSyncBatch);
 const mockBatchRecordCount = vi.mocked(batchRecordCount);
+const mockCountUnsyncedRecords = vi.mocked(countUnsyncedRecords);
 const mockUpsertSyncState = vi.mocked(upsertSyncState);
 
-function createEngine(overrides: { batchSize?: number } = {}) {
+function createEngine(overrides: { batchSize?: number; projectId?: string } = {}) {
+  const projectId = overrides.projectId ?? "proj-001";
   const mockClient = {
     get: vi.fn().mockResolvedValue({
       lastSyncedEventId: null,
       syncVersion: 0,
       lastSyncedAt: null,
+      projectCursors: {
+        [projectId]: {
+          lastSyncedEventId: null,
+          lastSyncedAt: null,
+        },
+      },
     }),
     post: vi.fn().mockResolvedValue({
       accepted: 0,
@@ -47,7 +56,7 @@ function createEngine(overrides: { batchSize?: number } = {}) {
   };
 
   const engine = new SyncEngine({} as never, mockClient as never, {
-    projectId: "proj-001",
+    projectId,
     batchSize: overrides.batchSize ?? 500,
     serverUrl: "https://cloud.example.com",
     cloudClientId: "client-001",
@@ -215,5 +224,142 @@ describe("SyncEngine", () => {
 
     expect(result.conflicts).toHaveLength(2);
     expect(result.accepted).toBe(148);
+  });
+
+  describe("per-project cursors", () => {
+    it("uses per-project cursor from projectCursors map", async () => {
+      const { engine, mockClient } = createEngine({ batchSize: 500 });
+      mockClient.get.mockResolvedValue({
+        lastSyncedEventId: "global-cursor-999",
+        syncVersion: 5,
+        lastSyncedAt: "2025-01-01T00:00:00Z",
+        projectCursors: {
+          "proj-001": {
+            lastSyncedEventId: "project-cursor-42",
+            lastSyncedAt: "2025-01-02T00:00:00Z",
+          },
+        },
+      });
+
+      mockBuildSyncBatch.mockReturnValue({ events: [{}], sessions: [] } as never);
+      let callCount = 0;
+      mockBatchRecordCount.mockImplementation(() => {
+        callCount++;
+        return callCount === 1 ? 5 : 0;
+      });
+      mockClient.post.mockResolvedValue({
+        accepted: 5,
+        duplicates: 0,
+        conflicts: [],
+        newSyncCursor: "project-cursor-47",
+        newSyncVersion: 6,
+      });
+
+      const result = await engine.sync();
+
+      expect(result.batches).toBe(1);
+      expect(result.accepted).toBe(5);
+      // buildSyncBatch should have been called with the per-project cursor,
+      // not the global one
+      expect(mockBuildSyncBatch).toHaveBeenCalledWith(
+        expect.anything(),
+        "project-cursor-42",
+        "2025-01-02T00:00:00Z",
+        "proj-001",
+        "client-001",
+        500,
+      );
+    });
+
+    it("does full push when projectCursors exists but project has no entry", async () => {
+      const { engine, mockClient } = createEngine({ batchSize: 500 });
+      mockClient.get.mockResolvedValue({
+        lastSyncedEventId: "global-cursor-999",
+        syncVersion: 5,
+        lastSyncedAt: "2025-01-01T00:00:00Z",
+        projectCursors: {
+          "other-project": {
+            lastSyncedEventId: "other-cursor-10",
+            lastSyncedAt: "2025-01-01T00:00:00Z",
+          },
+        },
+      });
+
+      mockBuildSyncBatch.mockReturnValue({ events: [{}], sessions: [] } as never);
+      let callCount = 0;
+      mockBatchRecordCount.mockImplementation(() => {
+        callCount++;
+        return callCount === 1 ? 3 : 0;
+      });
+      mockClient.post.mockResolvedValue({
+        accepted: 3,
+        duplicates: 0,
+        conflicts: [],
+        newSyncCursor: "new-cursor",
+        newSyncVersion: 6,
+      });
+
+      const result = await engine.sync();
+
+      expect(result.batches).toBe(1);
+      // Should have started with null cursor (full push)
+      expect(mockBuildSyncBatch).toHaveBeenCalledWith(
+        expect.anything(),
+        null,
+        null,
+        "proj-001",
+        "client-001",
+        500,
+      );
+    });
+
+    it("falls back to global cursor on legacy server without projectCursors", async () => {
+      const { engine, mockClient } = createEngine({ batchSize: 500 });
+      // Legacy server response — no projectCursors field
+      mockClient.get.mockResolvedValue({
+        lastSyncedEventId: "legacy-global-cursor",
+        syncVersion: 3,
+        lastSyncedAt: "2025-01-01T00:00:00Z",
+      });
+
+      mockBuildSyncBatch.mockReturnValue({ events: [{}], sessions: [] } as never);
+      let callCount = 0;
+      mockBatchRecordCount.mockImplementation(() => {
+        callCount++;
+        return callCount === 1 ? 2 : 0;
+      });
+      mockClient.post.mockResolvedValue({
+        accepted: 2,
+        duplicates: 0,
+        conflicts: [],
+        newSyncCursor: "legacy-cursor-2",
+        newSyncVersion: 4,
+      });
+
+      const result = await engine.sync();
+
+      expect(result.batches).toBe(1);
+      // Should use the global cursor as fallback
+      expect(mockBuildSyncBatch).toHaveBeenCalledWith(
+        expect.anything(),
+        "legacy-global-cursor",
+        "2025-01-01T00:00:00Z",
+        "proj-001",
+        "client-001",
+        500,
+      );
+    });
+
+    it("passes projectId as query param to getRemoteStatus", async () => {
+      const { engine, mockClient } = createEngine();
+      mockBatchRecordCount.mockReturnValue(0);
+      mockBuildSyncBatch.mockReturnValue({ events: [], sessions: [] } as never);
+
+      await engine.sync();
+
+      expect(mockClient.get).toHaveBeenCalledWith(
+        expect.stringContaining("projectId=proj-001"),
+      );
+    });
   });
 });

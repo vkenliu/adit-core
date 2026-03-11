@@ -28,6 +28,246 @@ import type {
 
 const PLUGIN_FILENAME = "adit.js";
 
+/** Slash command installed into .opencode/commands/ */
+const ADIT_COMMAND = {
+  filename: "adit.md",
+  content: `---
+description: ADIT — manage cloud project linking and development intents
+---
+
+**Requested action:** \`$ARGUMENTS\`
+
+## Routing
+
+Parse the requested action above and follow the **first matching rule**:
+
+1. Action is \`link\` (with optional flags) → call the \`adit_link\` tool. Map flags: \`--force\` → \`force: true\`, \`--skip-docs\` → \`skipDocs: true\`, \`--skip-commits\` → \`skipCommits: true\`, \`--dry-run\` → \`dryRun: true\`.
+2. Action is \`intent\` (with optional flags) → call the \`adit_intent\` tool. Map flags: \`--id <value>\` → \`id: "<value>"\`, \`--state <value>\` → \`state: "<value>"\`.
+3. No action, empty arguments, or unrecognized action → display the **Help** section below as your response. Do not call any tools.
+
+---
+
+## Help
+
+Display the following when no valid action is provided:
+
+### ADIT Cloud
+
+ADIT tracks your AI-assisted development sessions, links project context to the cloud, and helps you manage development intents (plans).
+
+**Usage:** \`/adit <action> [options]\`
+
+#### \`link\` — Sync project to adit-cloud
+
+Uploads git metadata (branches, commits) and project documents for intent planning.
+
+| Option | Description |
+|---|---|
+| \`--force\` | Clear cache and re-link from scratch |
+| \`--skip-docs\` | Only upload git metadata, skip documents |
+| \`--skip-commits\` | Skip commit history upload |
+| \`--dry-run\` | Preview what would be uploaded |
+
+#### \`intent\` — View development intents
+
+Shows intents (development plans) and tasks from the connected adit-cloud project.
+
+| Option | Description |
+|---|---|
+| \`--id <id>\` | Show a specific intent by ID |
+| \`--state <state>\` | Filter by state (e.g. \`capture\`, \`execution\`, \`shipped\`) |
+
+#### Examples
+
+- \`/adit link\` — link the project with defaults
+- \`/adit link --force --skip-docs\` — re-link, git metadata only
+- \`/adit intent\` — list all intents
+- \`/adit intent --state execution\` — show active intents
+
+> **Tip:** Not logged in? Run \`npx adit cloud login\` in your terminal first.
+`,
+};
+
+/** Generate custom tool file content for .opencode/tools/adit.ts */
+function generateToolsContent(): string {
+  // Built as string concatenation to avoid backtick escaping issues
+  // (the Bun.$ tagged template must contain literal backticks in output).
+  const lines = [
+    "/**",
+    " * ADIT custom tools for OpenCode.",
+    " *",
+    " * Provides adit_link and adit_intent tools that the LLM can call",
+    " * to interact with adit-cloud project linking and intent management.",
+    " *",
+    " * @adit/auto-generated — reinstall with: adit plugin install opencode",
+    " */",
+    "",
+    'import { tool } from "@opencode-ai/plugin";',
+    "",
+    "export const link = tool({",
+    "  description:",
+    '    "Link the current project to adit-cloud. Uploads git metadata (branches, commits) and project documents for intent planning.",',
+    "  args: {",
+    '    force: tool.schema.boolean().optional().describe("Clear cache and re-link everything from scratch"),',
+    '    skipDocs: tool.schema.boolean().optional().describe("Only upload git metadata, skip document upload"),',
+    '    skipCommits: tool.schema.boolean().optional().describe("Skip commit history upload"),',
+    '    dryRun: tool.schema.boolean().optional().describe("Preview what would be uploaded without actually uploading"),',
+    "  },",
+    "  async execute(args, context) {",
+    '    const flags: string[] = ["--json"];',
+    '    if (args.force) flags.push("--force");',
+    '    if (args.skipDocs) flags.push("--skip-docs");',
+    '    if (args.skipCommits) flags.push("--skip-commits");',
+    '    if (args.dryRun) flags.push("--dry-run");',
+    "",
+    '    const cmd = ["npx", "adit", "cloud", "project", "link", ...flags];',
+    "    const result = await Bun.$`${cmd}`.cwd(context.directory).nothrow().quiet();",
+    "    const stdout = result.stdout.toString().trim();",
+    "    const stderr = result.stderr.toString().trim();",
+    "",
+    "    if (result.exitCode !== 0) {",
+    '      return "Link failed: " + (stderr || stdout || "Unknown error");',
+    "    }",
+    "",
+    "    try {",
+    "      const data = JSON.parse(stdout);",
+    '      const q = data.qualified ? "qualified" : "not qualified";',
+    "      const lines = [",
+    '        "**Project linked successfully!**",',
+    '        "",',
+    '        "| Field | Value |",',
+    '        "|---|---|",',
+    '        "| Project | " + data.projectName + " |",',
+    '        "| Server | " + data.serverUrl + " |",',
+    '        "| Branches | " + data.branchCount + " |",',
+    '        "| Commits | " + data.commitCount + " |",',
+    '        "| Documents | " + data.documentCount + " (" + q + ") |",',
+    "      ];",
+    '      if (data.score !== null) lines.push("| Quality | " + (data.score * 100).toFixed(0) + "% |");',
+    "      if (data.stepTimings && data.stepTimings.length > 0) {",
+    '        lines.push("");',
+    '        lines.push("**Step timings:**");',
+    '        lines.push("");',
+    '        lines.push("| Step | Duration |");',
+    '        lines.push("|---|---|");',
+    "        for (const s of data.stepTimings) {",
+    '          const secs = (s.durationMs / 1000).toFixed(2);',
+    '          lines.push("| " + s.step + " | " + secs + "s |");',
+    "        }",
+    "        if (data.totalDurationMs !== undefined) {",
+    '          const total = (data.totalDurationMs / 1000).toFixed(2);',
+    '          lines.push("| **Total** | **" + total + "s** |");',
+    "        }",
+    "      }",
+    '      return lines.join("\\n");',
+    "    } catch {",
+    "      return stdout;",
+    "    }",
+    "  },",
+    "});",
+    "",
+    "export const intent = tool({",
+    "  description:",
+    '    "Show intents (development plans) and tasks from the connected adit-cloud project.",',
+    "  args: {",
+    '    id: tool.schema.string().optional().describe("Intent ID to show detailed view with all tasks"),',
+    '    state: tool.schema.string().optional().describe("Filter intents by state (e.g. capture, execution, shipped)"),',
+    "  },",
+    "  async execute(args, context) {",
+    '    const flags: string[] = ["--json"];',
+    '    if (args.id) flags.push("--id", args.id);',
+    '    if (args.state) flags.push("--state", args.state);',
+    "",
+    '    const cmd = ["npx", "adit", "cloud", "project", "intent", ...flags];',
+    "    const result = await Bun.$`${cmd}`.cwd(context.directory).nothrow().quiet();",
+    "    const stdout = result.stdout.toString().trim();",
+    "    const stderr = result.stderr.toString().trim();",
+    "",
+    "    if (result.exitCode !== 0) {",
+    '      return "Intent query failed: " + (stderr || stdout || "Unknown error");',
+    "    }",
+    "",
+    "    try {",
+    "      const data = JSON.parse(stdout);",
+    "",
+    "      // Single intent detail",
+    "      if (data.intent) {",
+    "        const i = data.intent;",
+    "        const progress = i.taskCount > 0",
+    '          ? i.completedTaskCount + "/" + i.taskCount + " tasks completed"',
+    '          : "no tasks";',
+    "        const lines = [",
+    '          "### " + i.title,',
+    '          "",',
+    '          "| Field | Value |",',
+    '          "|---|---|",',
+    '          "| State | " + i.state + " |",',
+    '          "| Goal | " + i.businessGoal + " |",',
+    '          "| Progress | " + progress + " |",',
+    "        ];",
+    '        if (i.linkedBranches && i.linkedBranches.length > 0) {',
+    '          lines.push("| Branches | " + i.linkedBranches.join(", ") + " |");',
+    "        }",
+    "        if (i.tasks && i.tasks.length > 0) {",
+    '          lines.push("");',
+    '          lines.push("#### Tasks");',
+    '          lines.push("");',
+    '          lines.push("| Phase | Task | Status |");',
+    '          lines.push("|---|---|---|");',
+    "          for (const t of i.tasks) {",
+    '            const phase = t.phaseTitle || "Phase " + t.phase;',
+    '            lines.push("| " + phase + " | " + t.title + (t.description ? " — " + t.description : "") + " | " + t.approvalStatus + " |");',
+    "          }",
+    "        }",
+    '        if (i.acceptanceMd) {',
+    '          lines.push("");',
+    '          lines.push("#### Acceptance Criteria");',
+    '          lines.push("");',
+    '          lines.push(i.acceptanceMd);',
+    "        }",
+    '        return lines.join("\\n");',
+    "      }",
+    "",
+    "      // Intent list",
+    "      if (data.intents) {",
+    "        if (data.intents.length === 0) {",
+    '          return "No intents found for this project. Create intents on adit-cloud first.";',
+    "        }",
+    '        const lines = ["**" + data.intents.length + " intent(s):**", ""];',
+    '        lines.push("| ID | State | Intent | Progress | Goal |");',
+    '        lines.push("|---|---|---|---|---|");',
+    "        for (const i of data.intents) {",
+    "          const progress = i.taskCount > 0",
+    '            ? i.completedTaskCount + "/" + i.taskCount',
+    '            : "—";',
+    '          const branches = i.linkedBranches && i.linkedBranches.length > 0',
+    '            ? " (" + i.linkedBranches.join(", ") + ")"',
+    '            : "";',
+    '          lines.push("| " + i.id + " | " + i.state + " | " + i.title + branches + " | " + progress + " | " + i.businessGoal + " |");',
+    "        }",
+    '        lines.push("");',
+    '        lines.push("Use `/adit intent --id <id>` to see details for a specific intent.");',
+    '        return lines.join("\\n");',
+    "      }",
+    "",
+    '      return JSON.stringify(data, null, 2);',
+    "    } catch {",
+    "      return stdout;",
+    "    }",
+    "  },",
+    "});",
+    "",
+  ];
+  return lines.join("\n");
+}
+
+const ADIT_TOOLS = {
+  filename: "adit.ts",
+};
+
+/** Filenames of old command files to clean up during install */
+const LEGACY_COMMAND_FILES = ["adit-link.md", "adit-intent.md"];
+
 const HOOK_MAPPINGS: HookMapping[] = [
   { platformEvent: "chat.message", aditHandler: "prompt-submit" },
   // OpenCode has no "stop" hook key; session.idle fires when the assistant
@@ -110,6 +350,8 @@ function generatePluginContent(aditBinaryPath: string): string {
 // hook dispatcher via child process. All errors are swallowed (fail-open).
 
 const { spawn, spawnSync } = require("child_process");
+const { mkdirSync, writeFileSync, appendFileSync, existsSync, readFileSync } = require("fs");
+const path = require("path");
 
 const ADIT_CMD = ${JSON.stringify(cmd)};
 const ADIT_BASE_ARGS = ${JSON.stringify(baseArgs)};
@@ -147,8 +389,197 @@ function spawnAditHookSync(hookType, data) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Transcript collection — fetch messages from OpenCode's local HTTP API
+// and write them as JSONL so the existing transcript upload pipeline can
+// handle them identically to Claude Code transcripts.
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch session messages via the SDK client and append new ones to a JSONL file.
+ * Returns the absolute path to the JSONL file, or null if nothing was written.
+ *
+ * Each line is a JSON object:
+ *   { role, messageID, parentID?, model?, agent?, parts: [...], tokens?, cost?, time }
+ *
+ * The function is incremental: it reads a small metadata sidecar
+ * (.meta.json) to track how many messages were written on the previous
+ * call and only appends new ones.
+ */
+/**
+ * Export session messages via "opencode export <sessionID>" CLI command
+ * and write them as JSONL for the transcript upload pipeline.
+ *
+ * OpenCode TUI does not expose an HTTP API — the SDK client's baseUrl
+ * defaults to localhost:4096 which is only used by "opencode serve".
+ * The "opencode export" command reads directly from OpenCode's SQLite
+ * database, so it works regardless of whether a server is running.
+ *
+ * The function is incremental: a .meta.json sidecar tracks how many
+ * messages were written previously, and only new messages are appended.
+ */
+function fetchTranscript(cwd, sessionID) {
+  try {
+    if (process.env.ADIT_DEBUG) {
+      process.stderr.write("[adit-transcript] exporting session " + sessionID + "\\n");
+    }
+
+    var exportResult = spawnSync("opencode", ["export", sessionID], {
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 15000,
+      env: { ...process.env },
+    });
+
+    if (exportResult.status !== 0 || !exportResult.stdout) {
+      if (process.env.ADIT_DEBUG) {
+        var errOut = exportResult.stderr ? exportResult.stderr.toString().trim() : "";
+        process.stderr.write("[adit-transcript] export failed (exit " + exportResult.status + "): " + errOut.substring(0, 500) + "\\n");
+      }
+      return null;
+    }
+
+    var rawOutput = exportResult.stdout.toString().trim();
+    if (!rawOutput) {
+      if (process.env.ADIT_DEBUG) {
+        process.stderr.write("[adit-transcript] export returned empty output\\n");
+      }
+      return null;
+    }
+
+    var exportData;
+    try {
+      exportData = JSON.parse(rawOutput);
+    } catch (parseErr) {
+      if (process.env.ADIT_DEBUG) {
+        process.stderr.write("[adit-transcript] JSON parse error: " + parseErr.message + "\\n");
+        process.stderr.write("[adit-transcript] raw output (first 300 chars): " + rawOutput.substring(0, 300) + "\\n");
+      }
+      return null;
+    }
+
+    if (process.env.ADIT_DEBUG) {
+      var topKeys = Array.isArray(exportData) ? "[array:" + exportData.length + "]" : Object.keys(exportData).join(",");
+      process.stderr.write("[adit-transcript] export data shape: " + topKeys + "\\n");
+    }
+
+    // The export format may vary — handle multiple shapes:
+    // 1. Array of messages directly
+    // 2. Object with .messages array
+    // 3. Object with .data array
+    var messages = [];
+    if (Array.isArray(exportData)) {
+      messages = exportData;
+    } else if (exportData.messages && Array.isArray(exportData.messages)) {
+      messages = exportData.messages;
+    } else if (exportData.data && Array.isArray(exportData.data)) {
+      messages = exportData.data;
+    }
+
+    if (messages.length === 0) {
+      if (process.env.ADIT_DEBUG) {
+        process.stderr.write("[adit-transcript] no messages found in export\\n");
+      }
+      return null;
+    }
+
+    if (process.env.ADIT_DEBUG) {
+      process.stderr.write("[adit-transcript] found " + messages.length + " messages\\n");
+      // Log shape of first message to understand the format
+      var firstMsg = messages[0];
+      var firstKeys = firstMsg ? Object.keys(firstMsg).join(",") : "empty";
+      process.stderr.write("[adit-transcript] first message keys: " + firstKeys + "\\n");
+    }
+
+    // Ensure transcript directory exists
+    var transcriptDir = path.join(cwd, ".adit", "transcripts");
+    mkdirSync(transcriptDir, { recursive: true });
+
+    var filePath = path.join(transcriptDir, "opencode-" + sessionID + ".jsonl");
+    var metaPath = filePath + ".meta.json";
+
+    // Read previous write count from sidecar
+    var prevCount = 0;
+    if (existsSync(metaPath)) {
+      try {
+        var meta = JSON.parse(readFileSync(metaPath, "utf-8"));
+        prevCount = meta.messageCount || 0;
+      } catch (e) { /* ignore corrupt meta */ }
+    }
+
+    // Only append new messages
+    if (messages.length <= prevCount) {
+      if (process.env.ADIT_DEBUG) {
+        process.stderr.write("[adit-transcript] no new messages (prev: " + prevCount + ", current: " + messages.length + ")\\n");
+      }
+      return filePath;
+    }
+
+    var newMessages = messages.slice(prevCount);
+    var lines = [];
+    for (var i = 0; i < newMessages.length; i++) {
+      var msg = newMessages[i];
+
+      // Normalize: the export may use { info, parts } or flat { role, ... }
+      var info = msg.info || msg;
+      var parts = msg.parts || [];
+
+      var normalizedParts = parts.map(function(p) {
+        if (p.type === "text") return { type: "text", text: p.text || p.content };
+        if (p.type === "tool") return { type: "tool", tool: p.tool, callID: p.callID, state: p.state };
+        if (p.type === "reasoning") return { type: "reasoning", text: p.text };
+        if (p.type === "step-start") return { type: "step-start" };
+        if (p.type === "step-finish") return { type: "step-finish", cost: p.cost, tokens: p.tokens };
+        return { type: p.type || "unknown" };
+      });
+
+      var entry = {
+        role: info.role,
+        messageID: info.id || info.messageID,
+        sessionID: info.sessionID || sessionID,
+        time: info.time || info.createdAt,
+        parts: normalizedParts,
+      };
+
+      if (info.role === "assistant") {
+        if (info.modelID) entry.modelID = info.modelID;
+        if (info.providerID) entry.providerID = info.providerID;
+        if (info.tokens) entry.tokens = info.tokens;
+        if (info.cost) entry.cost = info.cost;
+        if (info.finishReason) entry.finishReason = info.finishReason;
+      }
+
+      if (info.role === "user") {
+        if (info.model) entry.model = info.model;
+        if (info.agent) entry.agent = info.agent;
+      }
+
+      lines.push(JSON.stringify(entry));
+    }
+
+    // Append new lines to the JSONL file
+    var NL = String.fromCharCode(10);
+    var appendData = lines.join(NL) + NL;
+    appendFileSync(filePath, appendData);
+
+    // Update sidecar with total count
+    writeFileSync(metaPath, JSON.stringify({ messageCount: messages.length }));
+
+    if (process.env.ADIT_DEBUG) {
+      process.stderr.write("[adit-transcript] wrote " + newMessages.length + " new messages to " + filePath + "\\n");
+    }
+    return filePath;
+  } catch (e) {
+    // fail-open — transcript export is best-effort
+    if (process.env.ADIT_DEBUG) {
+      process.stderr.write("[adit-transcript] error: " + (e && e.message ? e.message : String(e)) + "\\n");
+    }
+    return null;
+  }
+}
+
 exports.AditPlugin = async (ctx) => {
   const cwd = ctx.directory || ctx.worktree || process.cwd();
+  const client = ctx.client;
 
   // Track the active session ID so we can fire session-end on /exit.
   // OpenCode does not fire session.deleted when the user types /exit —
@@ -183,7 +614,7 @@ exports.AditPlugin = async (ctx) => {
   process.on("SIGINT", handleSignal.bind(null, "SIGINT"));
   process.on("SIGTERM", handleSignal.bind(null, "SIGTERM"));
 
-  return {
+  const hooks = {
     // Capture user prompts.
     // input contains sessionID and model info; output.parts is the array of
     // message parts — collect text parts to reconstruct the prompt string.
@@ -196,6 +627,11 @@ exports.AditPlugin = async (ctx) => {
           .map(function(p) { return p.text || ""; })
           .join("\\n")
           .trim();
+
+        // Skip slash commands — they are not real user prompts.
+        // OpenCode fires chat.message for everything including /adit, /help, etc.
+        if (!prompt || prompt.startsWith("/")) return;
+
         spawnAditHook("prompt-submit", {
           cwd,
           prompt: prompt,
@@ -218,10 +654,24 @@ exports.AditPlugin = async (ctx) => {
         switch (event.type) {
           // --- Assistant finished responding (replaces missing "stop" hook) ---
           case "session.idle": {
+            // Use activeSessionId (captured from session.created with the
+            // proper "ses..." format) rather than props.sessionID which may
+            // use a different internal format.
+            var idleSessionId = activeSessionId || props.sessionID;
+
+            // Export transcript via "opencode export" CLI and write JSONL.
+            var transcriptPath = null;
+            if (idleSessionId) {
+              try {
+                transcriptPath = fetchTranscript(cwd, idleSessionId);
+              } catch (e) { /* fail-open */ }
+            }
+
             spawnAditHook("stop", {
               cwd,
-              session_id: props.sessionID,
+              session_id: idleSessionId,
               stop_reason: "completed",
+              transcript_path: transcriptPath,
             });
             break;
           }
@@ -364,6 +814,8 @@ exports.AditPlugin = async (ctx) => {
       }
     },
   };
+
+  return hooks;
 };
 `;
 }
@@ -382,6 +834,8 @@ export const opencodeAdapter: PlatformAdapter = {
       hookType: aditHookType,
       platformCli: "opencode",
       platformSessionId: raw.session_id as string | undefined,
+      // Transcript (JSONL written by plugin from OpenCode API)
+      transcriptPath: raw.transcript_path as string | undefined,
       // Prompt
       prompt: raw.prompt as string | undefined,
       // Stop
@@ -453,6 +907,24 @@ export const opencodeAdapter: PlatformAdapter = {
       detail: pluginDetail,
     });
 
+    // Check slash command file
+    const cmdPath = join(projectRoot, ".opencode", "commands", ADIT_COMMAND.filename);
+    const cmdExists = existsSync(cmdPath);
+    checks.push({
+      name: "Command /adit",
+      ok: cmdExists,
+      detail: cmdExists ? cmdPath : "Not found",
+    });
+
+    // Check custom tools file
+    const toolPath = join(projectRoot, ".opencode", "tools", ADIT_TOOLS.filename);
+    const toolExists = existsSync(toolPath);
+    checks.push({
+      name: "Custom tools (adit_link, adit_intent)",
+      ok: toolExists,
+      detail: toolExists ? toolPath : "Not found",
+    });
+
     return {
       valid: checks.every((c) => c.ok),
       checks,
@@ -460,12 +932,28 @@ export const opencodeAdapter: PlatformAdapter = {
   },
 
   async installHooks(projectRoot: string, aditBinaryPath: string): Promise<void> {
+    // Install the event-hook plugin
     const pluginsDir = join(projectRoot, ".opencode", "plugins");
     mkdirSync(pluginsDir, { recursive: true });
 
     const pluginPath = join(pluginsDir, PLUGIN_FILENAME);
     const content = generatePluginContent(aditBinaryPath);
     writeFileSync(pluginPath, content);
+
+    // Install slash command
+    const commandsDir = join(projectRoot, ".opencode", "commands");
+    mkdirSync(commandsDir, { recursive: true });
+    writeFileSync(join(commandsDir, ADIT_COMMAND.filename), ADIT_COMMAND.content);
+
+    // Install custom tools
+    const toolsDir = join(projectRoot, ".opencode", "tools");
+    mkdirSync(toolsDir, { recursive: true });
+    writeFileSync(join(toolsDir, ADIT_TOOLS.filename), generateToolsContent());
+
+    // Clean up legacy command files from previous versions
+    for (const legacy of LEGACY_COMMAND_FILES) {
+      try { unlinkSync(join(commandsDir, legacy)); } catch { /* best-effort */ }
+    }
   },
 
   getResumeCommand(_projectRoot: string): string | null {
@@ -473,17 +961,27 @@ export const opencodeAdapter: PlatformAdapter = {
   },
 
   async uninstallHooks(projectRoot: string): Promise<void> {
+    // Remove the event-hook plugin
     const pluginPath = join(projectRoot, ".opencode", "plugins", PLUGIN_FILENAME);
-    if (!existsSync(pluginPath)) return;
+    if (existsSync(pluginPath)) {
+      try {
+        const content = readFileSync(pluginPath, "utf-8");
+        if (isAditPlugin(content)) {
+          unlinkSync(pluginPath);
+        }
+      } catch { /* best-effort */ }
+    }
 
-    try {
-      const content = readFileSync(pluginPath, "utf-8");
-      // Only remove if it's an ADIT-generated plugin
-      if (isAditPlugin(content)) {
-        unlinkSync(pluginPath);
-      }
-    } catch {
-      // Ignore errors
+    // Remove slash command
+    const commandsDir = join(projectRoot, ".opencode", "commands");
+    try { unlinkSync(join(commandsDir, ADIT_COMMAND.filename)); } catch { /* best-effort */ }
+
+    // Remove custom tools
+    try { unlinkSync(join(projectRoot, ".opencode", "tools", ADIT_TOOLS.filename)); } catch { /* best-effort */ }
+
+    // Clean up legacy command files
+    for (const legacy of LEGACY_COMMAND_FILES) {
+      try { unlinkSync(join(commandsDir, legacy)); } catch { /* best-effort */ }
     }
   },
 };

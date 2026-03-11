@@ -17,6 +17,7 @@ import {
   serialize,
   type AditConfig,
   type AditSession,
+  type Platform,
 } from "@adit/core";
 import type Database from "better-sqlite3";
 import { getCurrentBranch, getRemoteUrl } from "@adit/engine";
@@ -30,7 +31,7 @@ export interface HookContext {
 /** Initialize the hook context (DB + session) */
 export async function initHookContext(
   cwd: string,
-  platform: string = "claude-code",
+  platform: Platform,
   platformSessionId?: string,
 ): Promise<HookContext> {
   const config = loadConfig(cwd);
@@ -55,7 +56,7 @@ export async function initHookContext(
       projectId: config.projectId,
       clientId: config.clientId,
       sessionType: "interactive",
-      platform: platform as "claude-code",
+      platform,
       startedAt: now,
       metadataJson: JSON.stringify({
         gitBranch: branch ?? "unknown",
