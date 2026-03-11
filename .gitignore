@@ -22,6 +22,13 @@ Thumbs.db
 # ADIT local data
 .adit/
 
+# AI tool configs
+.claude/
+.opencode/
+
+# CLI build artifacts
+packages/cli/bin/
+
 # Test
 coverage/
 
