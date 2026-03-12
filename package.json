@@ -1,6 +1,6 @@
 {
   "name": "adit-core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "AI Development Intent Tracker — The Transparent Time Machine",
   "private": true,
   "type": "module",
@@ -22,7 +22,10 @@
     "lint:fix": "eslint packages/*/src/**/*.ts --fix",
     "format": "prettier --write \"packages/*/src/**/*.ts\"",
     "format:check": "prettier --check \"packages/*/src/**/*.ts\"",
-    "typecheck": "pnpm -r run typecheck"
+    "typecheck": "pnpm -r run typecheck",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "pnpm build && changeset publish"
   },
   "keywords": [
     "ai",
@@ -44,6 +47,7 @@
     ]
   },
   "devDependencies": {
+    "@changesets/cli": "^2.30.0",
     "vitest": "^4.0.18"
   }
 }

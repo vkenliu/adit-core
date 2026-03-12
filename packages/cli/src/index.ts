@@ -50,14 +50,16 @@ import {
 } from "./commands/transcript.js";
 import { perfCommand, perfClearCommand } from "./commands/perf.js";
 import { projectLinkCliHandler, projectIntentCliHandler } from "./commands/project-link.js";
+import { selfUpdateCommand } from "./commands/self-update.js";
 import { launchTui } from "./tui/index.js";
+import { CLI_VERSION } from "./version.js";
 
 const program = new Command();
 
 program
   .name("adit")
   .description("AI Development Intent Tracker — The Transparent Time Machine")
-  .version("0.2.0");
+  .version(CLI_VERSION);
 
 program
   .command("init")
@@ -443,6 +445,13 @@ envCmd
   .option("-l, --limit <n>", "Max results", "20")
   .option("--json", "Output as JSON")
   .action((opts) => envHistoryCommand({ limit: parseInt(opts.limit, 10), json: opts.json }));
+
+// Self-update
+program
+  .command("self-update")
+  .description("Update ADIT to the latest version")
+  .option("-c, --check", "Check for updates without installing")
+  .action((opts) => selfUpdateCommand({ check: opts.check }));
 
 // TUI — interactive terminal interface
 program

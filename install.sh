@@ -48,6 +48,7 @@ REQUIRED_NODE_MAJOR=20
 REQUIRED_PNPM_MAJOR=9
 ADIT_REPO="https://github.com/vkenliu/adit-core.git"
 ADIT_INSTALL_DIR="${ADIT_INSTALL_DIR:-$HOME/.adit-core}"
+INSTALL_MODE="fresh"  # fresh | upgrade | up_to_date
 
 # ── Resolve project root ───────────────────────────────────────────
 # Must be inside a function so bash fully parses the script before
@@ -105,6 +106,56 @@ detect_platform() {
 version_ge() {
   local have="$1" need="$2"
   [[ "$have" -ge "$need" ]] 2>/dev/null
+}
+
+# ── Semver comparison ───────────────────────────────────────────────
+# Returns 0 if $1 == $2 (semver string equality)
+semver_eq() { [[ "$1" == "$2" ]]; }
+
+# ── Detect existing installation ───────────────────────────────────
+check_existing_install() {
+  # Check if the `adit` command is available
+  if ! command -v adit &>/dev/null; then
+    INSTALL_MODE="fresh"
+    debug "check_existing_install: adit not found, fresh install"
+    return
+  fi
+
+  # Get the currently installed version
+  local installed_ver
+  installed_ver="$(adit --version 2>/dev/null)" || installed_ver=""
+  debug "check_existing_install: installed version = '${installed_ver:-}'"
+
+  if [[ -z "$installed_ver" ]]; then
+    INSTALL_MODE="fresh"
+    return
+  fi
+
+  # Get the latest version from the repo source (after git pull)
+  local latest_ver=""
+  if [[ -f "$SCRIPT_DIR/packages/cli/package.json" ]]; then
+    # Use node if available, otherwise parse with grep/sed
+    if command -v node &>/dev/null; then
+      latest_ver="$(node -p "require('$SCRIPT_DIR/packages/cli/package.json').version" 2>/dev/null)" || latest_ver=""
+    else
+      latest_ver="$(grep '"version"' "$SCRIPT_DIR/packages/cli/package.json" | head -1 | sed 's/.*"\([0-9][0-9.]*\)".*/\1/')" || latest_ver=""
+    fi
+  fi
+  debug "check_existing_install: latest version = '${latest_ver:-}'"
+
+  if [[ -z "$latest_ver" ]]; then
+    # Cannot determine latest version — proceed with full install
+    INSTALL_MODE="upgrade"
+    return
+  fi
+
+  if semver_eq "$installed_ver" "$latest_ver"; then
+    INSTALL_MODE="up_to_date"
+    ok "adit v${installed_ver} is already up to date"
+  else
+    INSTALL_MODE="upgrade"
+    info "Upgrading adit from v${installed_ver} → v${latest_ver}"
+  fi
 }
 
 # ── Git ─────────────────────────────────────────────────────────────
@@ -455,21 +506,38 @@ verify() {
     all_ok=false
   fi
 
+  # Show installed version
+  local final_ver=""
+  if command -v adit &>/dev/null; then
+    final_ver="$(adit --version 2>/dev/null)" || final_ver=""
+  fi
+
   echo
   if [[ "$all_ok" == "true" ]]; then
-    printf "${GREEN}${BOLD}ADIT Core installed successfully!${NC}\n"
+    if [[ "$INSTALL_MODE" == "upgrade" ]]; then
+      printf "${GREEN}${BOLD}ADIT Core upgraded successfully!${NC}"
+    else
+      printf "${GREEN}${BOLD}ADIT Core installed successfully!${NC}"
+    fi
+    [[ -n "$final_ver" ]] && printf " ${BOLD}(v${final_ver})${NC}"
+    printf "\n"
   else
     printf "${YELLOW}${BOLD}ADIT Core built and registered.${NC}\n"
     printf "Restart your shell or run:  ${BOLD}export PATH=\"\$HOME/.local/bin:\$PATH\"${NC}\n"
   fi
 
   echo
-  printf "Quick start:\n"
-  printf "  ${BOLD}cd <your-project>${NC}\n"
-  printf "  ${BOLD}adit init${NC}            # initialize ADIT in a git repo\n"
-  printf "  ${BOLD}adit doctor${NC}          # verify the setup\n"
-  printf "  ${BOLD}adit list${NC}            # view the timeline\n"
-  echo
+  if [[ "$INSTALL_MODE" != "upgrade" ]]; then
+    printf "Quick start:\n"
+    printf "  ${BOLD}cd <your-project>${NC}\n"
+    printf "  ${BOLD}adit init${NC}            # initialize ADIT in a git repo\n"
+    printf "  ${BOLD}adit doctor${NC}          # verify the setup\n"
+    printf "  ${BOLD}adit list${NC}            # view the timeline\n"
+    echo
+  else
+    printf "Run ${BOLD}adit doctor${NC} to verify your installation.\n"
+    echo
+  fi
 }
 
 # ── Main ────────────────────────────────────────────────────────────
@@ -483,6 +551,21 @@ main() {
 
   _INSTALL_STEP="resolve_project_root"; debug "step: $_INSTALL_STEP"
   resolve_project_root || die "Failed to resolve project root"
+
+  # Check for existing installation before heavy work
+  _INSTALL_STEP="check_existing_install"; debug "step: $_INSTALL_STEP"
+  check_existing_install
+
+  if [[ "$INSTALL_MODE" == "up_to_date" ]]; then
+    printf "\n${GREEN}${BOLD}ADIT is already up to date!${NC}\n"
+    printf "Run ${BOLD}adit --version${NC} to confirm.\n\n"
+    _INSTALL_STEP="done"
+    return 0
+  fi
+
+  if [[ "$INSTALL_MODE" == "upgrade" ]]; then
+    printf "\n${CYAN}${BOLD}Upgrading ADIT …${NC}\n\n"
+  fi
 
   _INSTALL_STEP="detect_platform"; debug "step: $_INSTALL_STEP"
   detect_platform || die "Failed to detect platform"

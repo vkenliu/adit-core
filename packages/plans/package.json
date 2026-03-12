@@ -1,6 +1,6 @@
 {
   "name": "@adit/plans",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "SpecFlow-inspired plan artifact generator for ADIT",
   "type": "module",
   "main": "./dist/index.js",

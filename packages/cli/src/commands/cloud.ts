@@ -31,6 +31,7 @@ import {
 import type { DeviceAuthOptions } from "@adit/cloud";
 import { createHash } from "node:crypto";
 import { hostname } from "node:os";
+import { CLI_VERSION } from "../version.js";
 
 /**
  * `adit cloud login` — Interactive device authorization flow.
@@ -69,7 +70,7 @@ export async function cloudLoginCommand(opts?: {
   const authOptions: DeviceAuthOptions = {
     machineId,
     platform: `${process.platform}-${process.arch}`,
-    aditVersion: "0.2.0",
+    aditVersion: CLI_VERSION,
     displayName: hostname(),
   };
 

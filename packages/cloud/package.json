@@ -1,6 +1,6 @@
 {
   "name": "@adit/cloud",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Cloud sync client for ADIT — device auth, incremental push, conflict resolution",
   "type": "module",
   "main": "./dist/index.js",
