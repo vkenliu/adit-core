@@ -104,3 +104,12 @@ export {
   type ProjectLinkCache,
   type QualifyResponse,
 } from "./project-link/index.js";
+
+// Bulk Task Update
+export { bulkTaskUpdateCommand } from "./project-link/bulk-task.js";
+export type {
+  BulkTaskFilter,
+  BulkTaskUpdate,
+  BulkTaskUpdateOptions,
+  BulkTaskUpdateResult,
+} from "./project-link/types.js";

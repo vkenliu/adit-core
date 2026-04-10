@@ -10,6 +10,7 @@ import { isTokenExpired, saveCredentials } from "../auth/credentials.js";
 import { CloudAuthError, CloudNetworkError, CloudApiError } from "./errors.js";
 
 const MAX_RETRIES = 5;
+const MAX_REDIRECTS = 5;
 const INITIAL_BACKOFF_MS = 2000;
 
 export class CloudClient {
@@ -44,7 +45,7 @@ export class CloudClient {
       // Static tokens cannot be refreshed — fail immediately
       if (this.credentials.authType === "token") {
         throw new CloudAuthError(
-          `Authentication failed: ${response.status} ${response.statusText}`,
+            `Authentication failed: ${response.status} ${response.statusText}`,
         );
       }
       if (response.status === 401) {
@@ -58,21 +59,21 @@ export class CloudClient {
         });
         if (!retry.ok) {
           throw new CloudApiError(
-            `HEAD ${path}: ${retry.status} ${retry.statusText}`,
-            retry.status,
+              `HEAD ${path}: ${retry.status} ${retry.statusText}`,
+              retry.status,
           );
         }
         return headersToRecord(retry.headers);
       }
       throw new CloudAuthError(
-        `Authentication failed: ${response.status} ${response.statusText}`,
+          `Authentication failed: ${response.status} ${response.statusText}`,
       );
     }
 
     if (!response.ok) {
       throw new CloudApiError(
-        `HEAD ${path}: ${response.status} ${response.statusText}`,
-        response.status,
+          `HEAD ${path}: ${response.status} ${response.statusText}`,
+          response.status,
       );
     }
 
@@ -100,9 +101,10 @@ export class CloudClient {
   }
 
   private async request<T>(
-    method: string,
-    path: string,
-    body?: unknown,
+      method: string,
+      path: string,
+      body?: unknown,
+      redirectCount = 0,
   ): Promise<T> {
     // Refresh token if expired before making the request (skip for static tokens)
     if (this.credentials.authType !== "token" && isTokenExpired(this.credentials)) {
@@ -110,6 +112,7 @@ export class CloudClient {
     }
 
     let lastError: Error | undefined;
+    let currentUrl = `${this.serverUrl}${path}`;
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       if (attempt > 0) {
@@ -118,7 +121,7 @@ export class CloudClient {
       }
 
       try {
-        const url = `${this.serverUrl}${path}`;
+        let url = currentUrl;
         const headers: Record<string, string> = {
           Authorization: `Bearer ${this.credentials.accessToken}`,
           "Content-Type": "application/json",
@@ -133,7 +136,7 @@ export class CloudClient {
         // Handle 401 — static tokens cannot be refreshed, fail immediately
         if (response.status === 401 && this.credentials.authType === "token") {
           throw new CloudAuthError(
-            `Authentication failed: ${response.status} ${response.statusText}`,
+              `Authentication failed: ${response.status} ${response.statusText}`,
           );
         }
 
@@ -155,6 +158,41 @@ export class CloudClient {
           continue; // Retry
         }
 
+        // Handle redirects
+        if (response.status >= 300 && response.status < 400) {
+          const location = response.headers.get("Location");
+          if (!location) {
+            throw new CloudApiError(
+                `Redirect missing Location header`,
+                response.status,
+            );
+          }
+
+          if (redirectCount >= MAX_REDIRECTS) {
+            throw new CloudNetworkError(
+                `Too many redirects (max ${MAX_REDIRECTS}) for ${method} ${path}`,
+            );
+          }
+
+          // Parse Location URL
+          const redirectUrl = new URL(location, url);
+
+          // For 303, always use GET method
+          const effectiveMethod = response.status === 303 ? "GET" : method;
+
+          // Update URL and continue the loop
+          currentUrl = redirectUrl.toString();
+          method = effectiveMethod;
+
+          // Clear body for GET/HEAD redirects after 303
+          if (response.status === 303 || effectiveMethod === "GET" || effectiveMethod === "HEAD") {
+            body = undefined;
+          }
+
+          // Increment redirect count for the next iteration
+          return this.request(method, path, body, redirectCount + 1);
+        }
+
         if (!response.ok) {
           // Read body as text first (always safe), then try to parse as JSON.
           // This avoids the "Body is unusable: Body has already been read"
@@ -174,14 +212,14 @@ export class CloudClient {
 
           if (response.status === 401 || response.status === 403) {
             throw new CloudAuthError(
-              `Authentication failed: ${response.status} ${response.statusText}`,
+                `Authentication failed: ${response.status} ${response.statusText}`,
             );
           }
 
           throw new CloudApiError(
-            `API error: ${response.status} ${response.statusText}`,
-            response.status,
-            responseBody,
+              `API error: ${response.status} ${response.statusText}`,
+              response.status,
+              responseBody,
           );
         }
 
@@ -198,15 +236,15 @@ export class CloudClient {
 
         // Network error — retry with backoff
         lastError =
-          error instanceof Error
-            ? error
-            : new Error(String(error));
+            error instanceof Error
+                ? error
+                : new Error(String(error));
       }
     }
 
     throw new CloudNetworkError(
-      `Request failed after ${MAX_RETRIES} retries: ${method} ${path}`,
-      lastError,
+        `Request failed after ${MAX_RETRIES} retries: ${method} ${path}`,
+        lastError,
     );
   }
 
@@ -214,24 +252,24 @@ export class CloudClient {
   private async refreshToken(): Promise<void> {
     if (this.credentials.authType === "token") {
       throw new CloudAuthError(
-        "Cannot refresh a static token. Re-authenticate with a new token or use 'adit cloud login'.",
+          "Cannot refresh a static token. Re-authenticate with a new token or use 'adit cloud login'.",
       );
     }
     try {
       const response = await fetch(
-        `${this.serverUrl}/api/auth/token/refresh`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            refreshToken: this.credentials.refreshToken,
-          }),
-        },
+          `${this.serverUrl}/api/auth/token/refresh`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              refreshToken: this.credentials.refreshToken,
+            }),
+          },
       );
 
       if (!response.ok) {
         throw new CloudAuthError(
-          `Token refresh failed: ${response.status}. Please re-authenticate with 'adit cloud login'.`,
+            `Token refresh failed: ${response.status}. Please re-authenticate with 'adit cloud login'.`,
         );
       }
 
@@ -253,7 +291,7 @@ export class CloudClient {
     } catch (error) {
       if (error instanceof CloudAuthError) throw error;
       throw new CloudAuthError(
-        `Token refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+          `Token refresh failed: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }

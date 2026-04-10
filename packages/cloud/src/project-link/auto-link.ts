@@ -12,7 +12,7 @@
  * 3. Server URL is resolvable
  * 4. Cached project-link data is stale (older than staleHours)
  *
- * The detached process runs `npx adit cloud project link --json --skip-qualify`
+ * The detached process runs `npx adit cloud link --json --skip-qualify`
  * with inherited environment, so credentials and config are available.
  */
 
@@ -83,12 +83,12 @@ export async function triggerProjectLinkSync(
   }
 
   // 4. Spawn detached child process to run the full link flow.
-  //    Uses `npx adit cloud project link` which handles its own
+  //    Uses `npx adit cloud link` which handles its own
   //    credential loading, database opening, and error handling.
   try {
     const child = spawn(
       "npx",
-      ["adit", "cloud", "project", "link", "--json", "--skip-qualify"],
+      ["adit", "cloud", "link", "--json", "--skip-qualify"],
       {
         cwd: projectRoot,
         stdio: ["ignore", "ignore", "ignore"],

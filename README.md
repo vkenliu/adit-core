@@ -186,8 +186,8 @@ All git checkpoint operations are grouped under `adit snapshot` to clearly separ
 
 | Command | Description |
 |---------|-------------|
-| `adit cloud project link` | Link project to adit-cloud — uploads git metadata and documents (`--force`, `--skip-docs`, `--skip-commits`, `--skip-qualify`, `--dry-run`, `--json`) |
-| `adit cloud project intent` | List intents and tasks from connected project (`--id <id>`, `--state <state>`, `--json`) |
+| `adit cloud link` | Link project to adit-cloud — uploads git metadata and documents (`--force`, `--skip-docs`, `--skip-commits`, `--skip-qualify`, `--dry-run`, `--json`) |
+| `adit cloud intent` | List intents and tasks from connected project (`--id <id>`, `--state <state>`, `--json`) |
 
 Also available as `/adit link` and `/adit intent` slash commands in Claude Code and OpenCode.
 
