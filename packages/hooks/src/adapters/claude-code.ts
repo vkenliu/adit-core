@@ -47,8 +47,8 @@ description: ADIT — manage cloud project linking and development intents
 
 Parse the requested action above and follow the **first matching rule**:
 
-1. Action is \`link\` (with optional flags) → run \`npx adit cloud project link\` with the appropriate flags mapped from the arguments: \`--force\`, \`--skip-docs\`, \`--skip-commits\`, \`--dry-run\`.
-2. Action is \`intent\` (with optional flags) → run \`npx adit cloud project intent\` with the appropriate flags mapped from the arguments: \`--id <value>\`, \`--state <value>\`. Add \`--json\` for structured output.
+1. Action is \`link\` (with optional flags) → run \`npx adit cloud link\` with the appropriate flags mapped from the arguments: \`--force\`, \`--skip-docs\`, \`--skip-commits\`, \`--dry-run\`.
+2. Action is \`intent\` (with optional flags) → run \`npx adit cloud intent\` with the appropriate flags mapped from the arguments: \`--id <value>\`, \`--state <value>\`. Add \`--json\` for structured output.
 3. No action, empty arguments, or unrecognized action → display the **Help** section below as your response. Do not run any commands.
 
 ---
