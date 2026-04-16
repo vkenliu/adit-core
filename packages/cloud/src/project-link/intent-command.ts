@@ -104,17 +104,21 @@ export function formatIntentDetail(intent: IntentDetail): string {
     lines.push("");
     lines.push(`Tasks (${intent.tasks.length}):`);
 
-    // Group tasks by phase
-    const phases = new Map<number, { title: string | null; tasks: typeof intent.tasks }>();
+    // Group tasks by phase, collect phaseChecklist from first task that has it
+    const phases = new Map<number, { title: string | null; checklist: typeof intent.tasks[0]["phaseChecklist"]; tasks: typeof intent.tasks }>();
     for (const task of intent.tasks) {
       let group = phases.get(task.phase);
       if (!group) {
-        group = { title: task.phaseTitle, tasks: [] };
+        group = { title: task.phaseTitle, checklist: [], tasks: [] };
         phases.set(task.phase, group);
       }
       // Prefer descriptive title over "Phase N"
       if (task.phaseTitle && !task.phaseTitle.startsWith("Phase ")) {
         group.title = task.phaseTitle;
+      }
+      // Collect phaseChecklist from first task that has it
+      if (task.phaseChecklist && task.phaseChecklist.length > 0 && group.checklist.length === 0) {
+        group.checklist = task.phaseChecklist;
       }
       group.tasks.push(task);
     }
@@ -124,6 +128,12 @@ export function formatIntentDetail(intent: IntentDetail): string {
       const phaseLabel = group.title || `Phase ${phaseNum}`;
       lines.push("");
       lines.push(`  Phase ${phaseNum} — ${phaseLabel}`);
+      if (group.checklist.length > 0) {
+        lines.push(`    Phase Checklist:`);
+        for (const item of group.checklist) {
+          lines.push(`    ${typeof item === "object" && item.item ? item.item : item}`);
+        }
+      }
       for (const task of group.tasks) {
         const complexity = task.complexityScore !== null ? ` (complexity: ${task.complexityScore})` : "";
         lines.push(`    #${taskIndex} ${task.title} — ${task.approvalStatus}${complexity}`);
@@ -145,15 +155,6 @@ export function formatIntentDetail(intent: IntentDetail): string {
         }
         taskIndex++;
       }
-    }
-  }
-
-  if (intent.plans.length > 0) {
-    const latest = intent.plans[0];
-    lines.push("");
-    lines.push(`Latest Plan (v${latest.version}, ${latest.versionType}):`);
-    if (latest.gatekeeperVerdict) {
-      lines.push(`  Verdict: ${latest.gatekeeperVerdict}`);
     }
   }
 
