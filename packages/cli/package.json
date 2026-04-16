@@ -1,6 +1,6 @@
 {
   "name": "@varveai/adit-cli",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "AI Development Intent Tracker — Transparent Time Machine for your codebase",
   "type": "module",
   "main": "./dist/index.js",

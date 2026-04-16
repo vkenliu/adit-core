@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { getAdapter, listAdapters, detectPlatform, registerAdapter } from "./registry.js";
 import { claudeCodeAdapter } from "./claude-code.js";
+import { claudeVscodeAdapter } from "./claude-vscode.js";
 import { opencodeAdapter } from "./opencode.js";
 import type { PlatformAdapter } from "./types.js";
 
@@ -430,5 +431,60 @@ describe("OpenCode Adapter", () => {
     const result = await opencodeAdapter.validateInstallation("/nonexistent/path");
     expect(result.valid).toBe(false);
     expect(result.checks.some((c) => !c.ok && c.detail.includes("Not found"))).toBe(true);
+  });
+});
+
+describe("Claude Code VS Code Adapter", () => {
+  it("has correct platform metadata", () => {
+    expect(claudeVscodeAdapter.platform).toBe("claude-vscode");
+    expect(claudeVscodeAdapter.displayName).toBe("Claude Code (VS Code)");
+  });
+
+  it("returns the VS Code adapter from registry", () => {
+    const adapter = getAdapter("claude-vscode");
+    expect(adapter).toBeDefined();
+    expect(adapter.platform).toBe("claude-vscode");
+  });
+
+  it("shares hook mappings with claude-code adapter", () => {
+    expect(claudeVscodeAdapter.hookMappings).toBe(claudeCodeAdapter.hookMappings);
+    expect(claudeVscodeAdapter.hookMappings).toHaveLength(8);
+  });
+
+  it("parseInput overrides platformCli to claude-vscode", () => {
+    const input = claudeVscodeAdapter.parseInput(
+      { cwd: "/project", prompt: "hello" },
+      "UserPromptSubmit",
+    );
+    expect(input.hookType).toBe("prompt-submit");
+    expect(input.platformCli).toBe("claude-vscode");
+    expect(input.prompt).toBe("hello");
+  });
+
+  it("parseInput delegates field mapping to claude-code adapter", () => {
+    const input = claudeVscodeAdapter.parseInput(
+      {
+        cwd: "/project",
+        session_id: "sess-1",
+        stop_reason: "end_turn",
+        last_assistant_message: "Done.",
+      },
+      "Stop",
+    );
+    expect(input.hookType).toBe("stop");
+    expect(input.platformCli).toBe("claude-vscode");
+    expect(input.platformSessionId).toBe("sess-1");
+    expect(input.stopReason).toBe("end_turn");
+    expect(input.lastAssistantMessage).toBe("Done.");
+  });
+
+  it("generateHookConfig produces same output as claude-code", () => {
+    const vscodeConfig = claudeVscodeAdapter.generateHookConfig("npx adit-hook");
+    const cliConfig = claudeCodeAdapter.generateHookConfig("npx adit-hook");
+    expect(vscodeConfig).toEqual(cliConfig);
+  });
+
+  it("getResumeCommand returns null", () => {
+    expect(claudeVscodeAdapter.getResumeCommand("/project")).toBeNull();
   });
 });
