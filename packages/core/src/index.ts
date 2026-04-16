@@ -1,5 +1,5 @@
 /**
- * @adit/core — Core types, database, config, and sync primitives.
+ * @varveai/adit-core — Core types, database, config, and sync primitives.
  *
  * This is the foundation package. All other ADIT packages depend on it.
  */

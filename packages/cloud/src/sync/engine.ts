@@ -10,8 +10,8 @@
  */
 
 import type Database from "better-sqlite3";
-import { getSyncState, upsertSyncState, withPerf } from "@adit/core";
-import type { SyncState } from "@adit/core";
+import { getSyncState, upsertSyncState, withPerf } from "@varveai/adit-core";
+import type { SyncState } from "@varveai/adit-core";
 import type { CloudClient } from "../http/client.js";
 import { buildSyncBatch, batchRecordCount, countUnsyncedRecords } from "./serializer.js";
 import { handleConflicts, type SyncConflict } from "./conflicts.js";

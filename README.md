@@ -75,6 +75,20 @@ Cloud sync uses a cursor-based incremental push model with per-project cursors:
 
 ## Installation
 
+### npm (Recommended)
+
+```bash
+npm install -g @varveai/adit-cli
+```
+
+Verify:
+
+```bash
+adit --help
+```
+
+### Install Script
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/vkenliu/adit-core/main/install.sh | bash
 ```
@@ -186,8 +200,8 @@ All git checkpoint operations are grouped under `adit snapshot` to clearly separ
 
 | Command | Description |
 |---------|-------------|
-| `adit cloud project link` | Link project to adit-cloud — uploads git metadata and documents (`--force`, `--skip-docs`, `--skip-commits`, `--skip-qualify`, `--dry-run`, `--json`) |
-| `adit cloud project intent` | List intents and tasks from connected project (`--id <id>`, `--state <state>`, `--json`) |
+| `adit cloud link` | Link project to adit-cloud — uploads git metadata and documents (`--force`, `--skip-docs`, `--skip-commits`, `--skip-qualify`, `--dry-run`, `--json`) |
+| `adit cloud intent` | List intents and tasks from connected project (`--id <id>`, `--state <state>`, `--json`) |
 
 Also available as `/adit link` and `/adit intent` slash commands in Claude Code and OpenCode.
 

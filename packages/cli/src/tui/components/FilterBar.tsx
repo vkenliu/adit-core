@@ -4,7 +4,7 @@
 
 import React from "react";
 import { Box, Text } from "ink";
-import type { Actor, EventType } from "@adit/core";
+import type { Actor, EventType } from "@varveai/adit-core";
 import type { TimelineFilters } from "../hooks/useTimeline.js";
 
 interface FilterBarProps {

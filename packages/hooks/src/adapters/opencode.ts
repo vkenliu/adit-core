@@ -16,7 +16,7 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import type { Platform } from "@adit/core";
+import type { Platform } from "@varveai/adit-core";
 import type {
   PlatformAdapter,
   HookMapping,
@@ -99,7 +99,7 @@ function generateToolsContent(): string {
     " * Provides adit_link and adit_intent tools that the LLM can call",
     " * to interact with adit-cloud project linking and intent management.",
     " *",
-    " * @adit/auto-generated — reinstall with: adit plugin install opencode",
+    " * @varveai/adit-auto-generated — reinstall with: adit plugin install opencode",
     " */",
     "",
     'import { tool } from "@opencode-ai/plugin";',
@@ -120,7 +120,7 @@ function generateToolsContent(): string {
     '    if (args.skipCommits) flags.push("--skip-commits");',
     '    if (args.dryRun) flags.push("--dry-run");',
     "",
-    '    const cmd = ["npx", "adit", "cloud", "project", "link", ...flags];',
+    '    const cmd = ["npx", "adit", "cloud", "link", ...flags];',
     "    const result = await Bun.$`${cmd}`.cwd(context.directory).nothrow().quiet();",
     "    const stdout = result.stdout.toString().trim();",
     "    const stderr = result.stderr.toString().trim();",
@@ -178,7 +178,7 @@ function generateToolsContent(): string {
     '    if (args.id) flags.push("--id", args.id);',
     '    if (args.state) flags.push("--state", args.state);',
     "",
-    '    const cmd = ["npx", "adit", "cloud", "project", "intent", ...flags];',
+    '    const cmd = ["npx", "adit", "cloud", "intent", ...flags];',
     "    const result = await Bun.$`${cmd}`.cwd(context.directory).nothrow().quiet();",
     "    const stdout = result.stdout.toString().trim();",
     "    const stderr = result.stderr.toString().trim();",
@@ -300,7 +300,7 @@ const EVENT_TO_ADIT: Record<string, AditHookType> = {
 
 /** Check if a file is an ADIT-generated plugin */
 function isAditPlugin(content: string): boolean {
-  return content.includes("@adit/auto-generated") || content.includes("adit-hook");
+  return content.includes("@varveai/adit-auto-generated") || content.includes("adit-hook");
 }
 
 /**
@@ -343,7 +343,7 @@ function generatePluginContent(aditBinaryPath: string): string {
   const cmd = parts[0];
   const baseArgs = parts.slice(1).map((p) => p.replace(/^"|"$/g, ""));
 
-  return `// @adit/auto-generated — ADIT plugin for OpenCode
+  return `// @varveai/adit-auto-generated — ADIT plugin for OpenCode
 // Do not edit manually. Reinstall with: adit plugin install opencode
 //
 // This plugin listens for OpenCode events and forwards them to ADIT's

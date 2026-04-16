@@ -7,7 +7,7 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import type { Platform } from "@adit/core";
+import type { Platform } from "@varveai/adit-core";
 import type {
   PlatformAdapter,
   HookMapping,
@@ -47,8 +47,8 @@ description: ADIT — manage cloud project linking and development intents
 
 Parse the requested action above and follow the **first matching rule**:
 
-1. Action is \`link\` (with optional flags) → run \`npx adit cloud project link\` with the appropriate flags mapped from the arguments: \`--force\`, \`--skip-docs\`, \`--skip-commits\`, \`--dry-run\`.
-2. Action is \`intent\` (with optional flags) → run \`npx adit cloud project intent\` with the appropriate flags mapped from the arguments: \`--id <value>\`, \`--state <value>\`. Add \`--json\` for structured output.
+1. Action is \`link\` (with optional flags) → run \`npx adit cloud link\` with the appropriate flags mapped from the arguments: \`--force\`, \`--skip-docs\`, \`--skip-commits\`, \`--dry-run\`.
+2. Action is \`intent\` (with optional flags) → run \`npx adit cloud intent\` with the appropriate flags mapped from the arguments: \`--id <value>\`, \`--state <value>\`. Add \`--json\` for structured output.
 3. No action, empty arguments, or unrecognized action → display the **Help** section below as your response. Do not run any commands.
 
 ---
@@ -177,7 +177,7 @@ export const claudeCodeAdapter: PlatformAdapter = {
 
   generateHookConfig(aditBinaryPath: string): PlatformHookConfig {
     const makeHookEntry = (command: string) => [
-      { hooks: [{ type: "command", command, timeout: 10000 }] },
+      { hooks: [{ type: "command", command: `CLAUDE_CODE=1 ${command}`, timeout: 10000 }] },
     ];
 
     return {

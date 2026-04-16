@@ -2,12 +2,12 @@
  * Git metadata collection for project link.
  *
  * Collects remote URL, branches, commit logs, and default branch
- * using the existing @adit/engine git runner. All functions are
+ * using the existing @varveai/adit-engine git runner. All functions are
  * fail-safe — they throw on critical errors (no git repo, no remote)
  * but return empty arrays for non-critical failures.
  */
 
-import { runGit, getRemoteUrl } from "@adit/engine";
+import { runGit, getRemoteUrl } from "@varveai/adit-engine";
 import type { GitBranch, GitCommit } from "./types.js";
 
 /** Collect the remote origin URL. Throws if no remote is configured. */

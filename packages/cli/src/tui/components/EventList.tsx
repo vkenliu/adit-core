@@ -4,7 +4,7 @@
 
 import React from "react";
 import { Box, Text } from "ink";
-import type { AditEvent } from "@adit/core";
+import type { AditEvent } from "@varveai/adit-core";
 import type { SortField } from "../../commands/list.js";
 import { getEventSummary } from "../../utils/summary.js";
 

@@ -9,15 +9,15 @@
  */
 
 import { existsSync, rmSync } from "node:fs";
-import { loadConfig, findGitRoot } from "@adit/core";
+import { loadConfig, findGitRoot } from "@varveai/adit-core";
 import {
   getAdapter,
   listAdapters,
   detectPlatforms,
   resolveAditHookBinary,
   type PlatformAdapter,
-} from "@adit/hooks/adapters";
-import type { Platform } from "@adit/core";
+} from "@varveai/adit-hooks/adapters";
+import type { Platform } from "@varveai/adit-core";
 
 /**
  * Resolve the project root from config, preferring git root for

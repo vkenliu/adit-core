@@ -4,7 +4,7 @@
 
 import React from "react";
 import { Box, Text } from "ink";
-import { parseLabels, parseDiffStats, parseError, type AditEvent } from "@adit/core";
+import { parseLabels, parseDiffStats, parseError, type AditEvent } from "@varveai/adit-core";
 
 interface EventDetailProps {
   event: AditEvent | null;

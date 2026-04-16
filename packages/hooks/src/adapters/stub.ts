@@ -7,7 +7,7 @@
  * and documents what's needed to add support.
  */
 
-import type { Platform } from "@adit/core";
+import type { Platform } from "@varveai/adit-core";
 import type {
   PlatformAdapter,
   HookMapping,

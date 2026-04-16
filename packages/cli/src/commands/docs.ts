@@ -18,7 +18,7 @@ import {
   renderDataModelTemplate,
   renderBusinessContextTemplate,
   renderConventionsTemplate,
-} from "@adit/plans";
+} from "@varveai/adit-plans";
 import { sectionHeader, horizontalRule, statusDot } from "../utils/format.js";
 
 // ─── Template renderers by type ─────────────────────────────────

@@ -1,10 +1,13 @@
 {
-  "name": "@adit/cli",
-  "version": "0.2.0",
-  "description": "CLI and TUI for ADIT",
+  "name": "@varveai/adit-cli",
+  "version": "0.2.1",
+  "description": "AI Development Intent Tracker — Transparent Time Machine for your codebase",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "bin": {
     "adit": "./dist/index.js"
   },
@@ -14,16 +17,24 @@
       "import": "./dist/index.js"
     }
   },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vkenliu/adit-core"
+  },
+  "homepage": "https://github.com/vkenliu/adit-core",
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@adit/cloud": "workspace:*",
-    "@adit/core": "workspace:*",
-    "@adit/engine": "workspace:*",
-    "@adit/hooks": "workspace:*",
-    "@adit/plans": "workspace:*",
+    "@varveai/adit-cloud": "workspace:*",
+    "@varveai/adit-core": "workspace:*",
+    "@varveai/adit-engine": "workspace:*",
+    "@varveai/adit-hooks": "workspace:*",
+    "@varveai/adit-plans": "workspace:*",
     "commander": "^13.0.0",
     "ink": "^5.2.1",
     "ink-spinner": "^5.0.0",

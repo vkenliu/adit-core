@@ -1,5 +1,5 @@
 /**
- * @adit/cloud — Cloud sync client for ADIT.
+ * @varveai/adit-cloud — Cloud sync client for ADIT.
  *
  * Provides device authorization, HTTP client with auto-refresh,
  * cursor-based incremental sync engine, and conflict resolution.
@@ -104,3 +104,12 @@ export {
   type ProjectLinkCache,
   type QualifyResponse,
 } from "./project-link/index.js";
+
+// Bulk Task Update
+export { bulkTaskUpdateCommand } from "./project-link/bulk-task.js";
+export type {
+  BulkTaskFilter,
+  BulkTaskUpdate,
+  BulkTaskUpdateOptions,
+  BulkTaskUpdateResult,
+} from "./project-link/types.js";

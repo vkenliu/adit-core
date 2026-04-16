@@ -9,7 +9,7 @@
  *   reset-credentials — Force-clear all credentials and sync state
  */
 
-import { loadConfig, openDatabase, closeDatabase } from "@adit/core";
+import { loadConfig, openDatabase, closeDatabase } from "@varveai/adit-core";
 import {
   loadCloudConfig,
   loadCredentials,
@@ -27,8 +27,8 @@ import {
   clearSyncErrors,
   isSyncDisabled,
   DEFAULT_SERVER_URL,
-} from "@adit/cloud";
-import type { DeviceAuthOptions } from "@adit/cloud";
+} from "@varveai/adit-cloud";
+import type { DeviceAuthOptions } from "@varveai/adit-cloud";
 import { createHash } from "node:crypto";
 import { hostname } from "node:os";
 import { CLI_VERSION } from "../version.js";
@@ -151,7 +151,7 @@ export async function cloudLogoutCommand(): Promise<void> {
   try {
     const db = openDatabase(config.dbPath);
     try {
-      const { clearSyncState } = await import("@adit/core");
+      const { clearSyncState } = await import("@varveai/adit-core");
       clearSyncState(db, credentials.serverUrl);
     } finally {
       closeDatabase(db);
@@ -303,7 +303,7 @@ export async function cloudStatusCommand(opts?: {
   try {
     const db = openDatabase(config.dbPath);
     try {
-      const { getSyncState } = await import("@adit/core");
+      const { getSyncState } = await import("@varveai/adit-core");
       const syncState = getSyncState(
         db,
         cloudConfig.serverUrl ?? credentials?.serverUrl ?? "",
@@ -543,7 +543,7 @@ export async function cloudResetCredentialsCommand(opts?: {
   try {
     const db = openDatabase(config.dbPath);
     try {
-      const { clearSyncState } = await import("@adit/core");
+      const { clearSyncState } = await import("@varveai/adit-core");
       clearSyncState(db, credentials.serverUrl);
     } finally {
       closeDatabase(db);

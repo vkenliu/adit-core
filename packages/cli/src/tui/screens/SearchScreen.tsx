@@ -4,7 +4,7 @@
 
 import React, { useState } from "react";
 import { Box, Text, useInput } from "ink";
-import type { AditEvent } from "@adit/core";
+import type { AditEvent } from "@varveai/adit-core";
 import { getEventSummary } from "../../utils/summary.js";
 
 interface SearchScreenProps {

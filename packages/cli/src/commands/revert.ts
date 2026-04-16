@@ -7,15 +7,15 @@
  */
 
 import { createInterface } from "node:readline";
-import { loadConfig, openDatabase, closeDatabase, queryEvents } from "@adit/core";
-import type { AditEvent } from "@adit/core";
+import { loadConfig, openDatabase, closeDatabase, queryEvents } from "@varveai/adit-core";
+import type { AditEvent } from "@varveai/adit-core";
 import {
   createTimelineManager,
   hasUncommittedChanges,
   runGit,
   getHeadSha,
   shaExists,
-} from "@adit/engine";
+} from "@varveai/adit-engine";
 import { getEventSummary } from "../utils/summary.js";
 
 /** Lock/dependency files to check for changes between checkpoints */

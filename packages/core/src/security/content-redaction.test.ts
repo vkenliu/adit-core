@@ -154,10 +154,10 @@ describe("Content-Aware Secret Redaction", () => {
     });
 
     it("does not redact package names", () => {
-      const text = "Install @adit/core and @adit/engine packages";
+      const text = "Install @varveai/adit-core and @varveai/adit-engine packages";
       const result = redactContent(text);
-      expect(result.redacted).toContain("@adit/core");
-      expect(result.redacted).toContain("@adit/engine");
+      expect(result.redacted).toContain("@varveai/adit-core");
+      expect(result.redacted).toContain("@varveai/adit-engine");
     });
 
     it("does not redact hex color codes", () => {

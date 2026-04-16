@@ -249,3 +249,54 @@ export interface IntentResult {
   intents?: IntentSummary[];
   intent?: IntentDetail;
 }
+
+// ─── Bulk Task Update Types ─────────────────────────────────
+
+export interface BulkTaskFilter {
+  /** Filter by phase number (1-99) */
+  phase?: number;
+  /** Filter by task status */
+  status?: "pending" | "approved" | "in_progress" | "completed" | "rejected";
+  /** Filter by feature tag */
+  featureTag?: string;
+  /** Filter by wave number */
+  wave?: number;
+}
+
+export interface BulkTaskUpdate {
+  /** Task ID to update */
+  taskId: string;
+  /** New status for the task */
+  status: "pending" | "approved" | "in_progress" | "completed" | "rejected";
+  /** Optional phase number */
+  phase?: number;
+  /** Optional title update */
+  title?: string;
+  /** Optional description update */
+  description?: string;
+}
+
+export interface BulkTaskUpdateOptions {
+  /** Intent ID containing the tasks to update */
+  intentId: string;
+  /** Specific tasks to update (when not provided, all tasks in intent are updated) */
+  taskId?: string[];
+  /** Target status (default: "completed") */
+  status?: "pending" | "approved" | "in_progress" | "completed" | "rejected";
+  /** Filters to apply before updating */
+  filters?: BulkTaskFilter;
+  /** Output as JSON */
+  json?: boolean;
+}
+
+export interface BulkTaskUpdateResult {
+  /** Number of tasks successfully updated */
+  updated: number;
+  /** Array of failed updates with error details */
+  failed: Array<{
+    taskId: string;
+    error: string;
+  }>;
+  /** Summary message */
+  message: string;
+}

@@ -8,21 +8,21 @@
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join, basename } from "node:path";
 import pc from "picocolors";
-import { loadConfig, openDatabase, closeDatabase, findGitRoot } from "@adit/core";
-import type { Platform } from "@adit/core";
-import { isGitRepo } from "@adit/engine";
+import { loadConfig, openDatabase, closeDatabase, findGitRoot } from "@varveai/adit-core";
+import type { Platform } from "@varveai/adit-core";
+import { isGitRepo } from "@varveai/adit-engine";
 import {
   getAdapter,
   listAdapters,
   detectPlatforms,
   resolveAditHookBinary,
-} from "@adit/hooks/adapters";
+} from "@varveai/adit-hooks/adapters";
 import {
   renderProjectOverviewTemplate,
   renderArchitectureTemplate,
   renderApiReferenceTemplate,
   renderDataModelTemplate,
-} from "@adit/plans";
+} from "@varveai/adit-plans";
 
 export async function initCommand(opts: {
   cwd?: string;
@@ -187,7 +187,7 @@ export async function initCommand(opts: {
     if (opts.platform) allPlatforms.add(opts.platform as Platform);
 
     for (const platform of allPlatforms) {
-      const target = SKILL_TARGETS[platform];
+      const target = SKILL_TARGETS[platform as string];
       if (!target) continue;
 
       // Check that the platform's config directory exists (e.g. .claude/, .opencode/)

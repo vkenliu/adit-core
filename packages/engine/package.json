@@ -1,8 +1,11 @@
 {
-  "name": "@adit/engine",
-  "version": "0.2.0",
+  "name": "@varveai/adit-engine",
+  "version": "0.2.1",
   "description": "Git operations, snapshots, detection, and timeline engine for ADIT",
   "type": "module",
+  "files": [
+    "dist"
+  ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -16,7 +19,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@adit/core": "workspace:*"
+    "@varveai/adit-core": "workspace:*"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

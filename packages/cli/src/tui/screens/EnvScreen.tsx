@@ -4,7 +4,7 @@
 
 import React from "react";
 import { Box, Text } from "ink";
-import type { EnvSnapshot } from "@adit/core";
+import type { EnvSnapshot } from "@varveai/adit-core";
 
 interface EnvScreenProps {
   snapshot: EnvSnapshot | null;

@@ -7,7 +7,7 @@ import { Box } from "ink";
 import { EventList } from "../components/EventList.js";
 import { EventDetail } from "../components/EventDetail.js";
 import { FilterBar } from "../components/FilterBar.js";
-import type { AditEvent } from "@adit/core";
+import type { AditEvent } from "@varveai/adit-core";
 import type { TimelineFilters } from "../hooks/useTimeline.js";
 import type { SortField } from "../../commands/list.js";
 

@@ -41,7 +41,7 @@ import {
   updateCachedQualified,
 } from "./cache.js";
 import { checkQuality, formatQualityFeedback } from "./qualify.js";
-import { validateDocument } from "@adit/plans";
+import { validateDocument } from "@varveai/adit-plans";
 
 /** Maximum number of commits per upload batch */
 const COMMIT_BATCH_SIZE = 1000;

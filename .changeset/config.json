@@ -3,10 +3,10 @@
   "changelog": "@changesets/cli/changelog",
   "commit": false,
   "fixed": [
-    ["@adit/core", "@adit/engine", "@adit/hooks", "@adit/cli", "@adit/cloud", "@adit/plans"]
+    ["@varveai/adit-core", "@varveai/adit-engine", "@varveai/adit-hooks", "@varveai/adit-cli", "@varveai/adit-cloud", "@varveai/adit-plans"]
   ],
   "linked": [],
-  "access": "restricted",
+  "access": "public",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
   "ignore": []

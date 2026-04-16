@@ -1,5 +1,5 @@
 /**
- * @adit/plans — SpecFlow-inspired plan artifact generator.
+ * @varveai/adit-plans — SpecFlow-inspired plan artifact generator.
  */
 
 export { renderIntentTemplate } from "./templates/intent.js";

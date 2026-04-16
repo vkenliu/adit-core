@@ -19,7 +19,7 @@ vi.mock("node:fs", () => ({
   readFileSync: vi.fn(() => "{}"),
   existsSync: vi.fn(() => false),
 }));
-vi.mock("@adit/core", () => ({
+vi.mock("@varveai/adit-core", () => ({
   generateId: vi.fn(() => "env-001"),
   createClock: vi.fn(() => ({})),
   serialize: vi.fn(() => '{"c": 1}'),
@@ -34,7 +34,7 @@ vi.mock("../detector/working-tree.js", () => ({
 }));
 
 import { captureEnvironment } from "./capture.js";
-import { insertEnvSnapshot } from "@adit/core";
+import { insertEnvSnapshot } from "@varveai/adit-core";
 
 const mockInsertEnvSnapshot = vi.mocked(insertEnvSnapshot);
 
