@@ -7,7 +7,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-vi.mock("@adit/core", () => ({
+vi.mock("@varveai/adit-core", () => ({
   getSyncState: vi.fn(() => null),
   upsertSyncState: vi.fn(),
   withPerf: vi.fn((_dir: string, _cat: string, _op: string, fn: () => unknown) => fn()),
@@ -24,7 +24,7 @@ vi.mock("./conflicts.js", () => ({
 }));
 
 import { SyncEngine } from "./engine.js";
-import { upsertSyncState } from "@adit/core";
+import { upsertSyncState } from "@varveai/adit-core";
 import { buildSyncBatch, batchRecordCount, countUnsyncedRecords } from "./serializer.js";
 
 const mockBuildSyncBatch = vi.mocked(buildSyncBatch);

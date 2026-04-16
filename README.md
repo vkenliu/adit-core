@@ -75,6 +75,20 @@ Cloud sync uses a cursor-based incremental push model with per-project cursors:
 
 ## Installation
 
+### npm (Recommended)
+
+```bash
+npm install -g @varveai/adit-cli
+```
+
+Verify:
+
+```bash
+adit --help
+```
+
+### Install Script
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/vkenliu/adit-core/main/install.sh | bash
 ```

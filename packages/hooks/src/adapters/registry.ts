@@ -8,7 +8,7 @@
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { Platform } from "@adit/core";
+import type { Platform } from "@varveai/adit-core";
 import type { PlatformAdapter } from "./types.js";
 import { claudeCodeAdapter } from "./claude-code.js";
 import {

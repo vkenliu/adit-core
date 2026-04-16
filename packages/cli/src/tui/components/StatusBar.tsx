@@ -4,7 +4,7 @@
 
 import React from "react";
 import { Box, Text } from "ink";
-import type { AditSession } from "@adit/core";
+import type { AditSession } from "@varveai/adit-core";
 import type { Screen } from "../hooks/useKeyboard.js";
 import type { SortField } from "../../commands/list.js";
 

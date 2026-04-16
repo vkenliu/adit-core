@@ -9,13 +9,13 @@ import {
   getLatestEnvSnapshot,
   endSession,
   withPerf,
-} from "@adit/core";
+} from "@varveai/adit-core";
 import {
   getChangedFiles,
   createTimelineManager,
   captureEnvironment,
   diffEnvironments,
-} from "@adit/engine";
+} from "@varveai/adit-engine";
 import { initHookContext, type HookContext } from "../common/context.js";
 import type { NormalizedHookInput } from "../adapters/types.js";
 
@@ -69,7 +69,7 @@ export async function dispatchHook(input: NormalizedHookInput): Promise<void> {
     }
 
     // Auto-sync to cloud on every hook event (fail-open).
-    // Uses dynamic import so @adit/cloud is not a build-time dependency.
+    // Uses dynamic import so @varveai/adit-cloud is not a build-time dependency.
     // The module name is constructed to prevent TypeScript from resolving it.
     // Force sync on session-end (flush all data) and on stop/session.idle
     // (ensures data is persisted even if /exit doesn't fire a session-end).
@@ -85,7 +85,7 @@ export async function dispatchHook(input: NormalizedHookInput): Promise<void> {
         await cloudModule.triggerAutoSync(ctx.db, ctx.config.projectId, force ? { force: true } : undefined);
       });
     } catch {
-      // @adit/cloud not installed — silently skip
+      // @varveai/adit-cloud not installed — silently skip
     }
   } finally {
     ctx.db.close();
@@ -215,7 +215,7 @@ async function handleSessionStart(ctx: HookContext, input: NormalizedHookInput):
   // Trigger auto-sync on session start to ensure the Project record
   // exists server-side before the user runs `/adit link`.
   try {
-    const { triggerAutoSync } = await import("@adit/cloud");
+    const { triggerAutoSync } = await import("@varveai/adit-cloud");
     triggerAutoSync(ctx.db, ctx.config.projectId).catch(() => {});
   } catch {
     // Fail-open — cloud package may not be available
@@ -336,7 +336,7 @@ async function handleSubagentStop(ctx: HookContext, input: NormalizedHookInput):
 /**
  * Trigger transcript upload if cloud is configured.
  *
- * Uses dynamic import so @adit/cloud is not a build-time dependency.
+ * Uses dynamic import so @varveai/adit-cloud is not a build-time dependency.
  * Fully fail-open: errors are silently swallowed.
  *
  * Reuses the existing HookContext to avoid opening a second DB connection.
@@ -362,6 +362,6 @@ async function triggerTranscriptUploadIfEnabled(
       input.transcriptPath,
     );
   } catch {
-    // @adit/cloud not installed or other error — silently skip
+    // @varveai/adit-cloud not installed or other error — silently skip
   }
 }

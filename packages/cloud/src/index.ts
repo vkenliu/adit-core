@@ -1,5 +1,5 @@
 /**
- * @adit/cloud — Cloud sync client for ADIT.
+ * @varveai/adit-cloud — Cloud sync client for ADIT.
  *
  * Provides device authorization, HTTP client with auto-refresh,
  * cursor-based incremental sync engine, and conflict resolution.

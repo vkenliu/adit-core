@@ -5,7 +5,7 @@
  * following per-type rules for which field to display.
  */
 
-import type { AditEvent } from "@adit/core";
+import type { AditEvent } from "@varveai/adit-core";
 
 /**
  * Generate a short summary string for an event based on its type.

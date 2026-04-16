@@ -18,13 +18,13 @@ import {
   getLatestCheckpointEvent,
   getSyncState,
   findGitRoot,
-} from "@adit/core";
+} from "@varveai/adit-core";
 import {
   hasUncommittedChanges,
   getCurrentBranch,
   getHeadSha,
-} from "@adit/engine";
-import { detectPlatform, getAdapter, listAdapters } from "@adit/hooks/adapters";
+} from "@varveai/adit-engine";
+import { detectPlatform, getAdapter, listAdapters } from "@varveai/adit-hooks/adapters";
 import { statusDot, joinDim, sectionHeader, horizontalRule, timeAgo } from "../utils/format.js";
 import { truncate } from "../utils/summary.js";
 
@@ -132,10 +132,10 @@ export async function statusCommand(opts?: { json?: boolean }): Promise<void> {
     let syncServerUrl = process.env.ADIT_CLOUD_URL ?? null;
     if (!syncServerUrl) {
       try {
-        const { loadCredentials } = await import("@adit/cloud");
+        const { loadCredentials } = await import("@varveai/adit-cloud");
         syncServerUrl = loadCredentials()?.serverUrl ?? null;
       } catch {
-        // @adit/cloud not available
+        // @varveai/adit-cloud not available
       }
     }
     const syncState = getSyncState(db, syncServerUrl ?? "");

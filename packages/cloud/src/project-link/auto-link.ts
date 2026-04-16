@@ -55,7 +55,7 @@ export async function triggerProjectLinkSync(
 
   if (process.env.ADIT_AUTH_TOKEN) {
     serverUrl = cloudConfig.serverUrl ?? DEFAULT_SERVER_URL;
-    const clientId = storedCredentials?.clientId ?? (await import("@adit/core")).loadConfig().clientId;
+    const clientId = storedCredentials?.clientId ?? (await import("@varveai/adit-core")).loadConfig().clientId;
     const creds = credentialsFromEnvToken(serverUrl, clientId);
     if (!creds) return;
   } else {

@@ -2,10 +2,10 @@
  * CLI handlers for `adit cloud project link` and `adit cloud project intent`.
  *
  * These wire up the config/credentials/database lifecycle around the
- * command handlers from @adit/cloud/project-link.
+ * command handlers from @varveai/adit-cloud/project-link.
  */
 
-import { loadConfig, openDatabase, closeDatabase } from "@adit/core";
+import { loadConfig, openDatabase, closeDatabase } from "@varveai/adit-core";
 import {
   loadCloudConfig,
   loadCredentials,
@@ -19,9 +19,9 @@ import {
   formatIntentList,
   formatIntentDetail,
   DEFAULT_SERVER_URL,
-} from "@adit/cloud";
-import type { LinkOptions, IntentOptions } from "@adit/cloud";
-import { isGitRepo } from "@adit/engine";
+} from "@varveai/adit-cloud";
+import type { LinkOptions, IntentOptions } from "@varveai/adit-cloud";
+import { isGitRepo } from "@varveai/adit-engine";
 
 /**
  * `adit cloud project link` — Link this project to adit-cloud.
@@ -128,7 +128,7 @@ export async function projectIntentCliHandler(opts: IntentOptions): Promise<void
   // Check for cached confirmed project ID
   const db = openDatabase(config.dbPath);
   try {
-    const { getProjectLinkCache } = await import("@adit/cloud");
+    const { getProjectLinkCache } = await import("@varveai/adit-cloud");
     const cache = getProjectLinkCache(db, config.projectId, serverUrl);
     const projectId = cache?.confirmedProjectId ?? config.projectId;
 

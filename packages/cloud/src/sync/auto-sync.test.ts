@@ -32,7 +32,7 @@ vi.mock("../auth/credentials.js", () => ({
   isSyncDisabled: vi.fn(() => false),
 }));
 
-vi.mock("@adit/core", () => ({
+vi.mock("@varveai/adit-core", () => ({
   getSyncState: vi.fn(),
   loadConfig: vi.fn(() => ({ clientId: "test-client" })),
 }));
@@ -63,7 +63,7 @@ vi.mock("../http/errors.js", () => ({
 import { triggerAutoSync } from "./auto-sync.js";
 import { loadCloudConfig } from "../config.js";
 import { loadCredentials } from "../auth/credentials.js";
-import { getSyncState } from "@adit/core";
+import { getSyncState } from "@varveai/adit-core";
 import { countUnsyncedRecords } from "./serializer.js";
 
 const mockLoadCloudConfig = vi.mocked(loadCloudConfig);

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { diffEnvironments } from "./differ.js";
-import type { EnvSnapshot } from "@adit/core";
+import type { EnvSnapshot } from "@varveai/adit-core";
 
 function makeSnapshot(overrides: Partial<EnvSnapshot> = {}): EnvSnapshot {
   return {

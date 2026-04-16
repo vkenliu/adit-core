@@ -5,15 +5,15 @@
  * task statuses in an intent using the /api/task-slices/bulk endpoint.
  */
 
-import { loadConfig } from "@adit/core";
+import { loadConfig } from "@varveai/adit-core";
 import {
   loadCloudConfig,
   loadCredentials,
   CloudClient,
   bulkTaskUpdateCommand,
   type BulkTaskUpdateOptions,
-} from "@adit/cloud";
-import { CloudAuthError, CloudNetworkError, CloudApiError } from "@adit/cloud";
+} from "@varveai/adit-cloud";
+import { CloudAuthError, CloudNetworkError, CloudApiError } from "@varveai/adit-cloud";
 
 /**
  * `adit cloud task` — Update task statuses in an intent.

@@ -4,7 +4,7 @@
 
 import { describe, it, expect } from "vitest";
 import { sortEvents, type SortField } from "./list.js";
-import type { AditEvent } from "@adit/core";
+import type { AditEvent } from "@varveai/adit-core";
 
 function makeEvent(overrides: Partial<AditEvent>): AditEvent {
   return {
