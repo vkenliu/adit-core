@@ -213,6 +213,8 @@ export function validateDocument(
     const strippedContent = sectionContent
       .replace(/<!--[\s\S]*?-->/g, "") // remove HTML comments
       .replace(/- \[ \]/g, "") // remove empty checkboxes
+      .replace(/^\|.*\|$/gm, "") // remove markdown table rows (skeleton scaffolding)
+      .replace(/^###\s+.*$/gm, "") // remove H3 sub-headings (template labels)
       .trim();
 
     if (strippedContent.length < spec.minContentLength) {
@@ -234,13 +236,13 @@ export function validateDocument(
     const requiredScore = totalRequired > 0 ? presentSections.filter((s) => spec.requiredSections.includes(s)).length / totalRequired : 1;
     const recommendedScore = totalRecommended > 0 ? presentSections.filter((s) => spec.recommendedSections.includes(s)).length / totalRecommended : 0;
     const stubRatio = headings.length > 0 ? stubSections.length / headings.length : 0;
-    // Weight: structure (presence of headings) counts for 45%, content density for 55%
-    const structureScore = requiredScore * 0.3 + recommendedScore * 0.15;
-    const contentScore = (1 - stubRatio) * 0.55;
+    // Weight: structure (presence of headings) 20%, content density 80%
+    const structureScore = requiredScore * 0.12 + recommendedScore * 0.08;
+    const contentScore = (1 - stubRatio) * 0.80;
     score = Math.max(0, structureScore + contentScore);
-    // If ALL sections are stubs, cap at 0.45 — an empty template is not useful
-    if (stubSections.length === headings.length && headings.length > 0) {
-      score = Math.min(score, 0.45);
+    // If most sections (>=80%) are stubs, cap at 0.30
+    if (stubSections.length >= headings.length * 0.8 && headings.length > 0) {
+      score = Math.min(score, 0.30);
     }
   }
 

@@ -7,6 +7,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join, basename } from "node:path";
+import pc from "picocolors";
 import { loadConfig, openDatabase, closeDatabase, findGitRoot } from "@adit/core";
 import type { Platform } from "@adit/core";
 import { isGitRepo } from "@adit/engine";
@@ -142,7 +143,7 @@ export async function initCommand(opts: {
   console.log("  Project Documents");
   console.log("  -----------------");
 
-  const docsDir = join(gitRoot, "docs");
+  const docsDir = join(config.dataDir, "docs");
   const projectName = basename(gitRoot);
   const defaultDocTypes: Array<{ file: string; renderer: (title: string) => string }> = [
     { file: "project-overview.md", renderer: renderProjectOverviewTemplate },
@@ -167,22 +168,44 @@ export async function initCommand(opts: {
     }
   }
 
-  if (docsCreated > 0) {
-    console.log("      Fill in content manually or use /generate-docs in Claude Code");
-  } else if (docsExisting === defaultDocTypes.length) {
-    console.log("  All default templates already present.");
+  if (docsCreated > 0 || docsExisting > 0) {
+    console.log(`\n  ${pc.cyan("Next step:")} Run ${pc.bold("/generate-docs")} in your AI coding tool to auto-fill documents.`);
   }
 
-  // --- Step 5: Install doc generation skill for Claude Code ---
-  const claudeDir = join(gitRoot, ".claude");
-  if (existsSync(claudeDir)) {
-    const skillsDir = join(claudeDir, "skills");
-    mkdirSync(skillsDir, { recursive: true });
-    const skillPath = join(skillsDir, "generate-docs.md");
-    if (!existsSync(skillPath) || opts.force) {
-      writeFileSync(skillPath, GENERATE_DOCS_SKILL, "utf-8");
-      console.log("  [+] Installed generate-docs skill for Claude Code");
-      console.log("      Use /generate-docs in Claude Code to auto-fill project documents");
+  // --- Step 5: Install doc generation skill for detected AI platforms ---
+  console.log();
+  console.log("  AI Skills");
+  console.log("  ---------");
+
+  const skillPlatforms = detectPlatforms(gitRoot);
+  if (skillPlatforms.length === 0 && !opts.platform) {
+    console.log("  [ ] No AI coding tool detected — skill not installed.");
+    console.log("      Skill will be installed when you run init inside an AI tool session.");
+  } else {
+    // Merge explicit platform if specified
+    const allPlatforms = new Set(skillPlatforms);
+    if (opts.platform) allPlatforms.add(opts.platform as Platform);
+
+    for (const platform of allPlatforms) {
+      const target = SKILL_TARGETS[platform];
+      if (!target) continue;
+
+      // Check that the platform's config directory exists (e.g. .claude/, .opencode/)
+      const platformDir = join(gitRoot, target.dir.split("/")[0]);
+      if (!existsSync(platformDir) && platform !== opts.platform) continue;
+
+      const targetDir = join(gitRoot, target.dir);
+      mkdirSync(targetDir, { recursive: true });
+      const skillPath = join(targetDir, target.filename);
+
+      if (existsSync(skillPath) && !opts.force) {
+        console.log(`  [=] ${target.label} — skill already installed`);
+        continue;
+      }
+
+      writeFileSync(skillPath, target.content, "utf-8");
+      console.log(`  [+] ${target.label} — installed ${target.filename}`);
+      console.log(`      ${target.usageHint}`);
     }
   }
 
@@ -205,12 +228,15 @@ export async function initCommand(opts: {
   console.log();
 }
 
-/** Skill content for generate-docs — installed to .claude/skills/ */
-const GENERATE_DOCS_SKILL = `---
-name: generate-docs
-description: Analyze codebase and generate project documentation following adit spec
----
+/**
+ * Per-platform skill installation targets.
+ *
+ * Each platform has its own directory convention and file format for
+ * AI-readable instructions. The core prompt body is shared; only the
+ * frontmatter/wrapper differs.
+ */
 
+const DOCS_SKILL_BODY = `
 Analyze the current codebase and generate project documentation following the adit document specification.
 
 ## Context
@@ -219,8 +245,8 @@ This project uses adit for AI-assisted planning. The planning pipeline needs str
 
 ## Steps
 
-1. Check what document templates exist in the \`docs/\` directory. If none exist, list what's missing and suggest the user run \`adit docs scaffold <type>\` first.
-2. For each template file in \`docs/\`:
+1. Check what document templates exist in the \`.adit/docs/\` directory. If none exist, list what's missing and suggest the user run \`adit docs scaffold <type>\` first.
+2. For each template file in \`.adit/docs/\`:
    a. Read the template to understand which sections need content.
    b. Analyze the relevant parts of the codebase:
       - \`package.json\` — dependencies, scripts, project metadata
@@ -242,3 +268,44 @@ This project uses adit for AI-assisted planning. The planning pipeline needs str
 - Preserve the H2 heading structure exactly — do not rename or remove required sections.
 - All analysis happens locally. No code leaves this machine.
 `;
+
+interface SkillTarget {
+  dir: string;
+  filename: string;
+  label: string;
+  usageHint: string;
+  content: string;
+}
+
+const SKILL_TARGETS: Record<string, SkillTarget> = {
+  "claude-code": {
+    dir: ".claude/skills",
+    filename: "generate-docs.md",
+    label: "Claude Code",
+    usageHint: "Mention generate-docs or ask to fill project documents",
+    content: `---
+name: generate-docs
+description: Analyze codebase and generate project documentation following adit spec
+---${DOCS_SKILL_BODY}`,
+  },
+  opencode: {
+    dir: ".opencode/commands",
+    filename: "generate-docs.md",
+    label: "OpenCode",
+    usageHint: "Run /generate-docs to auto-fill project documents",
+    content: `---
+description: Analyze codebase and generate project documentation following adit spec
+---${DOCS_SKILL_BODY}`,
+  },
+  cursor: {
+    dir: ".cursor/rules",
+    filename: "generate-docs.mdc",
+    label: "Cursor",
+    usageHint: "Ask Cursor to fill project documents or mention generate-docs",
+    content: `---
+description: Analyze codebase and generate project documentation following adit spec
+globs:
+alwaysApply: false
+---${DOCS_SKILL_BODY}`,
+  },
+};

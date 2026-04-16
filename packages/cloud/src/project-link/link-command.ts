@@ -399,10 +399,7 @@ export async function linkCommand(
     // Show summary prompt when not qualified
     if (!qualified && qualifyResult.feedback?.summaryPrompt) {
       log("");
-      log("  To improve quality, generate a project summary by running this");
-      log("  prompt in your AI coding CLI, then re-run 'adit cloud project link':");
-      log("");
-      log(`  "${qualifyResult.feedback.summaryPrompt}"`);
+      log(`  ${qualifyResult.feedback.summaryPrompt}`);
     }
 
     updateCachedQualified(db, effectiveProjectId, serverUrl, qualified);

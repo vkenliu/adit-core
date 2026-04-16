@@ -33,7 +33,7 @@ const RENDERERS: Record<string, (title: string) => string> = {
 };
 
 /** Default output directory for generated documents */
-const DOCS_DIR = "docs";
+const DOCS_DIR = ".adit/docs";
 
 // ─── scaffold ───────────────────────────────────────────────────
 
@@ -142,7 +142,7 @@ export async function docsValidateCommand(
     const docsDir = join(projectRoot, DOCS_DIR);
     if (!existsSync(docsDir)) {
       console.log();
-      console.log(pc.yellow("No docs/ directory found."));
+      console.log(pc.yellow("No .adit/docs/ directory found."));
       console.log(pc.dim("Run 'adit docs scaffold' to generate document templates."));
       console.log();
       return;
@@ -161,7 +161,7 @@ export async function docsValidateCommand(
 
     if (docs.length === 0) {
       console.log();
-      console.log(pc.yellow("No markdown files found in docs/."));
+      console.log(pc.yellow("No markdown files found in .adit/docs/."));
       console.log(pc.dim("Run 'adit docs scaffold <type>' to generate templates."));
       console.log();
       return;
@@ -245,8 +245,8 @@ export async function docsValidateCommand(
 
   if (!allPass) {
     console.log();
-    console.log(pc.dim("  Tip: Use your AI coding tool to fill in missing sections."));
-    console.log(pc.dim("       After editing, run 'adit docs validate' again."));
+    console.log(pc.red("  Documents below threshold. Run " + pc.bold("/generate-docs") + pc.red(" in your AI coding tool to auto-fill.")));
+    console.log(pc.red("  Then re-run 'adit docs validate' to check scores."));
   }
 
   console.log();
