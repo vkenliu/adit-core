@@ -53,7 +53,7 @@ import {
     projectLinkCliHandler,
     projectIntentCliHandler,
 } from "./commands/project-link.js";
-import { taskCliHandler } from "./commands/task.js";
+import { completeCliHandler } from "./commands/complete.js";
 import { selfUpdateCommand } from "./commands/self-update.js";
 import { docsScaffoldCommand, docsValidateCommand } from "./commands/docs.js";
 import { launchTui } from "./tui/index.js";
@@ -321,10 +321,11 @@ cloudCmd
         json: opts.json,
     }));
 
-cloudCmd
+// cloud intent — list/view intents, with complete subcommand
+const intentCmd = cloudCmd
     .command("intent")
-    .description("List intents and tasks from connected project")
-    .option("--id <id>", "Show detailed intent with tasks")
+    .description("Manage intents from connected project")
+    .option("--id <id>", "Intent ID")
     .option("--state <state>", "Filter by intent state")
     .option("--json", "Output as JSON")
     .action((opts) => projectIntentCliHandler({
@@ -333,28 +334,25 @@ cloudCmd
         json: opts.json,
     }));
 
-cloudCmd
-    .command("task")
-    .argument("<intent-id>", "Intent ID containing tasks to update")
-    .description("Update task statuses in an intent")
-    .option(
-        "--status <status>",
-        "Target status for tasks (pending, approved, in_progress, completed, rejected)",
-        "completed"
-    )
-    .option("--task-id <task-id>", "Specific task ID to update (can be used multiple times)", (value: string, previous: string[] = []) => [...previous, value], [])
-    .option("--phase <number>", "Filter by phase number (1-99)")
-    .option("--feature-tag <tag>", "Filter by feature tag")
-    .option("--wave <number>", "Filter by wave number")
+intentCmd
+    .command("complete")
+    .description("Complete a phase or entire intent")
+    .option("--phase <number>", "Complete a specific phase (1-99)")
     .option("--json", "Output as JSON")
-    .action((intentId: string, opts: any) => taskCliHandler(intentId, {
-        status: opts.status,
-        taskId: opts.taskId,
-        phase: opts.phase,
-        featureTag: opts.featureTag,
-        wave: opts.wave,
-        json: opts.json,
-    }));
+    .action((opts: any, cmd: any) => {
+        const parentOpts = cmd.parent.opts();
+        const intentId = parentOpts.id;
+        if (!intentId) {
+            console.error("Error: --id is required.");
+            console.error("Usage: adit cloud intent --id <intent-id> complete [--phase N]");
+            process.exitCode = 1;
+            return;
+        }
+        return completeCliHandler(intentId, {
+            phase: opts.phase ? parseInt(opts.phase, 10) : undefined,
+            json: opts.json,
+        });
+    });
 
 // Database management
 const dbCmd = program

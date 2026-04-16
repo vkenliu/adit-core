@@ -2,7 +2,7 @@
  * Bulk task status update command.
  *
  * Implements the bulk task status update functionality by calling
- * the /api/task-slices/bulk endpoint.
+ * the /api/task-slices/bulk endpoint. Operates at phase or intent level only.
  */
 
 import { CloudClient } from "../http/client.js";
@@ -13,21 +13,15 @@ import type { BulkTaskUpdateOptions, BulkTaskUpdateResult } from "./types.js";
  * Build the request body for bulk task update API
  */
 function buildRequestBody(options: BulkTaskUpdateOptions) {
-  const { intentId, taskId, status, filters } = options;
+  const { intentId, status, filters } = options;
 
-  // If specific task IDs are provided, create updates for each
-  const updates = taskId && taskId.length > 0
-    ? taskId.map(taskId => ({
-        taskId,
-        status: status ?? "completed",
-      }))
-    : // Otherwise, create a single update to apply to all tasks
-      [
-        {
-          taskId: "*", // This will be handled by the server to update all tasks
-          status: status ?? "completed",
-        },
-      ];
+  // Always use wildcard — phase-level or intent-level only
+  const updates = [
+    {
+      taskId: "*",
+      status: status ?? "completed",
+    },
+  ];
 
   // Build the request body
   const body: {
@@ -35,28 +29,18 @@ function buildRequestBody(options: BulkTaskUpdateOptions) {
     updates: Array<{
       taskId: string;
       status: string;
-      phase?: number;
-      title?: string;
-      description?: string;
     }>;
     filters?: {
       phase?: number;
-      status?: string;
-      featureTag?: string;
-      wave?: number;
     };
   } = {
     intentId,
     updates,
   };
 
-  // Add filters if provided
-  if (filters) {
-    body.filters = {};
-    if (filters.phase !== undefined) body.filters.phase = filters.phase;
-    if (filters.status !== undefined) body.filters.status = filters.status;
-    if (filters.featureTag !== undefined) body.filters.featureTag = filters.featureTag;
-    if (filters.wave !== undefined) body.filters.wave = filters.wave;
+  // Add phase filter if provided
+  if (filters?.phase !== undefined) {
+    body.filters = { phase: filters.phase };
   }
 
   return body;
@@ -80,21 +64,9 @@ function validateOptions(options: BulkTaskUpdateOptions): void {
     throw new Error(`Invalid status: ${options.status}. Must be one of: pending, approved, in_progress, completed, rejected`);
   }
 
-  // Validate filters
-  if (options.filters) {
-    const { filters } = options;
-
-    if (filters.phase && (filters.phase < 1 || filters.phase > 99)) {
-      throw new Error("Phase must be between 1 and 99");
-    }
-
-    if (filters.status && !["pending", "approved", "in_progress", "completed", "rejected"].includes(filters.status)) {
-      throw new Error(`Invalid filter status: ${filters.status}. Must be one of: pending, approved, in_progress, completed, rejected`);
-    }
-
-    if (filters.wave && filters.wave < 1) {
-      throw new Error("Wave must be greater than 0");
-    }
+  // Validate phase filter
+  if (options.filters?.phase && (options.filters.phase < 1 || options.filters.phase > 99)) {
+    throw new Error("Phase must be between 1 and 99");
   }
 }
 
@@ -114,8 +86,6 @@ export async function bulkTaskUpdateCommand(
 
     // Build request body
     const body = buildRequestBody(options);
-
-
 
     // Make the API request
     const result = await client.patch<BulkTaskUpdateResult>(

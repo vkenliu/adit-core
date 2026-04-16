@@ -281,7 +281,7 @@ export interface BulkTaskFilter {
 }
 
 export interface BulkTaskUpdate {
-  /** Task ID to update */
+  /** Task ID to update — must be "*" for phase/intent level operations */
   taskId: string;
   /** New status for the task */
   status: "pending" | "approved" | "in_progress" | "completed" | "rejected";
@@ -296,8 +296,6 @@ export interface BulkTaskUpdate {
 export interface BulkTaskUpdateOptions {
   /** Intent ID containing the tasks to update */
   intentId: string;
-  /** Specific tasks to update (when not provided, all tasks in intent are updated) */
-  taskId?: string[];
   /** Target status (default: "completed") */
   status?: "pending" | "approved" | "in_progress" | "completed" | "rejected";
   /** Filters to apply before updating */
@@ -316,4 +314,6 @@ export interface BulkTaskUpdateResult {
   }>;
   /** Summary message */
   message: string;
+  /** Intent state transition if triggered */
+  intentTransitioned?: "shipped" | null;
 }

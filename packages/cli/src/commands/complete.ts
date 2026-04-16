@@ -1,8 +1,9 @@
 /**
- * CLI handlers for `adit cloud task`.
+ * CLI handler for `adit cloud intent <id> complete`.
  *
- * Implements the task status update command for updating
- * task statuses in an intent using the /api/task-slices/bulk endpoint.
+ * Completes a phase or entire intent by marking all tasks as completed,
+ * auto-checking phase checklists, and transitioning intent to "shipped"
+ * when all tasks are done.
  */
 
 import { loadConfig } from "@varveai/adit-core";
@@ -16,14 +17,10 @@ import {
 import { CloudAuthError, CloudNetworkError, CloudApiError } from "@varveai/adit-cloud";
 
 /**
- * `adit cloud task` — Update task statuses in an intent.
+ * `adit cloud intent <intent-id> complete` — Complete a phase or entire intent.
  */
-export async function taskCliHandler(intentId: string, opts: {
-  status?: string;
-  taskId?: string[];
+export async function completeCliHandler(intentId: string, opts: {
   phase?: number;
-  featureTag?: string;
-  wave?: number;
   json?: boolean;
 }): Promise<void> {
   const config = loadConfig();
@@ -38,7 +35,6 @@ export async function taskCliHandler(intentId: string, opts: {
   }
 
   if (credentials.authType !== "token" && credentials.authType !== undefined) {
-    // CloudClient will attempt auto-refresh — just warn
     console.log("Token expired — will attempt auto-refresh...");
   }
 
@@ -73,18 +69,12 @@ export async function taskCliHandler(intentId: string, opts: {
   // Prepare options
   const options: BulkTaskUpdateOptions = {
     intentId,
-    status: opts.status as any,
-    taskId: opts.taskId,
+    status: "completed",
     json: opts.json,
   };
 
-  // Add filters if provided
-  if (opts.phase !== undefined || opts.featureTag !== undefined || opts.wave !== undefined) {
-    options.filters = {
-      phase: opts.phase,
-      featureTag: opts.featureTag,
-      wave: opts.wave,
-    };
+  if (opts.phase !== undefined) {
+    options.filters = { phase: opts.phase };
   }
 
   // Execute the command
@@ -94,7 +84,12 @@ export async function taskCliHandler(intentId: string, opts: {
     if (opts.json) {
       console.log(JSON.stringify(result, null, 2));
     } else {
-      console.log(result.message);
+      const phaseLabel = opts.phase ? `Phase ${opts.phase}` : "All phases";
+      console.log(`${phaseLabel}: ${result.message}`);
+
+      if (result.intentTransitioned === "shipped") {
+        console.log("Intent → shipped. All tasks completed.");
+      }
 
       if (result.failed.length > 0) {
         console.error("\nFailed tasks:");
@@ -137,7 +132,7 @@ export async function taskCliHandler(intentId: string, opts: {
       console.error(`Authentication failed: ${error.message}`);
       console.error("Run 'adit cloud login' to re-authenticate.");
     } else {
-      console.error(`Task update failed: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(`Complete failed: ${error instanceof Error ? error.message : String(error)}`);
     }
     process.exitCode = 1;
   }
