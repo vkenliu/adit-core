@@ -103,30 +103,57 @@ export function formatIntentDetail(intent: IntentDetail): string {
   if (intent.tasks.length > 0) {
     lines.push("");
     lines.push(`Tasks (${intent.tasks.length}):`);
+
+    // Group tasks by phase
+    const phases = new Map<number, { title: string | null; tasks: typeof intent.tasks }>();
     for (const task of intent.tasks) {
-      const phase = task.phaseTitle ? `[${task.phaseTitle}]` : `[Phase ${task.phase}]`;
-      const complexity = task.complexityScore !== null ? ` (complexity: ${task.complexityScore})` : "";
-      lines.push(`  ${phase} ${task.title} — ${task.approvalStatus}${complexity}`);
-      if (task.description) {
-        lines.push(`    ${task.description}`);
+      let group = phases.get(task.phase);
+      if (!group) {
+        group = { title: task.phaseTitle, tasks: [] };
+        phases.set(task.phase, group);
+      }
+      // Prefer descriptive title over "Phase N"
+      if (task.phaseTitle && !task.phaseTitle.startsWith("Phase ")) {
+        group.title = task.phaseTitle;
+      }
+      group.tasks.push(task);
+    }
+
+    let taskIndex = 0;
+    for (const [phaseNum, group] of phases) {
+      const phaseLabel = group.title || `Phase ${phaseNum}`;
+      lines.push("");
+      lines.push(`  Phase ${phaseNum} — ${phaseLabel}`);
+      for (const task of group.tasks) {
+        const complexity = task.complexityScore !== null ? ` (complexity: ${task.complexityScore})` : "";
+        lines.push(`    #${taskIndex} ${task.title} — ${task.approvalStatus}${complexity}`);
+        if (task.description) {
+          lines.push(`      ${task.description}`);
+        }
+        if (task.acceptanceCriteria?.criteria?.length > 0) {
+          lines.push(`      Acceptance Criteria:`);
+          for (const ac of task.acceptanceCriteria.criteria) {
+            lines.push(`      - ${ac}`);
+          }
+        }
+        if (task.acceptanceCriteria?.assertions?.length > 0) {
+          lines.push(`      Verification Assertions:`);
+          for (const a of task.acceptanceCriteria.assertions) {
+            const suffix = a.path ? ` (${a.path})` : "";
+            lines.push(`      - [${a.type}] ${a.description}${suffix}`);
+          }
+        }
+        taskIndex++;
       }
     }
   }
 
-  if (intent.latestPlan) {
+  if (intent.plans.length > 0) {
+    const latest = intent.plans[0];
     lines.push("");
-    lines.push(`Latest Plan (v${intent.latestPlan.version}, ${intent.latestPlan.versionType}):`);
-    if (intent.latestPlan.gatekeeperVerdict) {
-      lines.push(`  Verdict: ${intent.latestPlan.gatekeeperVerdict}`);
-    }
-  }
-
-  if (intent.recentShipNotes.length > 0) {
-    lines.push("");
-    lines.push(`Recent Ship Notes (${intent.recentShipNotes.length}):`);
-    for (const note of intent.recentShipNotes) {
-      const label = note.architecturalDecision ? " [ARCH]" : "";
-      lines.push(`  - ${note.noteBody}${label} (${note.createdBy})`);
+    lines.push(`Latest Plan (v${latest.version}, ${latest.versionType}):`);
+    if (latest.gatekeeperVerdict) {
+      lines.push(`  Verdict: ${latest.gatekeeperVerdict}`);
     }
   }
 
