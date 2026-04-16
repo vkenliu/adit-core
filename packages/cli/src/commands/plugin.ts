@@ -62,11 +62,13 @@ export async function pluginInstallCommand(
       console.log("  No AI platforms detected in this project.");
       console.log();
       console.log("  ADIT looks for platform config directories:");
-      console.log("    Claude Code  →  .claude/");
-      console.log("    OpenCode     →  .opencode/  or  opencode.json");
+      console.log("    Claude Code           →  .claude/");
+      console.log("    Claude Code (VS Code) →  .claude/  (shared with CLI)");
+      console.log("    OpenCode              →  .opencode/  or  opencode.json");
       console.log();
       console.log("  To install for a specific platform:");
       console.log("    adit plugin install claude-code");
+      console.log("    adit plugin install claude-vscode");
       console.log("    adit plugin install opencode");
       console.log();
     }

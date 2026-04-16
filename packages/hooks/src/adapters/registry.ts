@@ -11,6 +11,7 @@ import { join } from "node:path";
 import type { Platform } from "@varveai/adit-core";
 import type { PlatformAdapter } from "./types.js";
 import { claudeCodeAdapter } from "./claude-code.js";
+import { claudeVscodeAdapter } from "./claude-vscode.js";
 import {
   cursorAdapter,
   copilotAdapter,
@@ -24,6 +25,7 @@ const adapters = new Map<Platform, PlatformAdapter>();
 
 // Register built-in adapters
 adapters.set("claude-code", claudeCodeAdapter);
+adapters.set("claude-vscode", claudeVscodeAdapter);
 
 // Register OpenCode adapter (fully implemented)
 adapters.set("opencode", opencodeAdapter);
@@ -60,8 +62,15 @@ export function registerAdapter(adapter: PlatformAdapter): void {
  * Falls back to "other" when no platform is detected.
  */
 export function detectPlatform(): Platform {
-  // Claude Code sets specific env vars
+  // Claude Code (CLI or VS Code extension).
+  // ADIT's hook command prefix sets CLAUDE_CODE=1 for both platforms.
+  // The VS Code extension host additionally sets ELECTRON_RUN_AS_NODE and
+  // VSCODE_IPC_HOOK — these are NOT inherited by terminal child processes,
+  // so running CLI from VS Code's terminal won't trigger false detection.
   if (process.env.CLAUDE_CODE || process.env.CLAUDE_PLUGIN_ROOT) {
+    if (process.env.ELECTRON_RUN_AS_NODE && process.env.VSCODE_IPC_HOOK) {
+      return "claude-vscode";
+    }
     return "claude-code";
   }
 
@@ -103,9 +112,10 @@ export function detectPlatform(): Platform {
 export function detectPlatforms(projectRoot: string): Platform[] {
   const platforms = new Set<Platform>();
 
-  // Check for Claude Code config directory
+  // Check for Claude Code config directory (shared by CLI and VS Code extension)
   if (existsSync(join(projectRoot, ".claude"))) {
     platforms.add("claude-code");
+    platforms.add("claude-vscode");
   }
 
   // Check for OpenCode config directory or config file
