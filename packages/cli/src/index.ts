@@ -51,6 +51,7 @@ import {
 import { perfCommand, perfClearCommand } from "./commands/perf.js";
 import { projectLinkCliHandler, projectIntentCliHandler } from "./commands/project-link.js";
 import { selfUpdateCommand } from "./commands/self-update.js";
+import { docsScaffoldCommand, docsValidateCommand } from "./commands/docs.js";
 import { launchTui } from "./tui/index.js";
 import { CLI_VERSION } from "./version.js";
 
@@ -452,6 +453,29 @@ program
   .description("Update ADIT to the latest version")
   .option("-c, --check", "Check for updates without installing")
   .action((opts) => selfUpdateCommand({ check: opts.check }));
+
+// Document management
+const docsCmd = program
+  .command("docs")
+  .description("Project document scaffolding and validation");
+
+docsCmd
+  .command("scaffold [type]")
+  .description("Generate a project document template")
+  .option("-o, --output <path>", "Output directory (default: docs/)")
+  .action((type, opts) => docsScaffoldCommand(type, { output: opts.output }));
+
+docsCmd
+  .command("validate [path]")
+  .description("Validate project document(s) against structural spec")
+  .option("-t, --threshold <n>", "Quality threshold (0-1, default: 0.6)", "0.6")
+  .option("--json", "Output as JSON")
+  .action((path, opts) =>
+    docsValidateCommand(path, {
+      json: opts.json,
+      threshold: parseFloat(opts.threshold),
+    }),
+  );
 
 // TUI — interactive terminal interface
 program

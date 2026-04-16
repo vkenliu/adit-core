@@ -100,10 +100,19 @@ export interface DocumentUploadResponse {
   };
 }
 
+export interface QualifyDocumentDetail {
+  fileName: string;
+  detectedType: string;
+  structuralScore: number;
+  missingSections: string[];
+  hasStubContent: boolean;
+}
+
 export interface QualifyResponse {
   qualified: boolean;
   score: number;
   documentCount: number;
+  documentDetails?: QualifyDocumentDetail[];
   feedback: {
     missing: string[];
     suggestions: string[];

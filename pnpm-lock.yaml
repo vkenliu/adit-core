@@ -63,6 +63,9 @@ importers:
       '@adit/engine':
         specifier: workspace:*
         version: link:../engine
+      '@adit/plans':
+        specifier: workspace:*
+        version: link:../plans
     devDependencies:
       '@types/better-sqlite3':
         specifier: ^7.6.13

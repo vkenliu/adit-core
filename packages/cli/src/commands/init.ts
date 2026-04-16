@@ -6,7 +6,7 @@
  */
 
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { loadConfig, openDatabase, closeDatabase, findGitRoot } from "@adit/core";
 import type { Platform } from "@adit/core";
 import { isGitRepo } from "@adit/engine";
@@ -16,6 +16,12 @@ import {
   detectPlatforms,
   resolveAditHookBinary,
 } from "@adit/hooks/adapters";
+import {
+  renderProjectOverviewTemplate,
+  renderArchitectureTemplate,
+  renderApiReferenceTemplate,
+  renderDataModelTemplate,
+} from "@adit/plans";
 
 export async function initCommand(opts: {
   cwd?: string;
@@ -131,6 +137,55 @@ export async function initCommand(opts: {
     }
   }
 
+  // --- Step 4: Generate document templates ---
+  console.log();
+  console.log("  Project Documents");
+  console.log("  -----------------");
+
+  const docsDir = join(gitRoot, "docs");
+  const projectName = basename(gitRoot);
+  const defaultDocTypes: Array<{ file: string; renderer: (title: string) => string }> = [
+    { file: "project-overview.md", renderer: renderProjectOverviewTemplate },
+    { file: "architecture.md", renderer: renderArchitectureTemplate },
+    { file: "api-reference.md", renderer: renderApiReferenceTemplate },
+    { file: "data-model.md", renderer: renderDataModelTemplate },
+  ];
+
+  let docsCreated = 0;
+  let docsExisting = 0;
+
+  for (const { file, renderer } of defaultDocTypes) {
+    const filePath = join(docsDir, file);
+    if (existsSync(filePath)) {
+      docsExisting++;
+      console.log(`  [=] ${file} already exists`);
+    } else {
+      if (docsCreated === 0) mkdirSync(docsDir, { recursive: true });
+      writeFileSync(filePath, renderer(projectName), "utf-8");
+      docsCreated++;
+      console.log(`  [+] Created ${file}`);
+    }
+  }
+
+  if (docsCreated > 0) {
+    console.log("      Fill in content manually or use /generate-docs in Claude Code");
+  } else if (docsExisting === defaultDocTypes.length) {
+    console.log("  All default templates already present.");
+  }
+
+  // --- Step 5: Install doc generation skill for Claude Code ---
+  const claudeDir = join(gitRoot, ".claude");
+  if (existsSync(claudeDir)) {
+    const skillsDir = join(claudeDir, "skills");
+    mkdirSync(skillsDir, { recursive: true });
+    const skillPath = join(skillsDir, "generate-docs.md");
+    if (!existsSync(skillPath) || opts.force) {
+      writeFileSync(skillPath, GENERATE_DOCS_SKILL, "utf-8");
+      console.log("  [+] Installed generate-docs skill for Claude Code");
+      console.log("      Use /generate-docs in Claude Code to auto-fill project documents");
+    }
+  }
+
   // --- Summary ---
   console.log();
   if (installed.length > 0) {
@@ -149,3 +204,41 @@ export async function initCommand(opts: {
   }
   console.log();
 }
+
+/** Skill content for generate-docs — installed to .claude/skills/ */
+const GENERATE_DOCS_SKILL = `---
+name: generate-docs
+description: Analyze codebase and generate project documentation following adit spec
+---
+
+Analyze the current codebase and generate project documentation following the adit document specification.
+
+## Context
+
+This project uses adit for AI-assisted planning. The planning pipeline needs structured project documents as context. Your job is to analyze the codebase and fill in document templates.
+
+## Steps
+
+1. Check what document templates exist in the \`docs/\` directory. If none exist, list what's missing and suggest the user run \`adit docs scaffold <type>\` first.
+2. For each template file in \`docs/\`:
+   a. Read the template to understand which sections need content.
+   b. Analyze the relevant parts of the codebase:
+      - \`package.json\` — dependencies, scripts, project metadata
+      - Directory structure (\`src/\`, \`app/\`, \`lib/\`, etc.) — modules and organization
+      - \`prisma/schema.prisma\` or ORM configs — data models
+      - API route files — endpoints
+      - Config files — tech stack, conventions
+      - Test files — testing patterns
+   c. Fill in each section with specific, accurate content derived from the codebase.
+   d. Remove the HTML comment placeholders (<!-- ... -->) and replace with real content.
+3. Run \`adit docs validate\` to check the quality scores.
+4. If any documents score below 60%, improve the content and re-validate.
+
+## Rules
+
+- Be specific: reference actual file paths, function names, dependencies, and patterns.
+- Do NOT invent content — only document what actually exists in the codebase.
+- Keep each section concise but informative (2-5 sentences minimum per section).
+- Preserve the H2 heading structure exactly — do not rename or remove required sections.
+- All analysis happens locally. No code leaves this machine.
+`;
