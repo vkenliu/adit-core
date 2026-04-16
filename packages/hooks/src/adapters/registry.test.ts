@@ -381,7 +381,7 @@ describe("OpenCode Adapter", () => {
     expect(config.content.plugin).toBeDefined();
 
     const pluginContent = config.content.plugin as string;
-    expect(pluginContent).toContain("@adit/auto-generated");
+    expect(pluginContent).toContain("@varveai/adit-auto-generated");
     expect(pluginContent).toContain("adit-hook");
     expect(pluginContent).toContain("OPENCODE");
     // Core hooks

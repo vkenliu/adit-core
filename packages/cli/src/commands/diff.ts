@@ -13,8 +13,8 @@ import {
   getActiveSession,
   listEnvSnapshots,
   type EnvSnapshot,
-} from "@adit/core";
-import { createTimelineManager, diffEnvironments } from "@adit/engine";
+} from "@varveai/adit-core";
+import { createTimelineManager, diffEnvironments } from "@varveai/adit-engine";
 
 export async function diffCommand(
   eventId: string,

@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { existsSync } from "node:fs";
 
 export type {
   PlatformAdapter,
@@ -27,8 +28,12 @@ export function resolveAditHookBinary(): string {
     // The binary entry point is one directory up at <pkg>/dist/index.js.
     const thisDir = dirname(fileURLToPath(import.meta.url));
     const binaryPath = join(thisDir, "..", "index.js");
-    return `node "${binaryPath}"`;
+    if (existsSync(binaryPath)) {
+      return `node "${binaryPath}"`;
+    }
   } catch {
-    return "npx adit-hook";
+    /* fall through */
   }
+  // Fallback: when installed via npm globally, adit-hook is on PATH
+  return "adit-hook";
 }

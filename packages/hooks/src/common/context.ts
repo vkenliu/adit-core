@@ -18,9 +18,9 @@ import {
   type AditConfig,
   type AditSession,
   type Platform,
-} from "@adit/core";
+} from "@varveai/adit-core";
 import type Database from "better-sqlite3";
-import { getCurrentBranch, getRemoteUrl } from "@adit/engine";
+import { getCurrentBranch, getRemoteUrl } from "@varveai/adit-engine";
 
 export interface HookContext {
   db: Database.Database;

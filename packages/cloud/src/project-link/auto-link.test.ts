@@ -92,7 +92,7 @@ describe("triggerProjectLinkSync", () => {
     expect(mockSpawn).toHaveBeenCalledOnce();
     const [cmd, args, opts] = mockSpawn.mock.calls[0];
     expect(cmd).toBe("npx");
-    expect(args).toEqual(["adit", "cloud", "project", "link", "--json", "--skip-qualify"]);
+    expect(args).toEqual(["adit", "cloud", "link", "--json", "--skip-qualify"]);
     expect(opts.cwd).toBe("/tmp/project");
     expect(opts.detached).toBe(true);
     expect(opts.stdio).toEqual(["ignore", "ignore", "ignore"]);

@@ -20,13 +20,13 @@ const mockRecordEvent = vi.fn().mockResolvedValue({
 const mockCreateCheckpoint = vi.fn().mockResolvedValue(null);
 const mockList = vi.fn().mockResolvedValue([]);
 
-vi.mock("@adit/core", () => ({
+vi.mock("@varveai/adit-core", () => ({
   getLatestEnvSnapshot: vi.fn(() => null),
   endSession: vi.fn(),
   withPerf: vi.fn((_dir: string, _cat: string, _op: string, fn: () => unknown) => fn()),
 }));
 
-vi.mock("@adit/engine", () => ({
+vi.mock("@varveai/adit-engine", () => ({
   getChangedFiles: vi.fn().mockResolvedValue([]),
   createTimelineManager: vi.fn(() => ({
     recordEvent: mockRecordEvent,
@@ -37,7 +37,7 @@ vi.mock("@adit/engine", () => ({
   diffEnvironments: vi.fn().mockReturnValue({ changes: [], severity: "none" }),
 }));
 
-vi.mock("@adit/cloud", () => ({
+vi.mock("@varveai/adit-cloud", () => ({
   triggerTranscriptUpload: vi.fn().mockResolvedValue(undefined),
   triggerAutoSync: vi.fn().mockResolvedValue(undefined),
 }));
@@ -58,8 +58,8 @@ vi.mock("../common/context.js", () => ({
 }));
 
 import { dispatchHook } from "./unified.js";
-import { endSession } from "@adit/core";
-import { getChangedFiles } from "@adit/engine";
+import { endSession } from "@varveai/adit-core";
+import { getChangedFiles } from "@varveai/adit-engine";
 import type { NormalizedHookInput } from "../adapters/types.js";
 
 const mockEndSession = vi.mocked(endSession);

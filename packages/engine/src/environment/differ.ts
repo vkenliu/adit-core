@@ -5,7 +5,7 @@
  * with categorized changes and severity levels.
  */
 
-import type { EnvSnapshot, EnvDiff, EnvChange } from "@adit/core";
+import type { EnvSnapshot, EnvDiff, EnvChange } from "@varveai/adit-core";
 
 /**
  * Compare two environment snapshots and produce a structured diff.

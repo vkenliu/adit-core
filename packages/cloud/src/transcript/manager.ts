@@ -23,7 +23,7 @@ import {
   markTranscriptUploaded,
   markTranscriptUploadFailed,
   resetTranscriptUpload,
-} from "@adit/core";
+} from "@varveai/adit-core";
 import type { CloudClient } from "../http/client.js";
 import type { TranscriptUploadConfig } from "../config.js";
 import {

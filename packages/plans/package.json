@@ -1,8 +1,11 @@
 {
-  "name": "@adit/plans",
-  "version": "0.2.0",
+  "name": "@varveai/adit-plans",
+  "version": "0.2.1",
   "description": "SpecFlow-inspired plan artifact generator for ADIT",
   "type": "module",
+  "files": [
+    "dist"
+  ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -16,7 +19,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@adit/core": "workspace:*"
+    "@varveai/adit-core": "workspace:*"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

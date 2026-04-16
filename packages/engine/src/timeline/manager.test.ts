@@ -15,7 +15,7 @@ const mockGetEventById = vi.fn();
 const mockGetLatestCheckpointEvent = vi.fn();
 const mockGetParentSha = vi.fn();
 
-vi.mock("@adit/core", () => ({
+vi.mock("@varveai/adit-core", () => ({
   generateId: vi.fn(() => "evt-new-001"),
   createClock: vi.fn(() => ({ "test-client": 1 })),
   serialize: vi.fn(() => '{"test-client":1}'),
@@ -55,7 +55,7 @@ vi.mock("../snapshot/creator.js", () => ({
 }));
 
 import { createTimelineManager } from "./manager.js";
-import type { AditConfig } from "@adit/core";
+import type { AditConfig } from "@varveai/adit-core";
 
 const fakeDb = {} as never;
 const fakeConfig: AditConfig = {

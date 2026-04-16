@@ -7,15 +7,15 @@
 
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { loadConfig, openDatabase, closeDatabase, findGitRoot } from "@adit/core";
-import type { Platform } from "@adit/core";
-import { isGitRepo } from "@adit/engine";
+import { loadConfig, openDatabase, closeDatabase, findGitRoot } from "@varveai/adit-core";
+import type { Platform } from "@varveai/adit-core";
+import { isGitRepo } from "@varveai/adit-engine";
 import {
   getAdapter,
   listAdapters,
   detectPlatforms,
   resolveAditHookBinary,
-} from "@adit/hooks/adapters";
+} from "@varveai/adit-hooks/adapters";
 
 export async function initCommand(opts: {
   cwd?: string;

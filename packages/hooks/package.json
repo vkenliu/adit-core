@@ -1,8 +1,11 @@
 {
-  "name": "@adit/hooks",
-  "version": "0.2.0",
+  "name": "@varveai/adit-hooks",
+  "version": "0.2.1",
   "description": "Hook handlers for AI coding platforms",
   "type": "module",
+  "files": [
+    "dist"
+  ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
@@ -23,9 +26,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@adit/core": "workspace:*",
-    "@adit/cloud": "workspace:*",
-    "@adit/engine": "workspace:*"
+    "@varveai/adit-core": "workspace:*",
+    "@varveai/adit-cloud": "workspace:*",
+    "@varveai/adit-engine": "workspace:*"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

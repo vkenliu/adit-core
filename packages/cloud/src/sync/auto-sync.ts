@@ -20,7 +20,7 @@
  */
 
 import type Database from "better-sqlite3";
-import { getSyncState } from "@adit/core";
+import { getSyncState } from "@varveai/adit-core";
 import { loadCloudConfig, DEFAULT_SERVER_URL } from "../config.js";
 import {
   loadCredentials,
@@ -72,7 +72,7 @@ export async function triggerAutoSync(
     // Prefer stored credentials' clientId (set by `auth-token` verification)
     // over the local config clientId, since the server assigns its own UUID.
     const stored = loadCredentials();
-    const clientId = stored?.clientId ?? (await import("@adit/core")).loadConfig().clientId;
+    const clientId = stored?.clientId ?? (await import("@varveai/adit-core")).loadConfig().clientId;
     credentials = credentialsFromEnvToken(serverUrl, clientId);
   }
   if (!credentials) {

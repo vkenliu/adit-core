@@ -7,7 +7,7 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-import type { Platform } from "@adit/core";
+import type { Platform } from "@varveai/adit-core";
 import type {
   PlatformAdapter,
   HookMapping,
@@ -177,7 +177,7 @@ export const claudeCodeAdapter: PlatformAdapter = {
 
   generateHookConfig(aditBinaryPath: string): PlatformHookConfig {
     const makeHookEntry = (command: string) => [
-      { hooks: [{ type: "command", command, timeout: 10000 }] },
+      { hooks: [{ type: "command", command: `CLAUDE_CODE=1 ${command}`, timeout: 10000 }] },
     ];
 
     return {

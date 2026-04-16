@@ -1,8 +1,11 @@
 {
-  "name": "@adit/cloud",
-  "version": "0.2.0",
+  "name": "@varveai/adit-cloud",
+  "version": "0.2.1",
   "description": "Cloud sync client for ADIT — device auth, incremental push, conflict resolution",
   "type": "module",
+  "files": [
+    "dist"
+  ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -16,8 +19,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@adit/core": "workspace:*",
-    "@adit/engine": "workspace:*"
+    "@varveai/adit-core": "workspace:*",
+    "@varveai/adit-engine": "workspace:*"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

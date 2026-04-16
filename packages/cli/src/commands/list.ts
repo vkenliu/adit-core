@@ -4,10 +4,10 @@
  * Displays a compact, token-efficient table of recent events.
  */
 
-import { loadConfig, openDatabase, closeDatabase, type AditEvent, type Actor, type EventType } from "@adit/core";
+import { loadConfig, openDatabase, closeDatabase, type AditEvent, type Actor, type EventType } from "@varveai/adit-core";
 import { getEventSummary } from "../utils/summary.js";
 import { padRight, formatDateTime } from "../utils/format.js";
-import { createTimelineManager } from "@adit/engine";
+import { createTimelineManager } from "@varveai/adit-engine";
 import pc from "picocolors";
 
 export type SortField = "ACTOR" | "TIME";

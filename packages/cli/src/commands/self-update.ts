@@ -69,13 +69,8 @@ export async function selfUpdateCommand(opts?: {
   const installDir = resolveInstallDir();
 
   if (!installDir) {
-    console.error(
-      "Could not locate the ADIT installation directory.",
-    );
-    console.error(
-      "Re-run the installer: curl -fsSL https://raw.githubusercontent.com/vkenliu/adit-core/main/install.sh | bash",
-    );
-    process.exitCode = 1;
+    console.log("Installed via npm. To update:");
+    console.log("  npm update -g @varveai/adit-cli");
     return;
   }
 

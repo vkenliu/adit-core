@@ -18,9 +18,9 @@ import {
   queryEvents,
   listSessions,
   endSession,
-} from "@adit/core";
-import { isGitRepo, listCheckpointRefs, deleteCheckpointRef } from "@adit/engine";
-import { detectPlatform, getAdapter, listAdapters } from "@adit/hooks/adapters";
+} from "@varveai/adit-core";
+import { isGitRepo, listCheckpointRefs, deleteCheckpointRef } from "@varveai/adit-engine";
+import { detectPlatform, getAdapter, listAdapters } from "@varveai/adit-hooks/adapters";
 
 interface Check {
   name: string;
@@ -100,7 +100,7 @@ export async function doctorCommand(
   checks.push({
     name: "adit-hook binary",
     ok: binaryOk,
-    detail: binaryOk ? "Available on PATH or via npx" : "Not found. Ensure @adit/hooks is installed.",
+    detail: binaryOk ? "Available on PATH or via npx" : "Not found. Ensure @varveai/adit-hooks is installed.",
   });
 
   // 6. Hooks — validate via platform adapters
@@ -252,7 +252,7 @@ export async function doctorCommand(
     if (!hooksOk) {
       for (const adapter of adaptersNeedingFix) {
         try {
-          const { resolveAditHookBinary } = await import("@adit/hooks/adapters");
+          const { resolveAditHookBinary } = await import("@varveai/adit-hooks/adapters");
           await adapter.installHooks(config.projectRoot, resolveAditHookBinary());
           fixes.push(`Installed ADIT hooks for ${adapter.displayName}`);
         } catch {
