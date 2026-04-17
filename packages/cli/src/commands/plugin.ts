@@ -65,6 +65,9 @@ export async function pluginInstallCommand(
       console.log("    Claude Code           →  .claude/");
       console.log("    Claude Code (VS Code) →  .claude/  (shared with CLI)");
       console.log("    OpenCode              →  .opencode/  or  opencode.json");
+      console.log("    Cursor                →  .cursor/");
+      console.log("    Codex CLI             →  .codex/");
+      console.log("    Gemini CLI            →  .gemini/");
       console.log();
       console.log("  To install for a specific platform:");
       console.log("    adit plugin install claude-code");

@@ -1,8 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { getAdapter, listAdapters, detectPlatform, registerAdapter } from "./registry.js";
+import { getAdapter, listAdapters, detectPlatform, detectPlatformFromPayload, registerAdapter } from "./registry.js";
 import { claudeCodeAdapter } from "./claude-code.js";
 import { claudeVscodeAdapter } from "./claude-vscode.js";
 import { opencodeAdapter } from "./opencode.js";
+import { cursorAdapter } from "./cursor.js";
+import { codexAdapter } from "./codex.js";
+import { geminiAdapter } from "./gemini.js";
 import type { PlatformAdapter } from "./types.js";
 
 describe("Adapter Registry", () => {
@@ -19,20 +22,20 @@ describe("Adapter Registry", () => {
     );
   });
 
-  it("lists all registered adapters including stubs", () => {
+  it("lists all registered adapters including new platforms", () => {
     const adapters = listAdapters();
-    expect(adapters.length).toBeGreaterThanOrEqual(5);
+    expect(adapters.length).toBeGreaterThanOrEqual(7);
     expect(adapters.find((a) => a.platform === "claude-code")).toBeDefined();
     expect(adapters.find((a) => a.platform === "cursor")).toBeDefined();
     expect(adapters.find((a) => a.platform === "copilot")).toBeDefined();
     expect(adapters.find((a) => a.platform === "opencode")).toBeDefined();
     expect(adapters.find((a) => a.platform === "codex")).toBeDefined();
+    expect(adapters.find((a) => a.platform === "gemini")).toBeDefined();
   });
 
   it("detects platform from environment", () => {
-    // Default should be claude-code
     const platform = detectPlatform();
-    expect(["claude-code", "cursor", "copilot", "opencode", "codex", "other"]).toContain(platform);
+    expect(["claude-code", "cursor", "copilot", "opencode", "codex", "gemini", "other"]).toContain(platform);
   });
 
   it("returns the OpenCode adapter (fully implemented)", () => {
@@ -41,18 +44,27 @@ describe("Adapter Registry", () => {
     expect(opencode.hookMappings.length).toBeGreaterThan(0);
   });
 
-  it("returns stub adapters for unimplemented platforms", () => {
+  it("returns the Cursor adapter (fully implemented)", () => {
     const cursor = getAdapter("cursor");
     expect(cursor.displayName).toBe("Cursor");
-    expect(cursor.hookMappings).toHaveLength(0);
+    expect(cursor.hookMappings.length).toBeGreaterThan(0);
+  });
 
+  it("returns the Codex adapter (fully implemented)", () => {
     const codex = getAdapter("codex");
     expect(codex.displayName).toBe("Codex");
+    expect(codex.hookMappings.length).toBeGreaterThan(0);
+  });
+
+  it("returns the Gemini adapter (fully implemented)", () => {
+    const gemini = getAdapter("gemini");
+    expect(gemini.displayName).toBe("Gemini CLI");
+    expect(gemini.hookMappings.length).toBeGreaterThan(0);
   });
 
   it("stub adapters report not implemented in validation", async () => {
-    const cursor = getAdapter("cursor");
-    const result = await cursor.validateInstallation("/test");
+    const copilot = getAdapter("copilot");
+    const result = await copilot.validateInstallation("/test");
     expect(result.valid).toBe(false);
     expect(result.checks[0].detail).toContain("not yet implemented");
   });
@@ -486,5 +498,82 @@ describe("Claude Code VS Code Adapter", () => {
 
   it("getResumeCommand returns null", () => {
     expect(claudeVscodeAdapter.getResumeCommand("/project")).toBeNull();
+  });
+});
+
+describe("detectPlatformFromPayload", () => {
+  it("detects Cursor from cursor_version field", () => {
+    const result = detectPlatformFromPayload({
+      cursor_version: "3.1.15",
+      conversation_id: "abc-123",
+      hook_event_name: "stop",
+      status: "completed",
+    });
+    expect(result).toBe("cursor");
+  });
+
+  it("detects Cursor from Cursor-native hook_event_name (beforeSubmitPrompt)", () => {
+    const result = detectPlatformFromPayload({
+      hook_event_name: "beforeSubmitPrompt",
+      conversation_id: "abc-123",
+      prompt: "hello",
+    });
+    expect(result).toBe("cursor");
+  });
+
+  it("detects Cursor from Cursor-native hook_event_name (stop)", () => {
+    const result = detectPlatformFromPayload({
+      hook_event_name: "stop",
+      status: "completed",
+      conversation_id: "abc-123",
+    });
+    expect(result).toBe("cursor");
+  });
+
+  it("detects Cursor from Cursor-native hook_event_name (sessionStart)", () => {
+    const result = detectPlatformFromPayload({
+      hook_event_name: "sessionStart",
+      session_id: "sess-1",
+    });
+    expect(result).toBe("cursor");
+  });
+
+  it("detects Cursor from Cursor-native hook_event_name (afterAgentResponse)", () => {
+    const result = detectPlatformFromPayload({
+      hook_event_name: "afterAgentResponse",
+      conversation_id: "abc-123",
+      message: "Agent done",
+    });
+    expect(result).toBe("cursor");
+  });
+
+  it("returns null for Claude Code payloads", () => {
+    // Claude Code uses CamelCase hook_event_name values
+    const result = detectPlatformFromPayload({
+      hook_event_name: "UserPromptSubmit",
+      session_id: "sess-1",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null for unrecognized payloads", () => {
+    expect(detectPlatformFromPayload({})).toBeNull();
+    expect(detectPlatformFromPayload({ foo: "bar" })).toBeNull();
+  });
+
+  it("detects Gemini payloads by unique event names", () => {
+    const result = detectPlatformFromPayload({
+      hook_event_name: "AfterAgent",
+      session_id: "sess-1",
+    });
+    expect(result).toBe("gemini");
+  });
+
+  it("detects Gemini payloads with BeforeAgent event", () => {
+    const result = detectPlatformFromPayload({
+      hook_event_name: "BeforeAgent",
+      prompt: "hello",
+    });
+    expect(result).toBe("gemini");
   });
 });
