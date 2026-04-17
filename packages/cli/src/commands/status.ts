@@ -35,6 +35,7 @@ const platformLabel: Record<string, string> = {
   copilot: "Copilot",
   opencode: "OpenCode",
   codex: "Codex",
+  gemini: "Gemini",
 };
 
 export async function statusCommand(opts?: { json?: boolean }): Promise<void> {

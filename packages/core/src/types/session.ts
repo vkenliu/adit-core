@@ -20,6 +20,7 @@ export type Platform =
   | "copilot"
   | "opencode"
   | "codex"
+  | "gemini"
   | "other";
 
 /** Session type */

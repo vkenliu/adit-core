@@ -17,6 +17,7 @@ import {
   diffEnvironments,
 } from "@varveai/adit-engine";
 import { initHookContext, type HookContext } from "../common/context.js";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import type { NormalizedHookInput } from "../adapters/types.js";
 
 /**
@@ -128,9 +129,30 @@ async function handleStopUnified(ctx: HookContext, input: NormalizedHookInput): 
   const lastPrompt = recentPrompts[0]?.promptText ?? null;
 
   // Use last_assistant_message as the response text (what the model actually said).
+  // Cursor sometimes fires stop before transcript text is fully flushed, so
+  // we retry transcript extraction briefly when message text is missing.
+  const recoveredAssistantMessage = input.lastAssistantMessage
+    ?? await recoverAssistantMessageFromTranscript(input.transcriptPath);
   // Fall back to stop_reason for backward compatibility, then to "completed".
-  const responseText = input.lastAssistantMessage ?? input.stopReason ?? "completed";
+  const responseText = recoveredAssistantMessage ?? input.stopReason ?? "completed";
   const checkpointLabel = input.stopReason ?? "completed";
+
+  // Debug: log response resolution chain to trace why "completed" is recorded
+  try {
+    appendFileSync("/tmp/adit-hook-debug.jsonl", JSON.stringify({
+      timestamp: new Date().toISOString(),
+      phase: "stop-response-resolution",
+      hookType: input.hookType,
+      platformCli: input.platformCli,
+      hasLastAssistantMessage: !!input.lastAssistantMessage,
+      hasTranscriptPath: !!input.transcriptPath,
+      transcriptRecoveryResult: recoveredAssistantMessage ? "found" : "not-found",
+      stopReason: input.stopReason,
+      finalResponseText: responseText,
+      rawPlatformDataKeys: input.rawPlatformData ? Object.keys(input.rawPlatformData) : [],
+      rawPlatformData: input.rawPlatformData,
+    }) + "\n");
+  } catch { /* best-effort */ }
 
   const event = await timeline.recordEvent({
     sessionId: ctx.session.id,
@@ -180,6 +202,50 @@ async function handleStopUnified(ctx: HookContext, input: NormalizedHookInput): 
     }
   }
 
+}
+
+function extractLastAssistantTextFromTranscript(transcriptPath: string): string | undefined {
+  if (!transcriptPath || !existsSync(transcriptPath)) return undefined;
+  try {
+    const lines = readFileSync(transcriptPath, "utf-8")
+      .split("\n")
+      .filter((l) => l.trim().length > 0);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const entry = JSON.parse(lines[i]) as {
+          role?: string;
+          message?: { content?: Array<{ type?: string; text?: string }> };
+        };
+        if (entry.role !== "assistant") continue;
+        const content = entry.message?.content;
+        if (!Array.isArray(content)) continue;
+        const text = content
+          .filter((c): c is { type: string; text: string } => c?.type === "text" && typeof c.text === "string")
+          .map((c) => c.text.trim())
+          .filter((t) => t.length > 0)
+          .join("\n");
+        if (text) return text;
+      } catch {
+        // ignore malformed lines
+      }
+    }
+  } catch {
+    // fail-open
+  }
+  return undefined;
+}
+
+async function recoverAssistantMessageFromTranscript(transcriptPath?: string): Promise<string | undefined> {
+  if (!transcriptPath) return undefined;
+  const delaysMs = [0, 120, 240, 480, 800];
+  for (const delayMs of delaysMs) {
+    if (delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+    const text = extractLastAssistantTextFromTranscript(transcriptPath);
+    if (text) return text;
+  }
+  return undefined;
 }
 
 /** Handle session start — capture initial env snapshot and record metadata */

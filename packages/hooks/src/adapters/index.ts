@@ -15,8 +15,11 @@ export type {
 export { claudeCodeAdapter } from "./claude-code.js";
 export { claudeVscodeAdapter } from "./claude-vscode.js";
 export { opencodeAdapter } from "./opencode.js";
-export { createStubAdapter, cursorAdapter, copilotAdapter, codexAdapter, otherAdapter } from "./stub.js";
-export { getAdapter, listAdapters, registerAdapter, detectPlatform, detectPlatforms } from "./registry.js";
+export { createStubAdapter, copilotAdapter, otherAdapter } from "./stub.js";
+export { cursorAdapter } from "./cursor.js";
+export { codexAdapter } from "./codex.js";
+export { geminiAdapter } from "./gemini.js";
+export { getAdapter, listAdapters, registerAdapter, detectPlatform, detectPlatformFromPayload, detectPlatforms } from "./registry.js";
 
 /**
  * Resolve the absolute path to the adit-hook binary for reliable invocation.
