@@ -20,7 +20,8 @@
   },
   "dependencies": {
     "@varveai/adit-core": "workspace:*",
-    "@varveai/adit-engine": "workspace:*"
+    "@varveai/adit-engine": "workspace:*",
+    "@varveai/adit-plans": "workspace:*"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

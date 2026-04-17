@@ -41,6 +41,7 @@ import {
   updateCachedQualified,
 } from "./cache.js";
 import { checkQuality, formatQualityFeedback } from "./qualify.js";
+import { validateDocument } from "@varveai/adit-plans";
 
 /** Maximum number of commits per upload batch */
 const COMMIT_BATCH_SIZE = 1000;
@@ -296,6 +297,30 @@ export async function linkCommand(
       if (discoveredDocs.length > 50) {
         log(`\n  Warning: ${discoveredDocs.length} documents found. Consider narrowing patterns in settings.json`);
       }
+
+      // ── Local structural validation ────────────────────────
+      const threshold = 0.6;
+      const newOrChanged = discoveredDocs.filter((d) => d.status !== "unchanged");
+      if (newOrChanged.length > 0) {
+        log("\n  Validating document structure...");
+        for (const doc of newOrChanged) {
+          const result = validateDocument(doc.content);
+          const scorePct = Math.round(result.score * 100);
+          if (result.score < threshold) {
+            log(`    [WARN] ${doc.sourcePath} — score ${scorePct}% (type: ${result.detectedType})`);
+            for (const s of result.missingRequired) {
+              log(`           Missing required: ## ${s}`);
+            }
+            for (const s of result.stubSections) {
+              log(`           Stub section: ## ${s}`);
+            }
+          } else {
+            log(`    [OK]   ${doc.sourcePath} — score ${scorePct}% (type: ${result.detectedType})`);
+          }
+        }
+        log("  Tip: Use 'adit docs validate' for a detailed report, or run your");
+        log("       AI coding tool's generate-docs skill to fill in missing sections.");
+      }
     }
 
     // ──────────────────────────────────────────────────────────
@@ -363,19 +388,18 @@ export async function linkCommand(
       log(`  Documents qualified (score: ${score!.toFixed(2)})`);
     } else {
       log(`  Documents not yet qualified (score: ${score!.toFixed(2)})`);
-      const feedback = formatQualityFeedback(qualifyResult);
-      if (feedback) {
-        log(feedback);
-      }
+    }
 
-      // In CLI context: show the summary prompt for the user
-      if (qualifyResult.feedback?.summaryPrompt) {
-        log("");
-        log("  To improve quality, generate a project summary by running this");
-        log("  prompt in your AI coding CLI, then re-run '/adit link':");
-        log("");
-        log(`  "${qualifyResult.feedback.summaryPrompt}"`);
-      }
+    // Always show document quality feedback (even when qualified)
+    const feedback = formatQualityFeedback(qualifyResult);
+    if (feedback) {
+      log(feedback);
+    }
+
+    // Show summary prompt when not qualified
+    if (!qualified && qualifyResult.feedback?.summaryPrompt) {
+      log("");
+      log(`  ${qualifyResult.feedback.summaryPrompt}`);
     }
 
     updateCachedQualified(db, effectiveProjectId, serverUrl, qualified);

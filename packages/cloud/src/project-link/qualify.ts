@@ -28,30 +28,51 @@ export async function checkQuality(
 /**
  * Format quality feedback for human-readable display.
  *
- * Returns a multi-line string describing what's missing and
- * suggestions for improvement. Returns null if already qualified.
+ * Always shows per-document structural details.
+ * If not qualified, also shows missing items and suggestions.
  */
 export function formatQualityFeedback(response: QualifyResponse): string | null {
-  if (response.qualified || !response.feedback) return null;
-
   const lines: string[] = [];
-  lines.push(`  Score: ${response.score.toFixed(2)} (needs 0.60 to qualify)`);
-  lines.push("");
+  const hasLowScoreDocs = response.documentDetails?.some(
+    (d) => d.structuralScore < 0.6
+  );
 
-  if (response.feedback.missing.length > 0) {
-    lines.push("  Missing:");
-    for (const item of response.feedback.missing) {
-      lines.push(`    - ${item}`);
+  // Show document details when there are low-scoring docs or not qualified
+  if (response.documentDetails && response.documentDetails.length > 0) {
+    lines.push("  Document scores:");
+    for (const doc of response.documentDetails) {
+      const scorePct = Math.round(doc.structuralScore * 100);
+      const warn = scorePct < 60 ? " ⚠" : "";
+      lines.push(`    ${doc.fileName} — ${scorePct}% (${doc.detectedType})${warn}`);
+      if (doc.hasStubContent) {
+        lines.push(`      ↳ contains placeholder/stub content`);
+      }
     }
     lines.push("");
   }
 
-  if (response.feedback.suggestions.length > 0) {
-    lines.push("  Suggestions:");
-    for (const item of response.feedback.suggestions) {
-      lines.push(`    - ${item}`);
+  if (!response.qualified && response.feedback) {
+    lines.push(`  Overall score: ${response.score.toFixed(2)} (needs 0.60)`);
+    lines.push("");
+
+    if (response.feedback.missing.length > 0) {
+      lines.push("  Missing:");
+      for (const item of response.feedback.missing) {
+        lines.push(`    - ${item}`);
+      }
+      lines.push("");
     }
+
+    if (response.feedback.suggestions.length > 0) {
+      lines.push("  Suggestions:");
+      for (const item of response.feedback.suggestions) {
+        lines.push(`    - ${item}`);
+      }
+    }
+  } else if (hasLowScoreDocs) {
+    lines.push("  Tip: Use /generate-docs in your AI coding tool to auto-fill");
+    lines.push("       document content from your codebase. Then re-run link.");
   }
 
-  return lines.join("\n");
+  return lines.length > 0 ? lines.join("\n") : null;
 }

@@ -100,10 +100,19 @@ export interface DocumentUploadResponse {
   };
 }
 
+export interface QualifyDocumentDetail {
+  fileName: string;
+  detectedType: string;
+  structuralScore: number;
+  missingSections: string[];
+  hasStubContent: boolean;
+}
+
 export interface QualifyResponse {
   qualified: boolean;
   score: number;
   documentCount: number;
+  documentDetails?: QualifyDocumentDetail[];
   feedback: {
     missing: string[];
     suggestions: string[];
@@ -159,13 +168,7 @@ export interface IntentDetail extends IntentSummary {
     context: number;
   } | null;
   tasks: TaskSlice[];
-  latestPlan: {
-    version: number;
-    versionType: string;
-    responsePayload: string;
-    gatekeeperVerdict: string | null;
-    createdAt: string;
-  } | null;
+  plans: PromptVersion[];
   recentShipNotes: Array<{
     id: string;
     noteBody: string;
@@ -181,16 +184,39 @@ export interface TaskSlice {
   description: string | null;
   phase: number;
   phaseTitle: string | null;
+  phaseChecklist: Array<{ item: string; checked: boolean }>;
   sortOrder: number;
   wave: number | null;
   complexityScore: number | null;
   approvalStatus: string;
   featureTag: string | null;
-  acceptanceCriteria: string[];
+  acceptanceCriteria: {
+    criteria: string[];
+    assertions: Array<{
+      type: string;
+      description: string;
+      path?: string;
+    }>;
+  };
+  linkedEventIds: string[];
   dependsOn: number[];
   codingPrompt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface PromptVersion {
+  version: number;
+  versionType: string;
+  promptText: string | null;
+  responsePayload: string;
+  llmModel: string | null;
+  llmParamsJson: string | null;
+  sourceEventId: string | null;
+  gatekeeperVerdict: string | null;
+  gatekeeperReport: string | null;
+  parentVersionId: string | null;
+  createdAt: string;
 }
 
 // ─── Command Options ───────────────────────────────────────
@@ -255,7 +281,7 @@ export interface BulkTaskFilter {
 }
 
 export interface BulkTaskUpdate {
-  /** Task ID to update */
+  /** Task ID to update — must be "*" for phase/intent level operations */
   taskId: string;
   /** New status for the task */
   status: "pending" | "approved" | "in_progress" | "completed" | "rejected";
@@ -270,8 +296,6 @@ export interface BulkTaskUpdate {
 export interface BulkTaskUpdateOptions {
   /** Intent ID containing the tasks to update */
   intentId: string;
-  /** Specific tasks to update (when not provided, all tasks in intent are updated) */
-  taskId?: string[];
   /** Target status (default: "completed") */
   status?: "pending" | "approved" | "in_progress" | "completed" | "rejected";
   /** Filters to apply before updating */
@@ -290,4 +314,6 @@ export interface BulkTaskUpdateResult {
   }>;
   /** Summary message */
   message: string;
+  /** Intent state transition if triggered */
+  intentTransitioned?: "shipped" | null;
 }
