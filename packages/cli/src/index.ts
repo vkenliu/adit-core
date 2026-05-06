@@ -40,6 +40,7 @@ import {
     cloudResetCredentialsCommand,
     cloudAuthTokenCommand,
 } from "./commands/cloud.js";
+import { cloudClaudeCommand } from "./commands/cloud-claude.js";
 import { dbClearEventsCommand } from "./commands/db.js";
 import {
     transcriptEnableCommand,
@@ -268,6 +269,13 @@ cloudCmd
     .command("auth-token <token>")
     .description("Authenticate with a static JWT token")
     .action((token) => cloudAuthTokenCommand(token));
+
+cloudCmd
+    .command("claude")
+    .description("Connect local Claude Code CLI to adit-cloud Coding")
+    .option("--bin <name>", "Claude CLI binary", "claude")
+    .option("--arg <a...>", "Extra args passed to Claude Code", [] as string[])
+    .action((opts) => cloudClaudeCommand({ bin: opts.bin, arg: opts.arg }));
 
 // Transcript upload management (under cloud)
 const transcriptCmd = cloudCmd
