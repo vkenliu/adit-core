@@ -423,6 +423,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     const modelId = typeof message.message?.model === "string"
       ? message.message.model
       : undefined;
+    const usage = normalizeClaudeUsage((message.message as { usage?: unknown }).usage);
     for (const part of content as unknown as Array<Record<string, unknown>>) {
       if (part.type === "text" && typeof part.text === "string" && part.text) {
         this.pushEvent("message", {
@@ -430,6 +431,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
           sessionId,
           messageId,
           modelId,
+          usage,
           text: part.text,
           createdAt: Date.now(),
         });
@@ -442,6 +444,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
           sessionId,
           messageId,
           modelId,
+          usage,
           text: part.thinking,
           createdAt: Date.now(),
         });
@@ -450,6 +453,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
           sessionId,
           messageId,
           modelId,
+          usage,
           toolUseId: typeof part.id === "string" ? part.id : undefined,
           toolName: typeof part.name === "string" ? part.name : "tool",
           input: part.input ?? {},
@@ -655,6 +659,25 @@ function makeMessageId(message: SDKMessage, sessionId: string): string {
   if (typeof maybe.message?.id === "string") return maybe.message.id;
   if (typeof maybe.uuid === "string") return maybe.uuid;
   return `claude-${sessionId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function normalizeClaudeUsage(value: unknown): Record<string, number> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const usage = value as Record<string, unknown>;
+  const normalized: Record<string, number> = {};
+  for (const key of [
+    "input_tokens",
+    "output_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+    "reasoning_tokens",
+  ]) {
+    const numberValue = usage[key];
+    if (typeof numberValue === "number" && Number.isFinite(numberValue)) {
+      normalized[key] = numberValue;
+    }
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

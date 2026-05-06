@@ -119,6 +119,7 @@ export class ClaudeTranscriptSync {
     const content = message?.content;
     const messageId = makeMessageId(obj, session.id);
     const modelId = readString(message?.model) ?? undefined;
+    const usage = normalizeClaudeUsage(message?.usage);
     const events: CliAgentRelayEvent[] = [];
 
     if (type === "assistant" && typeof content === "string") {
@@ -129,7 +130,7 @@ export class ClaudeTranscriptSync {
         0,
         content,
         events,
-        assistantTextEvent(session.id, messageId, content, timestamp, modelId),
+        assistantTextEvent(session.id, messageId, content, timestamp, modelId, usage),
       );
       return events;
     }
@@ -170,6 +171,7 @@ export class ClaudeTranscriptSync {
                 sessionId: session.id,
                 messageId,
                 modelId,
+                usage,
                 text: truncateText(thinking),
                 createdAt: timestamp + index,
               },
@@ -195,6 +197,7 @@ export class ClaudeTranscriptSync {
                 sessionId: session.id,
                 messageId,
                 modelId,
+                usage,
                 toolUseId,
                 toolName,
                 input,
@@ -223,7 +226,7 @@ export class ClaudeTranscriptSync {
         assistantTextIndexes[0] ?? 0,
         text,
         events,
-        assistantTextEvent(session.id, messageId, text, timestamp, modelId),
+        assistantTextEvent(session.id, messageId, text, timestamp, modelId, usage),
       );
     }
 
@@ -243,6 +246,7 @@ export class ClaudeTranscriptSync {
       `tool-${hashText(`${makeMessageId(obj, session.id)}:${index}`)}`;
     const message = isRecord(obj.message) ? obj.message : null;
     const modelId = readString(message?.model) ?? undefined;
+    const usage = normalizeClaudeUsage(message?.usage);
     const output = formatToolResult(part, obj);
     const isError = part.is_error === true;
     this.pushIfNew(
@@ -258,6 +262,7 @@ export class ClaudeTranscriptSync {
           sessionId: session.id,
           messageId: makeToolResultMessageId(obj, session.id),
           modelId,
+          usage,
           toolUseId,
           toolName: "tool",
           input: {},
@@ -292,6 +297,7 @@ function assistantTextEvent(
   text: string,
   createdAt: number,
   modelId?: string,
+  usage?: Record<string, number>,
 ): CliAgentRelayEvent {
   return {
     type: "message",
@@ -300,6 +306,7 @@ function assistantTextEvent(
       sessionId,
       messageId,
       modelId,
+      usage,
       text: truncateText(text),
       createdAt,
     },
@@ -336,6 +343,24 @@ function makeMessageId(obj: Record<string, unknown>, sessionId: string): string 
     readString(obj.uuid) ??
     `claude-${sessionId}-${hashText(`${String(obj.timestamp ?? "")}:${String(obj.parentUuid ?? "")}`)}`
   );
+}
+
+function normalizeClaudeUsage(value: unknown): Record<string, number> | undefined {
+  if (!isRecord(value)) return undefined;
+  const normalized: Record<string, number> = {};
+  for (const key of [
+    "input_tokens",
+    "output_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+    "reasoning_tokens",
+  ]) {
+    const numberValue = value[key];
+    if (typeof numberValue === "number" && Number.isFinite(numberValue)) {
+      normalized[key] = numberValue;
+    }
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
 function makeToolResultMessageId(
