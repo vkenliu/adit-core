@@ -26,7 +26,7 @@ export interface CliAgentProvider {
   takeover(): Promise<void>;
   releaseToLocal(): Promise<void>;
   switchSession(sessionId: string): Promise<void>;
-  sendPrompt(prompt: string, opts?: { mode?: "build" | "plan" }): Promise<void>;
+  sendPrompt(prompt: string, opts?: { mode?: "build" | "plan"; pendingSessionId?: string | null }): Promise<void>;
   answerPermission(
     id: string,
     approved: boolean,

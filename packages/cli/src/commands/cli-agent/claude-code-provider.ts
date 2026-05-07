@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -25,14 +26,16 @@ import type {
 interface PendingPrompt {
   message: string;
   mode: "build" | "plan";
+  pendingSessionId: string | null;
   promptEvent: PendingPromptEvent;
   resolve: () => void;
   reject: (error: Error) => void;
 }
 
 interface QueuedSdkPrompt {
-  message: SDKUserMessage;
+  message: string;
   mode: "build" | "plan";
+  pendingSessionId: string | null;
   promptEvent: PendingPromptEvent;
 }
 
@@ -74,6 +77,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     resolve: (result: PermissionResult) => void;
     reject: (error: Error) => void;
   }>();
+  private boundPendingSessionIds = new Set<string>();
   private lastAssistantMessageBySession = new Map<string, string>();
   private reclaimingToLocal = false;
   private reclaimBuffer = "";
@@ -226,7 +230,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
 
   async sendPrompt(
     prompt: string,
-    opts: { mode?: "build" | "plan" } = {},
+    opts: { mode?: "build" | "plan"; pendingSessionId?: string | null } = {},
   ): Promise<void> {
     if (this.ownerValue !== "web") {
       throw Object.assign(new Error("Web has not taken over this Claude session"), {
@@ -242,6 +246,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       this.promptQueue.push({
         message: trimmed,
         mode: opts.mode === "plan" ? "plan" : "build",
+        pendingSessionId: opts.pendingSessionId ?? null,
         promptEvent: {
           text: trimmed,
           createdAt: Date.now(),
@@ -367,8 +372,14 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       }
       if (!first || this.ownerValue !== "web" || this.remoteLoopGeneration !== generation) return;
 
-      const canonicalSessionId = this.activeSessionId ?? this.resumeSessionId;
-      const resumeId = this.pickResumeSessionId({ fallbackToLatest: false });
+      const pendingSessionId = first.pendingSessionId;
+      const pendingClaudeSessionId = pendingSessionId ? randomUUID() : null;
+      const canonicalSessionId = pendingSessionId
+        ? pendingClaudeSessionId
+        : this.activeSessionId ?? this.resumeSessionId;
+      const resumeId = pendingSessionId
+        ? null
+        : this.pickResumeSessionId({ fallbackToLatest: false });
       const modelId = this.refreshActiveModel({
         sessionId: canonicalSessionId ?? resumeId,
       });
@@ -405,7 +416,9 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       };
 
       this.remoteQuery = query({
-        prompt: this.createPromptStream(first.message),
+        prompt: this.createPromptStream(
+          toUserMessage(first.message, pendingClaudeSessionId ?? undefined),
+        ),
         options,
       });
       this.setBusy(true);
@@ -416,7 +429,13 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       try {
         for await (const message of this.remoteQuery) {
           if (this.remoteLoopGeneration !== generation) break;
-          const sdkSessionId = this.handleSdkMessage(message, canonicalSessionId ?? resumeId);
+          const sdkSessionId = this.handleSdkMessage(message, canonicalSessionId ?? resumeId, {
+            suppressActiveFallback: Boolean(pendingSessionId),
+          });
+          const boundSessionId = sdkSessionId ?? pendingClaudeSessionId;
+          if (pendingSessionId && boundSessionId) {
+            this.bindPendingSession(pendingSessionId, boundSessionId);
+          }
           if (
             sdkSessionId &&
             canonicalSessionId &&
@@ -432,7 +451,9 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
           process.stderr.write(`\n[adit cloud claude] SDK error: ${messageText}\n`);
         }
       } finally {
-        this.mergeRemoteTranscriptsIntoActive(canonicalSessionId, observedSdkSessionId);
+        if (!pendingSessionId) {
+          this.mergeRemoteTranscriptsIntoActive(canonicalSessionId, observedSdkSessionId);
+        }
         if (this.activePromptEvent === first.promptEvent) {
           this.activePromptEvent = null;
         }
@@ -456,8 +477,9 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       if (!item) return Promise.resolve(null);
       item.resolve();
       return Promise.resolve({
-        message: toUserMessage(item.message),
+        message: item.message,
         mode: item.mode,
+        pendingSessionId: item.pendingSessionId,
         promptEvent: item.promptEvent,
       });
     }
@@ -473,8 +495,9 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       if (!resolve || !item) return;
       item.resolve();
       resolve({
-        message: toUserMessage(item.message),
+        message: item.message,
         mode: item.mode,
+        pendingSessionId: item.pendingSessionId,
         promptEvent: item.promptEvent,
       });
     }
@@ -490,7 +513,11 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     }
   }
 
-  private handleSdkMessage(message: SDKMessage, canonicalSessionId: string | null): string | null {
+  private handleSdkMessage(
+    message: SDKMessage,
+    canonicalSessionId: string | null,
+    opts: { suppressActiveFallback?: boolean } = {},
+  ): string | null {
     const sdkSessionId = extractSessionId(message);
     if (sdkSessionId) {
       this.noteSdkSession(sdkSessionId, {
@@ -499,8 +526,8 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     }
     const sessionId =
       canonicalSessionId ??
-      this.activeSessionId ??
-      this.resumeSessionId ??
+      (opts.suppressActiveFallback ? null : this.activeSessionId) ??
+      (opts.suppressActiveFallback ? null : this.resumeSessionId) ??
       sdkSessionId ??
       "pending";
     if (sdkSessionId) this.flushActivePromptEvent(sessionId);
@@ -558,6 +585,29 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       this.rememberRemoteSdkSession(nextActiveSessionId, id);
     }
     this.refreshActiveModel({ sessionId: id });
+    if (changed) this.emitState();
+  }
+
+  private bindPendingSession(pendingSessionId: string, sessionId: string): void {
+    if (!pendingSessionId || !sessionId) return;
+    const changed =
+      this.activeSessionId !== sessionId ||
+      this.resumeSessionId !== sessionId ||
+      this.sdkSessionId !== sessionId ||
+      this.remoteSdkSessionId !== sessionId;
+    this.activeSessionId = sessionId;
+    this.resumeSessionId = sessionId;
+    this.sdkSessionId = sessionId;
+    this.remoteSdkSessionId = sessionId;
+    this.refreshActiveModel({ sessionId });
+    if (!this.boundPendingSessionIds.has(pendingSessionId)) {
+      this.boundPendingSessionIds.add(pendingSessionId);
+      this.pushEvent("session-bound", {
+        pendingSessionId,
+        sessionId,
+        createdAt: Date.now(),
+      });
+    }
     if (changed) this.emitState();
   }
 
@@ -879,9 +929,10 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
   }
 }
 
-function toUserMessage(message: string): SDKUserMessage {
+function toUserMessage(message: string, sessionId?: string): SDKUserMessage {
   return {
     type: "user",
+    ...(sessionId ? { session_id: sessionId } : {}),
     parent_tool_use_id: null,
     message: {
       role: "user",

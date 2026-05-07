@@ -103,11 +103,12 @@ async function processCommand(
     const text = readString(command.payload.text);
     if (!text) return;
     const sessionId = readString(command.payload.sessionId);
+    const pendingSessionId = readString(command.payload.pendingSessionId);
     const mode = readString(command.payload.mode) === "plan" ? "plan" : "build";
-    if (sessionId && provider.state.activeSessionId !== sessionId) {
+    if (!pendingSessionId && sessionId && provider.state.activeSessionId !== sessionId) {
       await provider.switchSession(sessionId);
     }
-    await provider.sendPrompt(text, { mode });
+    await provider.sendPrompt(text, { mode, pendingSessionId });
     return;
   }
 
