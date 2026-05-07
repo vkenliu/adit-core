@@ -24,9 +24,12 @@ export function installClaudeHooks(opts: {
   cwd: string;
   endpoint: string;
   marker: string;
+  settingsPath?: string;
 }): InstalledHooks {
   const claudeDir = path.join(opts.cwd, ".claude");
-  const settingsPath = path.join(claudeDir, "settings.local.json");
+  const baseSettingsPath = path.join(claudeDir, "settings.local.json");
+  const settingsPath = opts.settingsPath ?? baseSettingsPath;
+  const managedSettingsFile = settingsPath !== baseSettingsPath;
   const command = `curl -sS --fail --max-time 3 -X POST -H 'content-type: application/json' --data-binary @- '${opts.endpoint}?${opts.marker}' >/dev/null || true`;
 
   const dirExisted = fs.existsSync(claudeDir);
@@ -34,9 +37,10 @@ export function installClaudeHooks(opts: {
   fs.mkdirSync(claudeDir, { recursive: true });
 
   let existing: Record<string, unknown> = {};
-  if (fileExisted) {
+  const sourceSettingsPath = managedSettingsFile ? baseSettingsPath : settingsPath;
+  if (fs.existsSync(sourceSettingsPath)) {
     try {
-      const parsed = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+      const parsed = JSON.parse(fs.readFileSync(sourceSettingsPath, "utf8"));
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         existing = parsed as Record<string, unknown>;
       }
@@ -56,7 +60,7 @@ export function installClaudeHooks(opts: {
         Array.isArray(inner) &&
         inner.some((hook: HookCommand) =>
           typeof hook?.command === "string" &&
-          hook.command.includes("from=adit-cloud-cli-")
+          hook.command.includes(opts.marker)
         )
       );
     });
@@ -69,6 +73,13 @@ export function installClaudeHooks(opts: {
   return {
     settingsPath,
     cleanup: () => {
+      if (managedSettingsFile) {
+        try {
+          fs.unlinkSync(settingsPath);
+        } catch {}
+        return;
+      }
+
       try {
         const parsed = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
         if (parsed?.hooks && typeof parsed.hooks === "object") {

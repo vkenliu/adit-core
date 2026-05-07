@@ -1,4 +1,4 @@
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { loadConfig, findGitRoot } from "@varveai/adit-core";
@@ -174,10 +174,16 @@ export async function cloudClaudeCommand(opts?: CloudClaudeOptions): Promise<voi
 
   try {
     hookServer = await startClaudeHookServer();
+    const hookSettingsPath = join(
+      config.projectRoot,
+      ".claude",
+      `adit-cloud-${terminalId}.settings.local.json`,
+    );
     installedHooks = installClaudeHooks({
       cwd: config.projectRoot,
       endpoint: hookServer.endpoint,
       marker: `from=adit-cloud-cli-${hookServer.port}`,
+      settingsPath: hookSettingsPath,
     });
 
     const registered = await relay.register({
