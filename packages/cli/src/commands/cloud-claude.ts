@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { loadConfig, findGitRoot } from "@varveai/adit-core";
 import {
   CloudApiError,
@@ -36,6 +37,17 @@ function findExecutable(command: string): boolean {
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function readHookModel(body: Record<string, unknown>): string | null {
+  const env = body.env && typeof body.env === "object" && !Array.isArray(body.env)
+    ? body.env as Record<string, unknown>
+    : {};
+  return (
+    readString(body.model) ??
+    readString(body.activeModelId) ??
+    readString(env.ANTHROPIC_MODEL)
+  );
 }
 
 function printCloudError(prefix: string, error: unknown): void {
@@ -80,10 +92,22 @@ async function processCommand(
     return;
   }
 
+  if (command.type === "switch-session") {
+    const sessionId = readString(command.payload.sessionId);
+    if (!sessionId) return;
+    await provider.switchSession(sessionId);
+    return;
+  }
+
   if (command.type === "prompt") {
     const text = readString(command.payload.text);
     if (!text) return;
-    await provider.sendPrompt(text);
+    const sessionId = readString(command.payload.sessionId);
+    const mode = readString(command.payload.mode) === "plan" ? "plan" : "build";
+    if (sessionId && provider.state.activeSessionId !== sessionId) {
+      await provider.switchSession(sessionId);
+    }
+    await provider.sendPrompt(text, { mode });
     return;
   }
 
@@ -132,6 +156,7 @@ export async function cloudClaudeCommand(opts?: CloudClaudeOptions): Promise<voi
   const serverUrl = cloudConfig.serverUrl ?? credentials.serverUrl ?? DEFAULT_SERVER_URL;
   const client = new CloudClient(serverUrl, credentials);
   const relay = new CliAgentRelayClient(client);
+  const terminalId = randomUUID();
 
   try {
     await client.get("/api/sync/status");
@@ -157,6 +182,7 @@ export async function cloudClaudeCommand(opts?: CloudClaudeOptions): Promise<voi
 
     const registered = await relay.register({
       provider: "claude-code",
+      terminalId,
       projectRoot: config.projectRoot,
       projectId: config.projectId,
       projectName: basename(config.projectRoot),
@@ -179,8 +205,9 @@ export async function cloudClaudeCommand(opts?: CloudClaudeOptions): Promise<voi
         body,
         sessionId: readString(body.sessionId),
       });
-      if (sessionId) provider?.noteLocalSession(sessionId);
+      provider?.noteModel(readHookModel(body));
       const isLocalOwner = provider?.state.owner === "local";
+      if (sessionId && isLocalOwner) provider?.noteLocalSession(sessionId);
       if (event.type === "UserPromptSubmit") {
         if (isLocalOwner) {
           provider?.markLocalBusy();
@@ -216,6 +243,7 @@ export async function cloudClaudeCommand(opts?: CloudClaudeOptions): Promise<voi
     });
 
     console.log(`Connected ${config.projectRoot} to adit-cloud Coding.`);
+    console.log(`Terminal: ${terminalId}`);
     console.log(`Panel: ${registered.panel.name} (${registered.panel.id})`);
     console.log("Local Claude Code owns the session until the Coding page takes over.");
     console.log("When Web owns the session, type /local in this terminal to reclaim it.");
@@ -237,6 +265,7 @@ export async function cloudClaudeCommand(opts?: CloudClaudeOptions): Promise<voi
           activeSessionId: provider?.state.activeSessionId ?? null,
           resumeSessionId: provider?.state.resumeSessionId ?? null,
           sdkSessionId: provider?.state.sdkSessionId ?? null,
+          activeModelId: provider?.state.activeModelId ?? null,
         });
       } catch {}
       try {
@@ -268,6 +297,7 @@ export async function cloudClaudeCommand(opts?: CloudClaudeOptions): Promise<voi
           activeSessionId: provider.state.activeSessionId,
           resumeSessionId: provider.state.resumeSessionId,
           sdkSessionId: provider.state.sdkSessionId,
+          activeModelId: provider.state.activeModelId,
         });
 
         await pushQueuedEvents({ relay, connectionId, queue: eventQueue });

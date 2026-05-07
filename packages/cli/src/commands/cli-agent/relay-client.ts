@@ -32,6 +32,7 @@ export class CliAgentRelayClient {
 
   async register(input: {
     provider: "claude-code";
+    terminalId: string;
     projectRoot: string;
     projectId: string;
     projectName: string;
@@ -52,6 +53,7 @@ export class CliAgentRelayClient {
     activeSessionId: string | null;
     resumeSessionId: string | null;
     sdkSessionId: string | null;
+    activeModelId: string | null;
   }): Promise<void> {
     await this.client.post("/api/coding/cli-connections/heartbeat", input);
   }
@@ -67,7 +69,8 @@ export class CliAgentRelayClient {
           command.type !== "prompt" &&
           command.type !== "abort" &&
           command.type !== "permission" &&
-          command.type !== "takeover"
+          command.type !== "takeover" &&
+          command.type !== "switch-session"
         ) {
           return null;
         }

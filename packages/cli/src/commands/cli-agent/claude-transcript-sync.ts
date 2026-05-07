@@ -7,6 +7,7 @@ interface TranscriptSession {
   transcriptPath?: string;
   firstPromptAt?: number;
   seenKeys: Set<string>;
+  lastAssistantMessageId?: string;
 }
 
 interface NoteHookInput {
@@ -123,6 +124,7 @@ export class ClaudeTranscriptSync {
     const events: CliAgentRelayEvent[] = [];
 
     if (type === "assistant" && typeof content === "string") {
+      session.lastAssistantMessageId = messageId;
       this.pushIfNew(
         session,
         obj,
@@ -219,6 +221,7 @@ export class ClaudeTranscriptSync {
 
     if (assistantTextParts.length > 0) {
       const text = assistantTextParts.join("\n");
+      session.lastAssistantMessageId = messageId;
       this.pushIfNew(
         session,
         obj,
@@ -227,6 +230,19 @@ export class ClaudeTranscriptSync {
         text,
         events,
         assistantTextEvent(session.id, messageId, text, timestamp, modelId, usage),
+      );
+    }
+
+    if (type === "assistant" && usage) {
+      session.lastAssistantMessageId = messageId;
+      this.pushIfNew(
+        session,
+        obj,
+        "usage",
+        0,
+        safeJson(usage),
+        events,
+        usageEvent(session.id, messageId, usage, timestamp),
       );
     }
 
@@ -308,6 +324,23 @@ function assistantTextEvent(
       modelId,
       usage,
       text: truncateText(text),
+      createdAt,
+    },
+  };
+}
+
+function usageEvent(
+  sessionId: string,
+  messageId: string,
+  usage: Record<string, number>,
+  createdAt: number,
+): CliAgentRelayEvent {
+  return {
+    type: "usage",
+    payload: {
+      sessionId,
+      messageId,
+      usage,
       createdAt,
     },
   };

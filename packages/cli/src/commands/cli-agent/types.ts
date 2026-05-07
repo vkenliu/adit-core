@@ -9,6 +9,7 @@ export interface CliAgentState {
   activeSessionId: string | null;
   resumeSessionId: string | null;
   sdkSessionId: string | null;
+  activeModelId: string | null;
 }
 
 export interface CliPermissionRequest {
@@ -24,7 +25,8 @@ export interface CliAgentProvider {
   readonly permissions: CliPermissionRequest[];
   takeover(): Promise<void>;
   releaseToLocal(): Promise<void>;
-  sendPrompt(prompt: string): Promise<void>;
+  switchSession(sessionId: string): Promise<void>;
+  sendPrompt(prompt: string, opts?: { mode?: "build" | "plan" }): Promise<void>;
   answerPermission(
     id: string,
     approved: boolean,
@@ -41,7 +43,7 @@ export interface CliAgentRelayEvent {
 
 export interface RelayCommand {
   id: string;
-  type: "prompt" | "abort" | "permission" | "takeover";
+  type: "prompt" | "abort" | "permission" | "takeover" | "switch-session";
   payload: Record<string, unknown>;
   createdAt: number;
 }
