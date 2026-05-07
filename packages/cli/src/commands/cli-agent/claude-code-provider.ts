@@ -380,7 +380,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       const resumeId = pendingSessionId
         ? null
         : this.pickResumeSessionId({ fallbackToLatest: false });
-      const modelId = this.refreshActiveModel({
+      this.refreshActiveModel({
         sessionId: canonicalSessionId ?? resumeId,
       });
       const abortController = new AbortController();
@@ -392,9 +392,10 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
         : undefined;
       const options: Options = {
         cwd: this.opts.cwd,
+        pathToClaudeCodeExecutable: this.opts.bin,
+        env: this.buildEnv(),
         resume: resumeId ?? undefined,
         sessionId: explicitSessionId,
-        model: modelId ?? undefined,
         settings: this.opts.hookSettingsPath,
         permissionMode,
         ...(permissionMode === "bypassPermissions" ? { allowDangerouslySkipPermissions: true } : {}),
