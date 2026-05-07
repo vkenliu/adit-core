@@ -375,7 +375,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       const abortController = new AbortController();
       this.remoteAbortController = abortController;
       this.activePromptEvent = first.promptEvent;
-      const permissionMode: PermissionMode = first.mode === "plan" ? "plan" : "default";
+      const permissionMode: PermissionMode = first.mode === "plan" ? "plan" : "bypassPermissions";
       const explicitSessionId = !resumeId && canonicalSessionId && isUuid(canonicalSessionId)
         ? canonicalSessionId
         : undefined;
@@ -386,17 +386,22 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
         model: modelId ?? undefined,
         settings: this.opts.hookSettingsPath,
         permissionMode,
+        ...(permissionMode === "bypassPermissions" ? { allowDangerouslySkipPermissions: true } : {}),
         forkSession: false,
         abortController,
         includePartialMessages: true,
         forwardSubagentText: true,
-        canUseTool: (toolName, input, requestOptions) =>
-          this.handleToolPermission(
-            toolName,
-            input,
-            requestOptions.toolUseID,
-            requestOptions.signal,
-          ),
+        ...(permissionMode === "bypassPermissions"
+          ? {}
+          : {
+              canUseTool: (toolName, input, requestOptions) =>
+                this.handleToolPermission(
+                  toolName,
+                  input,
+                  requestOptions.toolUseID,
+                  requestOptions.signal,
+                ),
+            }),
       };
 
       this.remoteQuery = query({
