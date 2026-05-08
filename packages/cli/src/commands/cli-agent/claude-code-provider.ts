@@ -207,7 +207,14 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
   }
 
   async switchSession(sessionId: string): Promise<void> {
-    if (!isValidClaudeSession(sessionId, this.opts.cwd)) {
+    if (!isUuid(sessionId)) {
+      throw Object.assign(new Error("Claude session not found for this project"), {
+        statusCode: 404,
+      });
+    }
+
+    const hasLocalTranscript = isValidClaudeSession(sessionId, this.opts.cwd);
+    if (!hasLocalTranscript && this.ownerValue !== "web") {
       throw Object.assign(new Error("Claude session not found for this project"), {
         statusCode: 404,
       });
