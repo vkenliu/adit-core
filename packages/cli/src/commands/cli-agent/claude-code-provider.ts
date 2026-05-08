@@ -19,6 +19,7 @@ import {
 import type {
   CliAgentProvider,
   CliAgentRelayEvent,
+  CliQuestionResponse,
   CliAgentState,
   CliPermissionRequest,
 } from "./types.js";
@@ -53,6 +54,14 @@ interface ClaudeCodeProviderOptions {
 }
 
 const RECLAIM_COMMAND = "/local";
+const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
+const EXIT_PLAN_MODE_TOOL = "ExitPlanMode";
+
+interface CliQuestionRequest {
+  id: string;
+  input: Record<string, unknown>;
+  createdAt: number;
+}
 
 export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider {
   readonly provider = "claude-code" as const;
@@ -74,6 +83,11 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
   private activePromptEvent: PendingPromptEvent | null = null;
   private pendingPermissions = new Map<string, {
     request: CliPermissionRequest;
+    resolve: (result: PermissionResult) => void;
+    reject: (error: Error) => void;
+  }>();
+  private pendingQuestions = new Map<string, {
+    request: CliQuestionRequest;
     resolve: (result: PermissionResult) => void;
     reject: (error: Error) => void;
   }>();
@@ -174,7 +188,12 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       pending.reject(new Error("Web control released to local CLI"));
     }
     this.pendingPermissions.clear();
+    for (const pending of this.pendingQuestions.values()) {
+      pending.reject(new Error("Web control released to local CLI"));
+    }
+    this.pendingQuestions.clear();
     this.pushEvent("permission-resolved", { id: "all", approved: false });
+    this.pushEvent("question.rejected", { id: "all" });
     this.remoteAbortController?.abort();
     try {
       await this.remoteQuery?.interrupt?.();
@@ -282,7 +301,68 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
           message: reason || "The user rejected this tool use from adit-cloud.",
           toolUseID: id,
         };
+    if (pending.request.toolName === EXIT_PLAN_MODE_TOOL) {
+      this.pushEvent("plan.approval.resolved", {
+        id,
+        requestID: id,
+        approved,
+        sessionId: this.activeSessionId ?? this.resumeSessionId,
+      });
+    }
     pending.resolve(result);
+  }
+
+  async answerQuestion(response: CliQuestionResponse): Promise<void> {
+    const pending = this.pendingQuestions.get(response.id);
+    if (!pending) {
+      const pendingPermission = this.pendingPermissions.get(response.id);
+      if (pendingPermission?.request.toolName === ASK_USER_QUESTION_TOOL) {
+        this.pendingPermissions.delete(response.id);
+        this.resolveAskUserQuestionPermission(response, pendingPermission.request, pendingPermission.resolve);
+        return;
+      }
+      throw Object.assign(new Error("question request not found"), {
+        statusCode: 404,
+      });
+    }
+    this.pendingQuestions.delete(response.id);
+
+    this.resolveAskUserQuestionPermission(response, pending.request, pending.resolve);
+  }
+
+  private resolveAskUserQuestionPermission(
+    response: CliQuestionResponse,
+    request: { id: string; input: unknown },
+    resolve: (result: PermissionResult) => void,
+  ): void {
+    if (response.rejected) {
+      this.pushEvent("question.rejected", {
+        id: response.id,
+        requestID: response.id,
+      });
+      resolve({
+        behavior: "deny",
+        message: "The user ignored this question from adit-cloud.",
+        toolUseID: response.id,
+      });
+      return;
+    }
+
+    const inputRecord = asRecord(request.input);
+    const questions = normalizeQuestionInput(inputRecord);
+    const answers = buildQuestionAnswerMap(questions, response.answers);
+    this.pushEvent("question.replied", {
+      id: response.id,
+      requestID: response.id,
+    });
+    resolve({
+      behavior: "allow",
+      updatedInput: {
+        ...inputRecord,
+        answers,
+      },
+      toolUseID: response.id,
+    });
   }
 
   async abort(): Promise<void> {
@@ -310,6 +390,10 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       pending.reject(new Error("Claude provider stopped"));
     }
     this.pendingPermissions.clear();
+    for (const pending of this.pendingQuestions.values()) {
+      pending.reject(new Error("Claude provider stopped"));
+    }
+    this.pendingQuestions.clear();
     this.detachReclaimInput();
     try {
       this.local?.kill("SIGTERM");
@@ -730,6 +814,13 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     id: string,
     signal: AbortSignal,
   ): Promise<PermissionResult> {
+    if (toolName === ASK_USER_QUESTION_TOOL) {
+      return this.handleUserQuestion(input, id, signal);
+    }
+    if (toolName === EXIT_PLAN_MODE_TOOL) {
+      return this.handlePlanApproval(input, id, signal);
+    }
+
     return new Promise<PermissionResult>((resolve, reject) => {
       const request: CliPermissionRequest = {
         id,
@@ -760,6 +851,126 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
         input,
         createdAt: request.createdAt,
         sessionId: this.activeSessionId ?? this.resumeSessionId,
+      });
+      this.emitState();
+    });
+  }
+
+  private handlePlanApproval(
+    input: unknown,
+    id: string,
+    signal: AbortSignal,
+  ): Promise<PermissionResult> {
+    return new Promise<PermissionResult>((resolve, reject) => {
+      const request: CliPermissionRequest = {
+        id,
+        toolName: EXIT_PLAN_MODE_TOOL,
+        input,
+        createdAt: Date.now(),
+      };
+      const abort = () => {
+        this.pendingPermissions.delete(id);
+        this.pushEvent("permission-resolved", { id, approved: false });
+        this.pushEvent("plan.approval.resolved", {
+          id,
+          requestID: id,
+          approved: false,
+          sessionId: this.activeSessionId ?? this.resumeSessionId,
+        });
+        reject(new Error("plan approval request aborted"));
+      };
+      signal.addEventListener("abort", abort, { once: true });
+      this.pendingPermissions.set(id, {
+        request,
+        resolve: (result) => {
+          signal.removeEventListener("abort", abort);
+          resolve(result);
+        },
+        reject: (error) => {
+          signal.removeEventListener("abort", abort);
+          reject(error);
+        },
+      });
+      const inputRecord = asRecord(input);
+      this.pushEvent("plan.approval.requested", {
+        id,
+        requestID: id,
+        sessionID: this.activeSessionId ?? this.resumeSessionId,
+        sessionId: this.activeSessionId ?? this.resumeSessionId,
+        input: inputRecord,
+        plan: readString(inputRecord.plan),
+        allowedPrompts: Array.isArray(inputRecord.allowedPrompts)
+          ? inputRecord.allowedPrompts
+          : undefined,
+        tool: {
+          messageID: this.lastAssistantMessageBySession.get(this.activeSessionId ?? this.resumeSessionId ?? "") ?? "",
+          callID: id,
+        },
+        createdAt: request.createdAt,
+      });
+      this.pushEvent("permission", {
+        id,
+        toolName: EXIT_PLAN_MODE_TOOL,
+        input,
+        createdAt: request.createdAt,
+        sessionId: this.activeSessionId ?? this.resumeSessionId,
+      });
+      this.emitState();
+    });
+  }
+
+  private handleUserQuestion(
+    input: unknown,
+    id: string,
+    signal: AbortSignal,
+  ): Promise<PermissionResult> {
+    const inputRecord = asRecord(input);
+    const questions = normalizeQuestionInput(inputRecord);
+    if (questions.length === 0) {
+      return Promise.resolve({
+        behavior: "deny",
+        message: "AskUserQuestion did not include any valid questions.",
+        toolUseID: id,
+      });
+    }
+
+    return new Promise<PermissionResult>((resolve, reject) => {
+      const request: CliQuestionRequest = {
+        id,
+        input: inputRecord,
+        createdAt: Date.now(),
+      };
+      const abort = () => {
+        this.pendingQuestions.delete(id);
+        this.pushEvent("question.rejected", {
+          id,
+          requestID: id,
+          sessionId: this.activeSessionId ?? this.resumeSessionId,
+        });
+        reject(new Error("question request aborted"));
+      };
+      signal.addEventListener("abort", abort, { once: true });
+      this.pendingQuestions.set(id, {
+        request,
+        resolve: (result) => {
+          signal.removeEventListener("abort", abort);
+          resolve(result);
+        },
+        reject: (error) => {
+          signal.removeEventListener("abort", abort);
+          reject(error);
+        },
+      });
+      this.pushEvent("question.asked", {
+        id,
+        sessionID: this.activeSessionId ?? this.resumeSessionId,
+        sessionId: this.activeSessionId ?? this.resumeSessionId,
+        questions,
+        tool: {
+          messageID: this.lastAssistantMessageBySession.get(this.activeSessionId ?? this.resumeSessionId ?? "") ?? "",
+          callID: id,
+        },
+        createdAt: request.createdAt,
       });
       this.emitState();
     });
@@ -993,6 +1204,59 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
+}
+
+function normalizeQuestionInput(input: Record<string, unknown>): Array<{
+  question: string;
+  header: string;
+  options: Array<{ label: string; description: string }>;
+  multiple?: boolean;
+}> {
+  const rawQuestions = Array.isArray(input.questions) ? input.questions : [];
+  const questions: Array<{
+    question: string;
+    header: string;
+    options: Array<{ label: string; description: string }>;
+    multiple?: boolean;
+  }> = [];
+
+  for (const rawQuestion of rawQuestions) {
+    const questionRecord = asRecord(rawQuestion);
+    const question = readString(questionRecord.question);
+    if (!question) continue;
+    const options = (Array.isArray(questionRecord.options) ? questionRecord.options : [])
+      .map((rawOption) => {
+        const optionRecord = asRecord(rawOption);
+        const label = readString(optionRecord.label);
+        if (!label) return null;
+        return {
+          label,
+          description: readString(optionRecord.description) ?? "",
+        };
+      })
+      .filter((option): option is { label: string; description: string } => Boolean(option));
+    if (options.length === 0) continue;
+    questions.push({
+      question,
+      header: readString(questionRecord.header) ?? "Question",
+      options,
+      multiple: questionRecord.multiSelect === true,
+    });
+  }
+
+  return questions;
+}
+
+function buildQuestionAnswerMap(
+  questions: Array<{ question: string }>,
+  answers: string[][],
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  questions.forEach((question, index) => {
+    const answer = answers[index] ?? [];
+    result[question.question] = answer.filter(Boolean).join(", ");
+  });
+  return result;
 }
 
 function formatToolResult(content: unknown): string {

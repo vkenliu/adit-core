@@ -69,6 +69,7 @@ export class CliAgentRelayClient {
           command.type !== "prompt" &&
           command.type !== "abort" &&
           command.type !== "permission" &&
+          command.type !== "question" &&
           command.type !== "takeover" &&
           command.type !== "switch-session"
         ) {

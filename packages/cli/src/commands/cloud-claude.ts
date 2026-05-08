@@ -39,6 +39,15 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+function readStringMatrix(value: unknown): string[][] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) =>
+    Array.isArray(item)
+      ? item.filter((answer): answer is string => typeof answer === "string")
+      : [],
+  );
+}
+
 function readHookModel(body: Record<string, unknown>): string | null {
   const env = body.env && typeof body.env === "object" && !Array.isArray(body.env)
     ? body.env as Record<string, unknown>
@@ -126,6 +135,17 @@ async function processCommand(
       response !== "reject",
       response === "reject" ? "Rejected from adit-cloud." : undefined,
     );
+    return;
+  }
+
+  if (command.type === "question") {
+    const id = readString(command.payload.id);
+    if (!id) return;
+    await provider.answerQuestion({
+      id,
+      answers: readStringMatrix(command.payload.answers),
+      rejected: command.payload.rejected === true,
+    });
   }
 }
 

@@ -19,6 +19,12 @@ export interface CliPermissionRequest {
   createdAt: number;
 }
 
+export interface CliQuestionResponse {
+  id: string;
+  answers: string[][];
+  rejected?: boolean;
+}
+
 export interface CliAgentProvider {
   readonly provider: CliAgentProviderName;
   readonly state: CliAgentState;
@@ -32,6 +38,7 @@ export interface CliAgentProvider {
     approved: boolean,
     reason?: string,
   ): Promise<void>;
+  answerQuestion(response: CliQuestionResponse): Promise<void>;
   abort(): Promise<void>;
   stop(): void;
 }
@@ -43,7 +50,7 @@ export interface CliAgentRelayEvent {
 
 export interface RelayCommand {
   id: string;
-  type: "prompt" | "abort" | "permission" | "takeover" | "switch-session";
+  type: "prompt" | "abort" | "permission" | "question" | "takeover" | "switch-session";
   payload: Record<string, unknown>;
   createdAt: number;
 }
