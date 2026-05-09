@@ -1,8 +1,13 @@
 import WebSocket from "ws";
-import type { CliAgentConnectionState, CliAgentRelayEvent, RelayCommand } from "./types.js";
+import type {
+  CliAgentConnectionState,
+  CliAgentProviderName,
+  CliAgentRelayEvent,
+  RelayCommand,
+} from "./types.js";
 
 export interface CliAgentRegisterPayload {
-  provider: "claude-code";
+  provider: CliAgentProviderName;
   terminalId: string;
   projectRoot: string;
   projectId: string;

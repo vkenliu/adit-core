@@ -41,6 +41,7 @@ import {
     cloudAuthTokenCommand,
 } from "./commands/cloud.js";
 import { cloudClaudeCommand } from "./commands/cloud-claude.js";
+import { cloudCodexCommand } from "./commands/cloud-codex.js";
 import { dbClearEventsCommand } from "./commands/db.js";
 import {
     transcriptEnableCommand,
@@ -276,6 +277,13 @@ cloudCmd
     .option("--bin <name>", "Claude CLI binary", "claude")
     .option("--arg <a...>", "Extra args passed to Claude Code", [] as string[])
     .action((opts) => cloudClaudeCommand({ bin: opts.bin, arg: opts.arg }));
+
+cloudCmd
+    .command("codex")
+    .description("Connect local Codex CLI to adit-cloud Coding")
+    .option("--bin <name>", "Codex CLI binary", "codex")
+    .option("--arg <a...>", "Extra args passed to Codex CLI", [] as string[])
+    .action((opts) => cloudCodexCommand({ bin: opts.bin, arg: opts.arg }));
 
 // Transcript upload management (under cloud)
 const transcriptCmd = cloudCmd
