@@ -15,7 +15,7 @@ import { ClaudeCodeProvider } from "./cli-agent/claude-code-provider.js";
 import { ClaudeTranscriptSync } from "./cli-agent/claude-transcript-sync.js";
 import { installClaudeHooks, type InstalledHooks } from "./cli-agent/hooks-bootstrap.js";
 import { startClaudeHookServer, type HookServer } from "./cli-agent/hook-server.js";
-import { CliAgentRelayClient } from "./cli-agent/relay-client.js";
+import { CliAgentRelayClient, type CliAgentRelayWebSocket } from "./cli-agent/relay-client.js";
 import type { CliAgentRelayEvent, RelayCommand } from "./cli-agent/types.js";
 
 interface CloudClaudeOptions {
@@ -149,6 +149,49 @@ async function processCommand(
   }
 }
 
+function enqueueCommand(input: {
+  queue: RelayCommand[];
+  seen: Set<string>;
+  command: RelayCommand;
+}): void {
+  if (input.seen.has(input.command.id)) return;
+  input.seen.add(input.command.id);
+  input.queue.push(input.command);
+  if (input.seen.size > 500) {
+    const keep = new Set(input.queue.map((command) => command.id));
+    for (const id of input.seen) {
+      if (!keep.has(id) && input.seen.size > 250) input.seen.delete(id);
+    }
+  }
+}
+
+async function drainCommandQueue(input: {
+  provider: ClaudeCodeProvider;
+  commands: RelayCommand[];
+  eventQueue: CliAgentRelayEvent[];
+  ws: CliAgentRelayWebSocket | null;
+}): Promise<void> {
+  while (input.commands.length > 0) {
+    const command = input.commands.shift();
+    if (!command) return;
+    try {
+      await processCommand(input.provider, command);
+      input.ws?.ack(command.id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      input.ws?.commandError(command.id, message);
+      input.eventQueue.push({
+        type: "error",
+        payload: {
+          message,
+          commandId: command.id,
+          createdAt: Date.now(),
+        },
+      });
+    }
+  }
+}
+
 export async function cloudClaudeCommand(opts?: CloudClaudeOptions): Promise<void> {
   const gitRoot = findGitRoot(process.cwd());
   if (!gitRoot) {
@@ -190,8 +233,13 @@ export async function cloudClaudeCommand(opts?: CloudClaudeOptions): Promise<voi
   let hookServer: HookServer | null = null;
   let installedHooks: InstalledHooks | null = null;
   let provider: ClaudeCodeProvider | null = null;
+  let relayWs: CliAgentRelayWebSocket | null = null;
   const eventQueue: CliAgentRelayEvent[] = [];
+  const commandQueue: RelayCommand[] = [];
+  const seenCommandIds = new Set<string>();
   const transcriptSync = new ClaudeTranscriptSync();
+
+  const getRelayWs = (): CliAgentRelayWebSocket | null => relayWs;
 
   try {
     hookServer = await startClaudeHookServer();
@@ -216,6 +264,31 @@ export async function cloudClaudeCommand(opts?: CloudClaudeOptions): Promise<voi
       panelName: `Claude - ${basename(config.projectRoot)}`,
     });
     const connectionId = registered.connection.id;
+    let lastWsErrorAt = 0;
+    let lastWsReconnectAt = 0;
+    const connectRelayWebSocket = () => {
+      if (relayWs?.status === "open" || relayWs?.status === "connecting") return;
+      const now = Date.now();
+      if (now - lastWsReconnectAt < 5_000) return;
+      lastWsReconnectAt = now;
+      relayWs = relay.connectWebSocket({
+        serverUrl,
+        accessToken: client.getCredentials().accessToken,
+        connectionId,
+        onCommand: (command) => enqueueCommand({
+          queue: commandQueue,
+          seen: seenCommandIds,
+          command,
+        }),
+        onError: (error) => {
+          const errorNow = Date.now();
+          if (errorNow - lastWsErrorAt > 10_000) {
+            lastWsErrorAt = errorNow;
+            printCloudError("[adit cloud claude] websocket relay", error);
+          }
+        },
+      });
+    };
 
     provider = new ClaudeCodeProvider({
       bin: claudeBin,
@@ -274,6 +347,7 @@ export async function cloudClaudeCommand(opts?: CloudClaudeOptions): Promise<voi
     console.log(`Panel: ${registered.panel.name} (${registered.panel.id})`);
     console.log("Local Claude Code owns the session until the Coding page takes over.");
     console.log("When Web owns the session, type /local in this terminal to reclaim it.");
+    connectRelayWebSocket();
 
     let stopping = false;
     let lastCloudErrorAt = 0;
@@ -282,6 +356,16 @@ export async function cloudClaudeCommand(opts?: CloudClaudeOptions): Promise<voi
       stopping = true;
       console.log(`\n[adit cloud claude] received ${signal}, shutting down...`);
       provider?.stop();
+      getRelayWs()?.sendHeartbeat({
+        owner: provider?.state.owner ?? "stopped",
+        busy: false,
+        thinking: false,
+        activeSessionId: provider?.state.activeSessionId ?? null,
+        resumeSessionId: provider?.state.resumeSessionId ?? null,
+        sdkSessionId: provider?.state.sdkSessionId ?? null,
+        activeModelId: provider?.state.activeModelId ?? null,
+      }, "offline");
+      getRelayWs()?.close();
       try {
         await relay.heartbeat({
           connectionId,
@@ -315,37 +399,66 @@ export async function cloudClaudeCommand(opts?: CloudClaudeOptions): Promise<voi
 
     while (!stopping) {
       try {
-        await relay.heartbeat({
-          connectionId,
-          status: "online",
-          owner: provider.state.owner,
-          busy: provider.state.busy,
-          thinking: provider.state.thinking,
-          activeSessionId: provider.state.activeSessionId,
-          resumeSessionId: provider.state.resumeSessionId,
-          sdkSessionId: provider.state.sdkSessionId,
-          activeModelId: provider.state.activeModelId,
-        });
+        connectRelayWebSocket();
+        const state = provider.state;
+        const currentWs = getRelayWs();
+        const wsOnline = currentWs?.isOpen === true;
 
-        await pushQueuedEvents({ relay, connectionId, queue: eventQueue });
+        if (wsOnline && currentWs) {
+          const sentHeartbeat = currentWs.sendHeartbeat(state);
+          if (!sentHeartbeat) {
+            currentWs.close();
+          }
+          if (eventQueue.length > 0) {
+            const batch = eventQueue.splice(0, 50);
+            const sent = currentWs.sendEvents(batch);
+            if (!sent) {
+              eventQueue.unshift(...batch);
+              currentWs.close();
+            }
+          }
+        } else {
+          await relay.heartbeat({
+            connectionId,
+            status: "online",
+            owner: state.owner,
+            busy: state.busy,
+            thinking: state.thinking,
+            activeSessionId: state.activeSessionId,
+            resumeSessionId: state.resumeSessionId,
+            sdkSessionId: state.sdkSessionId,
+            activeModelId: state.activeModelId,
+          });
 
-        const commands = await relay.fetchCommands(connectionId);
-        for (const command of commands) {
-          try {
-            await processCommand(provider, command);
-          } catch (error) {
-            eventQueue.push({
-              type: "error",
-              payload: {
-                message: error instanceof Error ? error.message : String(error),
-                commandId: command.id,
-                createdAt: Date.now(),
-              },
+          await pushQueuedEvents({ relay, connectionId, queue: eventQueue });
+
+          const commands = await relay.fetchCommands(connectionId);
+          for (const command of commands) {
+            enqueueCommand({
+              queue: commandQueue,
+              seen: seenCommandIds,
+              command,
             });
           }
         }
 
-        await pushQueuedEvents({ relay, connectionId, queue: eventQueue });
+        const commandWs = getRelayWs();
+        await drainCommandQueue({
+          provider,
+          commands: commandQueue,
+          eventQueue,
+          ws: commandWs?.isOpen ? commandWs : null,
+        });
+        const flushWs = getRelayWs();
+        if (flushWs?.isOpen) {
+          if (eventQueue.length > 0) {
+            const batch = eventQueue.splice(0, 50);
+            const sent = flushWs.sendEvents(batch);
+            if (!sent) eventQueue.unshift(...batch);
+          }
+        } else {
+          await pushQueuedEvents({ relay, connectionId, queue: eventQueue });
+        }
       } catch (error) {
         const now = Date.now();
         if (now - lastCloudErrorAt > 10_000) {

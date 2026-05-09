@@ -54,3 +54,13 @@ export interface RelayCommand {
   payload: Record<string, unknown>;
   createdAt: number;
 }
+
+export interface CliAgentConnectionState {
+  owner: string;
+  busy: boolean;
+  thinking: boolean;
+  activeSessionId: string | null;
+  resumeSessionId: string | null;
+  sdkSessionId: string | null;
+  activeModelId: string | null;
+}
