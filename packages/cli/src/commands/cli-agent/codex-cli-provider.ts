@@ -435,7 +435,6 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     const thread = asRecord(result?.thread);
     const resumedId = readString(thread?.id) ?? threadId;
     this.noteThread({ ...(thread ?? {}), id: resumedId }, result);
-    this.emitThreadTurns(thread);
   }
 
   private handleAppNotification(message: CodexJsonRpcMessage): void {
@@ -624,18 +623,6 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     const modelId = readString(result?.model);
     if (modelId) this.activeModelId = modelId;
     this.emitState();
-  }
-
-  private emitThreadTurns(thread: Record<string, unknown> | null): void {
-    const turns = Array.isArray(thread?.turns) ? thread.turns : [];
-    const threadId = readString(thread?.id);
-    for (const turn of turns) {
-      const record = asRecord(turn);
-      const items = Array.isArray(record?.items) ? record.items : [];
-      for (const item of items) {
-        this.emitThreadItem(asRecord(item), { threadId, running: false });
-      }
-    }
   }
 
   private emitThreadItem(

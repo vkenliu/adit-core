@@ -369,6 +369,7 @@ interface SeenAssistantMessage {
 export class CodexRelayEventDeduper {
   private readonly turnBySession = new Map<string, number>();
   private readonly assistantByTurnText = new Map<string, SeenAssistantMessage>();
+  private readonly assistantBySessionText = new Map<string, SeenAssistantMessage>();
   private readonly messageAlias = new Map<string, string>();
   private readonly seenAssistantMessageIds = new Set<string>();
   private readonly seenUsageKeys = new Set<string>();
@@ -418,7 +419,9 @@ export class CodexRelayEventDeduper {
 
     const turn = this.turnBySession.get(sessionId) ?? 0;
     const turnTextKey = `${sessionId}:${turn}:${textKey}`;
-    const existing = this.assistantByTurnText.get(turnTextKey);
+    const sessionTextKey = `${sessionId}:${textKey}`;
+    const existing = this.assistantByTurnText.get(turnTextKey) ??
+      (isCodexHistoryItemId(messageId) ? this.assistantBySessionText.get(sessionTextKey) : undefined);
     if (existing) {
       if (messageId) {
         this.messageAlias.set(messageScopedKey(sessionId, messageId), existing.messageId);
@@ -429,6 +432,11 @@ export class CodexRelayEventDeduper {
 
     const canonicalMessageId = messageId ?? `codex-assistant-${hashText(`${sessionId}:${turn}:${textKey}`)}`;
     this.assistantByTurnText.set(turnTextKey, {
+      messageId: canonicalMessageId,
+      turn,
+      textKey,
+    });
+    this.assistantBySessionText.set(sessionTextKey, {
       messageId: canonicalMessageId,
       turn,
       textKey,
@@ -601,6 +609,10 @@ function normalizeRelayText(text: string): string {
 
 function messageScopedKey(sessionId: string, messageId: string): string {
   return `${sessionId}:${messageId}`;
+}
+
+function isCodexHistoryItemId(messageId: string | null | undefined): boolean {
+  return /^item-\d+$/i.test(messageId ?? "");
 }
 
 function transcriptKey(

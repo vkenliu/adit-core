@@ -216,6 +216,17 @@ describe("CodexRelayEventDeduper", () => {
         text: "Hi. What would you like to work on?",
       },
     })).toBeNull();
+
+    expect(deduper.filter({
+      type: "message",
+      payload: {
+        role: "assistant",
+        sessionId,
+        messageId: "item-4",
+        modelId: "gpt-5.5",
+        text: "Hi. What would you like to work on?",
+      },
+    })).toBeNull();
   });
 
   it("allows identical assistant text in a later user turn", () => {
