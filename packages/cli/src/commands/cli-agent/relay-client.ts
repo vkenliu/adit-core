@@ -1,37 +1,35 @@
-import type { CloudClient } from "@varveai/adit-cloud";
 import WebSocket from "ws";
 import type { CliAgentConnectionState, CliAgentRelayEvent, RelayCommand } from "./types.js";
 
-interface RegisterResponse {
-  connection: {
-    id: string;
-    panelId: string | null;
-  };
-  panel: {
-    id: string;
-    name: string;
-  };
+export interface CliAgentRegisterPayload {
+  provider: "claude-code";
+  terminalId: string;
+  projectRoot: string;
+  projectId: string;
+  projectName: string;
+  panelName?: string;
 }
 
-interface CommandsResponse {
-  commands?: Array<{
-    id: string;
-    type: string;
-    payload: unknown;
-    createdAt: number;
-  }>;
+export interface CliAgentRelayHello {
+  connectionId: string;
+  panelId: string | null;
+  panelName: string | null;
 }
 
 type RelayWsStatus = "connecting" | "open" | "closed";
 
-interface RelayWsClientOptions {
+export interface RelayWsClientOptions {
   serverUrl: string;
   accessToken: string;
-  connectionId: string;
+  register: CliAgentRegisterPayload;
+  onHello: (info: CliAgentRelayHello) => void;
   onCommand: (command: RelayCommand) => void;
+  onConnectionClosed?: () => void;
   onStatus?: (status: RelayWsStatus) => void;
   onError?: (error: Error) => void;
 }
+
+const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -84,6 +82,10 @@ function wsUrlFromServer(serverUrl: string): string {
 export class CliAgentRelayWebSocket {
   private socket: WebSocket | null = null;
   private statusValue: RelayWsStatus = "closed";
+  private reconnectAttempt = 0;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private intentionalClose = false;
+  private connectionId: string | null = null;
 
   constructor(private readonly opts: RelayWsClientOptions) {}
 
@@ -95,12 +97,21 @@ export class CliAgentRelayWebSocket {
     return this.socket?.readyState === WebSocket.OPEN;
   }
 
+  get currentConnectionId(): string | null {
+    return this.connectionId;
+  }
+
   connect(): void {
+    if (this.intentionalClose) return;
     if (
       this.socket &&
       (this.socket.readyState === WebSocket.CONNECTING || this.socket.readyState === WebSocket.OPEN)
     ) {
       return;
+    }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
     }
 
     this.setStatus("connecting");
@@ -115,7 +126,8 @@ export class CliAgentRelayWebSocket {
       this.setStatus("open");
       this.send({
         type: "hello",
-        connectionId: this.opts.connectionId,
+        accessToken: this.opts.accessToken,
+        register: this.opts.register,
       });
     });
 
@@ -129,13 +141,23 @@ export class CliAgentRelayWebSocket {
 
     socket.on("close", () => {
       if (this.socket === socket) this.socket = null;
+      const hadConnection = this.connectionId !== null;
+      this.connectionId = null;
       this.setStatus("closed");
+      if (hadConnection) this.opts.onConnectionClosed?.();
+      if (!this.intentionalClose) this.scheduleReconnect();
     });
   }
 
   close(): void {
+    this.intentionalClose = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     const socket = this.socket;
     this.socket = null;
+    this.connectionId = null;
     this.setStatus("closed");
     socket?.close();
   }
@@ -176,6 +198,16 @@ export class CliAgentRelayWebSocket {
     this.opts.onStatus?.(status);
   }
 
+  private scheduleReconnect(): void {
+    if (this.intentionalClose) return;
+    const delay = RECONNECT_DELAYS_MS[Math.min(this.reconnectAttempt, RECONNECT_DELAYS_MS.length - 1)];
+    this.reconnectAttempt += 1;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect();
+    }, delay);
+  }
+
   private handleMessage(raw: string): void {
     let parsed: unknown;
     try {
@@ -184,92 +216,34 @@ export class CliAgentRelayWebSocket {
       return;
     }
     const message = asRecord(parsed);
+
+    if (message.type === "hello.ok") {
+      const connection = asRecord(message.connection);
+      const panel = asRecord(message.panel);
+      const connectionId = typeof connection.id === "string" ? connection.id : null;
+      if (connectionId) {
+        this.connectionId = connectionId;
+        this.reconnectAttempt = 0;
+        this.opts.onHello({
+          connectionId,
+          panelId: typeof panel.id === "string" ? panel.id : null,
+          panelName: typeof panel.name === "string" ? panel.name : null,
+        });
+      }
+      return;
+    }
+
     if (message.type === "command") {
       const command = asCommand(message.command);
       if (command) this.opts.onCommand(command);
       return;
     }
+
     if (message.type === "commands" && Array.isArray(message.commands)) {
       for (const item of message.commands) {
         const command = asCommand(item);
         if (command) this.opts.onCommand(command);
       }
     }
-  }
-}
-
-export class CliAgentRelayClient {
-  constructor(private readonly client: CloudClient) {}
-
-  connectWebSocket(input: RelayWsClientOptions): CliAgentRelayWebSocket {
-    const ws = new CliAgentRelayWebSocket(input);
-    ws.connect();
-    return ws;
-  }
-
-  async register(input: {
-    provider: "claude-code";
-    terminalId: string;
-    projectRoot: string;
-    projectId: string;
-    projectName: string;
-    panelName?: string;
-  }): Promise<RegisterResponse> {
-    return this.client.post<RegisterResponse>(
-      "/api/coding/cli-connections/register",
-      input,
-    );
-  }
-
-  async heartbeat(input: {
-    connectionId: string;
-    status?: "online" | "offline";
-    owner: string;
-    busy: boolean;
-    thinking: boolean;
-    activeSessionId: string | null;
-    resumeSessionId: string | null;
-    sdkSessionId: string | null;
-    activeModelId: string | null;
-  }): Promise<void> {
-    await this.client.post("/api/coding/cli-connections/heartbeat", input);
-  }
-
-  async fetchCommands(connectionId: string): Promise<RelayCommand[]> {
-    const response = await this.client.get<CommandsResponse>(
-      `/api/coding/cli-connections/${encodeURIComponent(connectionId)}/commands`,
-    );
-
-    return (response.commands ?? [])
-      .map((command) => {
-        if (
-          command.type !== "prompt" &&
-          command.type !== "abort" &&
-          command.type !== "permission" &&
-          command.type !== "question" &&
-          command.type !== "takeover" &&
-          command.type !== "switch-session"
-        ) {
-          return null;
-        }
-        return {
-          id: command.id,
-          type: command.type,
-          payload: asRecord(command.payload),
-          createdAt: command.createdAt,
-        };
-      })
-      .filter((command): command is RelayCommand => Boolean(command));
-  }
-
-  async pushEvents(
-    connectionId: string,
-    events: CliAgentRelayEvent[],
-  ): Promise<void> {
-    if (events.length === 0) return;
-    await this.client.post(
-      `/api/coding/cli-connections/${encodeURIComponent(connectionId)}/events`,
-      { events },
-    );
   }
 }
