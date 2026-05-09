@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { CodexTranscriptSync } from "./codex-transcript-sync.js";
+import { CodexRelayEventDeduper, CodexTranscriptSync } from "./codex-transcript-sync.js";
 
 function tempDir(): string {
   const dir = join(tmpdir(), `adit-codex-transcript-${randomBytes(8).toString("hex")}`);
@@ -152,5 +152,86 @@ describe("CodexTranscriptSync", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("CodexRelayEventDeduper", () => {
+  it("drops replayed assistant messages in the same user turn and rewrites usage to the kept message", () => {
+    const deduper = new CodexRelayEventDeduper();
+    const sessionId = "019e0d89-8aec-70f1-b6da-9a2a5ba78a47";
+
+    expect(deduper.filter({
+      type: "message",
+      payload: { role: "user", sessionId, text: "hi" },
+    })).not.toBeNull();
+
+    const kept = deduper.filter({
+      type: "message",
+      payload: {
+        role: "assistant",
+        sessionId,
+        messageId: "codex-local-answer",
+        text: "Hi. What would you like to work on?",
+      },
+    });
+    expect(kept).not.toBeNull();
+
+    expect(deduper.filter({
+      type: "message",
+      payload: {
+        role: "assistant",
+        sessionId,
+        messageId: "item-2",
+        modelId: "gpt-5.5",
+        text: "Hi. What would you like to work on?",
+      },
+    })).toBeNull();
+
+    const usage = deduper.filter({
+      type: "usage",
+      payload: {
+        sessionId,
+        messageId: "item-2",
+        usage: { input_tokens: 10, output_tokens: 2 },
+      },
+    });
+
+    expect(usage?.payload).toMatchObject({
+      sessionId,
+      messageId: "codex-local-answer",
+      usage: { input_tokens: 10, output_tokens: 2 },
+    });
+
+    deduper.filter({
+      type: "message",
+      payload: { role: "user", sessionId, text: "hello" },
+    });
+    expect(deduper.filter({
+      type: "message",
+      payload: {
+        role: "assistant",
+        sessionId,
+        messageId: "item-2",
+        modelId: "gpt-5.5",
+        text: "Hi. What would you like to work on?",
+      },
+    })).toBeNull();
+  });
+
+  it("allows identical assistant text in a later user turn", () => {
+    const deduper = new CodexRelayEventDeduper();
+    const sessionId = "019e0d89-8aec-70f1-b6da-9a2a5ba78a47";
+
+    deduper.filter({ type: "message", payload: { role: "user", sessionId, text: "one" } });
+    expect(deduper.filter({
+      type: "message",
+      payload: { role: "assistant", sessionId, messageId: "msg-1", text: "OK" },
+    })).not.toBeNull();
+
+    deduper.filter({ type: "message", payload: { role: "user", sessionId, text: "two" } });
+    expect(deduper.filter({
+      type: "message",
+      payload: { role: "assistant", sessionId, messageId: "msg-2", text: "OK" },
+    })).not.toBeNull();
   });
 });

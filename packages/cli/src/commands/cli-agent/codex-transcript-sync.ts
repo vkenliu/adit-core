@@ -360,6 +360,117 @@ export class CodexTranscriptSync {
   }
 }
 
+interface SeenAssistantMessage {
+  messageId: string;
+  turn: number;
+  textKey: string;
+}
+
+export class CodexRelayEventDeduper {
+  private readonly turnBySession = new Map<string, number>();
+  private readonly assistantByTurnText = new Map<string, SeenAssistantMessage>();
+  private readonly messageAlias = new Map<string, string>();
+  private readonly seenAssistantMessageIds = new Set<string>();
+  private readonly seenUsageKeys = new Set<string>();
+
+  filter(event: CliAgentRelayEvent): CliAgentRelayEvent | null {
+    if (event.type === "message") {
+      return this.filterMessage(event);
+    }
+
+    if (event.type === "assistant-delta" || event.type === "reasoning" || event.type === "tool") {
+      return this.rewriteMessageScopedEvent(event);
+    }
+
+    if (event.type === "usage") {
+      return this.filterUsage(event);
+    }
+
+    return event;
+  }
+
+  private filterMessage(event: CliAgentRelayEvent): CliAgentRelayEvent | null {
+    const role = readString(event.payload.role);
+    const sessionId = readString(event.payload.sessionId);
+    if (!sessionId) return event;
+
+    if (role === "user") {
+      this.turnBySession.set(sessionId, (this.turnBySession.get(sessionId) ?? 0) + 1);
+      return event;
+    }
+
+    if (role !== "assistant") return event;
+
+    const text = readString(event.payload.text);
+    if (!text) return event;
+
+    const messageId = readString(event.payload.messageId) ?? readString(event.payload.id);
+    const textKey = normalizeRelayText(text);
+    if (!textKey) return event;
+
+    const scopedMessageId = messageId ? messageScopedKey(sessionId, messageId) : null;
+    if (
+      scopedMessageId &&
+      (this.seenAssistantMessageIds.has(scopedMessageId) || this.messageAlias.has(scopedMessageId))
+    ) {
+      return null;
+    }
+
+    const turn = this.turnBySession.get(sessionId) ?? 0;
+    const turnTextKey = `${sessionId}:${turn}:${textKey}`;
+    const existing = this.assistantByTurnText.get(turnTextKey);
+    if (existing) {
+      if (messageId) {
+        this.messageAlias.set(messageScopedKey(sessionId, messageId), existing.messageId);
+        this.seenAssistantMessageIds.add(messageScopedKey(sessionId, messageId));
+      }
+      return null;
+    }
+
+    const canonicalMessageId = messageId ?? `codex-assistant-${hashText(`${sessionId}:${turn}:${textKey}`)}`;
+    this.assistantByTurnText.set(turnTextKey, {
+      messageId: canonicalMessageId,
+      turn,
+      textKey,
+    });
+    if (scopedMessageId) {
+      this.seenAssistantMessageIds.add(scopedMessageId);
+    }
+    return event;
+  }
+
+  private rewriteMessageScopedEvent(event: CliAgentRelayEvent): CliAgentRelayEvent | null {
+    const sessionId = readString(event.payload.sessionId);
+    const messageId = readString(event.payload.messageId);
+    if (!sessionId || !messageId) return event;
+
+    const canonicalMessageId = this.messageAlias.get(messageScopedKey(sessionId, messageId));
+    if (!canonicalMessageId) return event;
+
+    return {
+      ...event,
+      payload: {
+        ...event.payload,
+        messageId: canonicalMessageId,
+      },
+    };
+  }
+
+  private filterUsage(event: CliAgentRelayEvent): CliAgentRelayEvent | null {
+    const rewritten = this.rewriteMessageScopedEvent(event);
+    if (!rewritten) return null;
+
+    const sessionId = readString(rewritten.payload.sessionId);
+    const messageId = readString(rewritten.payload.messageId);
+    if (!sessionId || !messageId) return rewritten;
+
+    const key = `${sessionId}:${messageId}:${safeJson(rewritten.payload.usage)}`;
+    if (this.seenUsageKeys.has(key)) return null;
+    this.seenUsageKeys.add(key);
+    return rewritten;
+  }
+}
+
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
@@ -482,6 +593,14 @@ function hashText(text: string): string {
     hash = ((hash << 5) - hash + text.charCodeAt(index)) | 0;
   }
   return String(hash);
+}
+
+function normalizeRelayText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function messageScopedKey(sessionId: string, messageId: string): string {
+  return `${sessionId}:${messageId}`;
 }
 
 function transcriptKey(

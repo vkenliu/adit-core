@@ -12,7 +12,7 @@ import {
   loadCredentials,
 } from "@varveai/adit-cloud";
 import { CodexCliProvider } from "./cli-agent/codex-cli-provider.js";
-import { CodexTranscriptSync } from "./cli-agent/codex-transcript-sync.js";
+import { CodexRelayEventDeduper, CodexTranscriptSync } from "./cli-agent/codex-transcript-sync.js";
 import { installCodexHooks, type InstalledHooks } from "./cli-agent/hooks-bootstrap.js";
 import { startClaudeHookServer, type HookServer } from "./cli-agent/hook-server.js";
 import { CliAgentRelayWebSocket } from "./cli-agent/relay-client.js";
@@ -162,7 +162,7 @@ function enqueueCommand(input: {
 async function drainCommandQueue(input: {
   provider: CodexCliProvider;
   commands: RelayCommand[];
-  eventQueue: CliAgentRelayEvent[];
+  enqueueEvent: (event: CliAgentRelayEvent) => void;
   ws: CliAgentRelayWebSocket | null;
 }): Promise<void> {
   while (input.commands.length > 0) {
@@ -174,7 +174,7 @@ async function drainCommandQueue(input: {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       input.ws?.commandError(command.id, message);
-      input.eventQueue.push({
+      input.enqueueEvent({
         type: "error",
         payload: {
           message,
@@ -238,6 +238,14 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
   const commandQueue: RelayCommand[] = [];
   const seenCommandIds = new Set<string>();
   const transcriptSync = new CodexTranscriptSync();
+  const eventDeduper = new CodexRelayEventDeduper();
+  const enqueueEvent = (event: CliAgentRelayEvent): void => {
+    const next = eventDeduper.filter(event);
+    if (next) eventQueue.push(next);
+  };
+  const enqueueEvents = (events: CliAgentRelayEvent[]): void => {
+    for (const event of events) enqueueEvent(event);
+  };
 
   try {
     hookServer = await startClaudeHookServer();
@@ -254,7 +262,7 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
         ...(opts?.arg ?? []),
       ]),
       cwd: config.projectRoot,
-      onEvent: (event) => eventQueue.push(event),
+      onEvent: enqueueEvent,
     });
 
     const ws = new CliAgentRelayWebSocket({
@@ -301,12 +309,10 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
       if (sessionId && isLocalOwner) provider?.noteLocalSession(sessionId);
       if (event.type === "UserPromptSubmit" && isLocalOwner) {
         provider?.markLocalBusy();
-        for (const transcriptEvent of transcriptSync.drainSession(sessionId)) {
-          eventQueue.push(transcriptEvent);
-        }
+        enqueueEvents(transcriptSync.drainSession(sessionId));
         const prompt = readString(body.prompt);
         if (sessionId && prompt) {
-          eventQueue.push({
+          enqueueEvent({
             type: "message",
             payload: {
               role: "user",
@@ -320,21 +326,21 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
       if (event.type === "PostToolUse" && isLocalOwner) {
         const transcriptEvents = transcriptSync.drainSession(sessionId);
         if (transcriptEvents.length > 0) {
-          eventQueue.push(...transcriptEvents);
+          enqueueEvents(transcriptEvents);
         } else {
-          eventQueue.push(...transcriptSync.toolEvents(sessionId, body));
+          enqueueEvents(transcriptSync.toolEvents(sessionId, body));
         }
       }
       if (event.type === "Stop") {
         if (isLocalOwner) {
           const transcriptEvents = transcriptSync.drainSession(sessionId);
           if (transcriptEvents.length > 0) {
-            eventQueue.push(...transcriptEvents);
+            enqueueEvents(transcriptEvents);
           } else {
-            eventQueue.push(...transcriptSync.stopEvents(sessionId, body));
+            enqueueEvents(transcriptSync.stopEvents(sessionId, body));
           }
           transcriptSync.scheduleDrain(sessionId, (transcriptEvent) => {
-            eventQueue.push(transcriptEvent);
+            enqueueEvent(transcriptEvent);
           });
           provider?.markLocalIdle();
         }
@@ -377,7 +383,7 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
             now - lastLocalTranscriptDrainAt > 1000
           ) {
             lastLocalTranscriptDrainAt = now;
-            eventQueue.push(...transcriptSync.drainSession(state.activeSessionId));
+            enqueueEvents(transcriptSync.drainSession(state.activeSessionId));
           }
           if (eventQueue.length > 0) {
             const batch = eventQueue.splice(0, 50);
@@ -387,7 +393,7 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
           await drainCommandQueue({
             provider,
             commands: commandQueue,
-            eventQueue,
+            enqueueEvent,
             ws,
           });
         } else {
