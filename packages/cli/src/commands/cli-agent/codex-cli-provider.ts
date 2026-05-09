@@ -44,6 +44,15 @@ interface CodexCliProviderOptions {
 }
 
 const RECLAIM_COMMAND = "/local";
+const TERMINAL_RECLAIM_RESET = [
+  "\x1b[?1004l", // Focus in/out reporting.
+  "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l", // Mouse modes.
+  "\x1b[?2004l", // Bracketed paste.
+  "\x1b[?1l", // Application cursor keys.
+  "\x1b[=0u\x1b[<u\x1b[<u\x1b[<u", // Kitty/CSI-u keyboard protocol.
+  "\x1b[>4;0m", // xterm modifyOtherKeys.
+  "\x1b[?25h", // Cursor visible.
+].join("");
 
 export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   readonly provider = "codex" as const;
@@ -143,6 +152,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
 
     this.ownerValue = "web";
     this.emitState();
+    restoreTerminalForCodexReclaim();
     process.stderr.write(
       `\n[adit cloud codex] Web has taken over Codex CLI. Type ${RECLAIM_COMMAND} here to reclaim local control.\n`,
     );
@@ -815,6 +825,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     this.reclaimAttached = true;
     this.reclaimBuffer = "";
     try {
+      restoreTerminalForCodexReclaim();
       process.stdin.setEncoding("utf8");
       process.stdin.resume();
       process.stdin.on("data", this.onReclaimInput);
@@ -838,11 +849,14 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
 
   private onReclaimInput = (chunk: string | Buffer) => {
     const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-    if (text === "\u0003") {
+    if (text.includes("\u0003")) {
       this.stop();
       return;
     }
-    this.reclaimBuffer += text;
+    this.reclaimBuffer = applyReclaimText(
+      this.reclaimBuffer,
+      normalizeCodexReclaimInput(text),
+    );
     if (this.reclaimBuffer.length > 200) {
       this.reclaimBuffer = this.reclaimBuffer.slice(-200);
     }
@@ -857,6 +871,52 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       );
     }
   };
+}
+
+function restoreTerminalForCodexReclaim(): void {
+  try {
+    if (process.stdin.isTTY && typeof process.stdin.setRawMode === "function") {
+      process.stdin.setRawMode(false);
+    }
+  } catch {}
+  try {
+    if (process.stderr.isTTY) {
+      process.stderr.write(TERMINAL_RECLAIM_RESET);
+    }
+  } catch {}
+}
+
+export function normalizeCodexReclaimInput(text: string): string {
+  return text
+    .replace(/\x1b\[(\d+)(?:;[0-9:]+)?u/g, (_match, rawCode: string) =>
+      decodeCsiUCode(Number(rawCode)),
+    )
+    .replace(/\x1b\[(?:I|O)/g, "")
+    .replace(/\x1b\[[?=>]?[0-9;:]*[A-Za-z~]/g, "");
+}
+
+function decodeCsiUCode(code: number): string {
+  if (code === 13) return "\n";
+  if (code === 9) return "\t";
+  if (code === 8 || code === 127) return "\b";
+  if (code < 32 || !Number.isFinite(code)) return "";
+  try {
+    return String.fromCodePoint(code);
+  } catch {
+    return "";
+  }
+}
+
+function applyReclaimText(buffer: string, text: string): string {
+  let next = buffer;
+  for (const char of text) {
+    if (char === "\b" || char === "\x7f") {
+      next = next.slice(0, -1);
+    } else {
+      next += char;
+    }
+  }
+  return next;
 }
 
 function readString(value: unknown): string | null {

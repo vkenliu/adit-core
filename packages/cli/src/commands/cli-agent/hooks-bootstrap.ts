@@ -1,5 +1,7 @@
 import fs from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 
 const EVENTS = [
   "SessionStart",
@@ -22,6 +24,7 @@ interface CodexHookEntry {
 
 export interface InstalledHooks {
   settingsPath: string;
+  launchArgs?: string[];
   cleanup: () => void;
 }
 
@@ -133,14 +136,27 @@ export function installCodexHooks(opts: {
   cwd: string;
   endpoint: string;
   marker: string;
+  codexHome?: string;
 }): InstalledHooks {
   const codexDir = path.join(opts.cwd, ".codex");
   const hooksPath = path.join(codexDir, "hooks.json");
+  const configPath = path.join(codexDir, "config.toml");
   const command = `curl -sS --fail --max-time 3 -X POST -H 'content-type: application/json' --data-binary @- '${opts.endpoint}?${opts.marker}' >/dev/null || true`;
+  const hookStates = buildCodexHookStates({
+    hooksPath,
+    command,
+  });
+  const userConfigCleanup = installCodexHookTrustConfig({
+    codexHome: opts.codexHome,
+    marker: opts.marker,
+    states: hookStates,
+  });
 
   const dirExisted = fs.existsSync(codexDir);
   const fileExisted = fs.existsSync(hooksPath);
   const originalContent = fileExisted ? readFile(hooksPath) : null;
+  const configFileExisted = fs.existsSync(configPath);
+  const originalConfigContent = configFileExisted ? readFile(configPath) : null;
   fs.mkdirSync(codexDir, { recursive: true });
 
   const existing = parseObject(originalContent) ?? {};
@@ -158,11 +174,11 @@ export function installCodexHooks(opts: {
     hooks: [{ type: "command", command, timeout: 30 }],
   }, opts.marker);
   setCodexHook(hooks, "PostToolUse", {
-    matcher: "Bash",
     hooks: [{ type: "command", command, timeout: 30 }],
   }, opts.marker);
 
   fs.writeFileSync(hooksPath, JSON.stringify(existing, null, 2) + "\n");
+  fs.writeFileSync(configPath, enableCodexHooksFeature(originalConfigContent ?? ""));
 
   return {
     settingsPath: hooksPath,
@@ -171,38 +187,45 @@ export function installCodexHooks(opts: {
         const current = parseObject(readFile(hooksPath));
         if (!current) {
           restoreCodexHooks({ hooksPath, codexDir, dirExisted, fileExisted, originalContent });
-          return;
-        }
-
-        const currentHooks = asObject(current.hooks);
-        if (currentHooks) {
-          for (const eventName of Object.keys(currentHooks)) {
-            if (!Array.isArray(currentHooks[eventName])) continue;
-            currentHooks[eventName] = (currentHooks[eventName] as unknown[]).filter(
-              (entry) => !codexEntryHasMarker(entry, opts.marker),
-            );
-            if ((currentHooks[eventName] as unknown[]).length === 0) {
-              delete currentHooks[eventName];
+        } else {
+          const currentHooks = asObject(current.hooks);
+          if (currentHooks) {
+            for (const eventName of Object.keys(currentHooks)) {
+              if (!Array.isArray(currentHooks[eventName])) continue;
+              currentHooks[eventName] = (currentHooks[eventName] as unknown[]).filter(
+                (entry) => !codexEntryHasMarker(entry, opts.marker),
+              );
+              if ((currentHooks[eventName] as unknown[]).length === 0) {
+                delete currentHooks[eventName];
+              }
             }
+            if (Object.keys(currentHooks).length === 0) delete current.hooks;
           }
-          if (Object.keys(currentHooks).length === 0) delete current.hooks;
-        }
 
-        if (Object.keys(current).length === 0 && !fileExisted) {
-          try {
-            fs.unlinkSync(hooksPath);
-          } catch {}
-          if (!dirExisted) {
+          if (Object.keys(current).length === 0 && !fileExisted) {
             try {
-              fs.rmdirSync(codexDir);
+              fs.unlinkSync(hooksPath);
             } catch {}
+            if (!dirExisted) {
+              try {
+                fs.rmdirSync(codexDir);
+              } catch {}
+            }
+          } else {
+            fs.writeFileSync(hooksPath, JSON.stringify(current, null, 2) + "\n");
           }
-          return;
         }
-
-        fs.writeFileSync(hooksPath, JSON.stringify(current, null, 2) + "\n");
       } catch {
         restoreCodexHooks({ hooksPath, codexDir, dirExisted, fileExisted, originalContent });
+      } finally {
+        userConfigCleanup();
+        restoreCodexConfig({
+          configPath,
+          codexDir,
+          dirExisted,
+          configFileExisted,
+          originalConfigContent,
+        });
       }
     },
   };
@@ -253,6 +276,235 @@ function parseObject(text: string | null): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+function enableTomlBooleanFeature(text: string, key: string): string {
+  const lines = text ? text.replace(/\s+$/u, "").split(/\r?\n/u) : [];
+  const featureHeaderIndex = lines.findIndex((line) => /^\s*\[features\]\s*$/u.test(line));
+  if (featureHeaderIndex < 0) {
+    if (lines.length > 0) lines.push("");
+    lines.push("[features]", `${key} = true`);
+    return `${lines.join("\n")}\n`;
+  }
+
+  let insertIndex = lines.length;
+  for (let index = featureHeaderIndex + 1; index < lines.length; index++) {
+    if (/^\s*\[[^\]]+\]\s*$/u.test(lines[index] ?? "")) {
+      insertIndex = index;
+      break;
+    }
+    if (new RegExp(`^\\s*${escapeRegExp(key)}\\s*=`, "u").test(lines[index] ?? "")) {
+      lines[index] = `${key} = true`;
+      return `${lines.join("\n")}\n`;
+    }
+  }
+
+  lines.splice(insertIndex, 0, `${key} = true`);
+  return `${lines.join("\n")}\n`;
+}
+
+function enableCodexHooksFeature(text: string): string {
+  const cleaned = text
+    .split(/\r?\n/u)
+    .filter((line) => !/^\s*codex_hooks\s*=/u.test(line))
+    .join("\n")
+    .replace(/\s+$/u, "");
+  return enableTomlBooleanFeature(cleaned, "hooks");
+}
+
+interface CodexHookState {
+  key: string;
+  trustedHash: string;
+}
+
+function buildCodexHookStates(input: {
+  hooksPath: string;
+  command: string;
+}): CodexHookState[] {
+  const hooksPath = path.resolve(input.hooksPath);
+  const definitions = [
+    { eventName: "PostToolUse", keyLabel: "post_tool_use" },
+    { eventName: "SessionStart", keyLabel: "session_start", matcher: "startup|resume" },
+    { eventName: "UserPromptSubmit", keyLabel: "user_prompt_submit" },
+    { eventName: "Stop", keyLabel: "stop" },
+  ];
+
+  return definitions.map((definition) => {
+    const key = `${hooksPath}:${definition.keyLabel}:0:0`;
+    const trustedHash = codexHookTrustedHash({
+      eventName: definition.keyLabel,
+      matcher: definition.matcher,
+      command: input.command,
+      timeout: 30,
+    });
+    return { key, trustedHash };
+  });
+}
+
+function installCodexHookTrustConfig(input: {
+  codexHome?: string;
+  marker: string;
+  states: CodexHookState[];
+}): () => void {
+  const codexHome = input.codexHome ?? process.env.CODEX_HOME ?? path.join(homedir(), ".codex");
+  const configPath = path.join(codexHome, "config.toml");
+  const dirExisted = fs.existsSync(codexHome);
+  const fileExisted = fs.existsSync(configPath);
+  const originalContent = fileExisted ? readFile(configPath) : null;
+
+  try {
+    fs.mkdirSync(codexHome, { recursive: true });
+    const current = readFile(configPath) ?? "";
+    fs.writeFileSync(
+      configPath,
+      appendCodexHookTrustBlock(current, input.marker, input.states),
+    );
+  } catch {
+    return () => {};
+  }
+
+  return () => {
+    try {
+      const current = readFile(configPath);
+      if (current === null) return;
+      const cleaned = stripAditCodexHookTrustBlocks(current, {
+        marker: input.marker,
+      }).replace(/\s+$/u, "");
+      if (!fileExisted && !cleaned) {
+        try {
+          fs.unlinkSync(configPath);
+        } catch {}
+        if (!dirExisted) {
+          try {
+            fs.rmdirSync(codexHome);
+          } catch {}
+        }
+        return;
+      }
+      fs.writeFileSync(configPath, `${cleaned}\n`);
+    } catch {
+      if (fileExisted && originalContent !== null) {
+        try {
+          fs.writeFileSync(configPath, originalContent);
+        } catch {}
+      }
+    }
+  };
+}
+
+function appendCodexHookTrustBlock(
+  text: string,
+  marker: string,
+  states: CodexHookState[],
+): string {
+  const cleaned = stripAditCodexHookTrustBlocks(text, {
+    marker,
+    keys: states.map((state) => state.key),
+  }).replace(/\s+$/u, "");
+  const block = [
+    `# >>> adit-cloud-codex ${marker}`,
+    ...states.flatMap((state) => [
+      `[hooks.state.${JSON.stringify(state.key)}]`,
+      "enabled = true",
+      `trusted_hash = ${JSON.stringify(state.trustedHash)}`,
+      "",
+    ]),
+    `# <<< adit-cloud-codex ${marker}`,
+  ].join("\n").replace(/\n+$/u, "");
+  return `${cleaned ? `${cleaned}\n\n` : ""}${block}\n`;
+}
+
+function stripAditCodexHookTrustBlocks(
+  text: string,
+  opts?: { marker?: string; keys?: string[] },
+): string {
+  const lines = text.split(/\r?\n/u);
+  const kept: string[] = [];
+  const keys = opts?.keys ?? [];
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index] ?? "";
+    if (!/^\s*# >>> adit-cloud-codex\b/u.test(line)) {
+      kept.push(line);
+      continue;
+    }
+
+    const block = [line];
+    while (index + 1 < lines.length) {
+      index++;
+      const blockLine = lines[index] ?? "";
+      block.push(blockLine);
+      if (/^\s*# <<< adit-cloud-codex\b/u.test(blockLine)) break;
+    }
+
+    const blockText = block.join("\n");
+    const matchesMarker = opts?.marker ? block[0]?.includes(opts.marker) : false;
+    const matchesKey = keys.some((key) => blockText.includes(JSON.stringify(key)));
+    const stripBlock = matchesMarker || matchesKey || (!opts?.marker && keys.length === 0);
+    if (stripBlock) {
+      continue;
+    }
+    kept.push(...block);
+  }
+  return kept.join("\n");
+}
+
+function codexHookTrustedHash(input: {
+  eventName: string;
+  matcher?: string;
+  command: string;
+  timeout: number;
+}): string {
+  const identity: Record<string, unknown> = {
+    event_name: input.eventName,
+    hooks: [{
+      async: false,
+      command: input.command,
+      timeout: input.timeout,
+      type: "command",
+    }],
+  };
+  if (input.matcher) identity.matcher = input.matcher;
+  const canonical = JSON.stringify(canonicalJson(identity));
+  return `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
+}
+
+function canonicalJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (!value || typeof value !== "object") return value;
+  const record = value as Record<string, unknown>;
+  return Object.fromEntries(
+    Object.keys(record)
+      .sort()
+      .map((key) => [key, canonicalJson(record[key])]),
+  );
+}
+
+function restoreCodexConfig(opts: {
+  configPath: string;
+  codexDir: string;
+  dirExisted: boolean;
+  configFileExisted: boolean;
+  originalConfigContent: string | null;
+}): void {
+  if (opts.configFileExisted && opts.originalConfigContent !== null) {
+    try {
+      fs.writeFileSync(opts.configPath, opts.originalConfigContent);
+    } catch {}
+    return;
+  }
+
+  try {
+    fs.unlinkSync(opts.configPath);
+  } catch {}
+  if (!opts.dirExisted) {
+    try {
+      fs.rmdirSync(opts.codexDir);
+    } catch {}
+  }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 function asObject(value: unknown): Record<string, unknown> | null {

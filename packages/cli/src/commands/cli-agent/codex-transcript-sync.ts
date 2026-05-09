@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { CliAgentRelayEvent } from "./types.js";
 
 interface NoteHookInput {
@@ -8,8 +9,14 @@ interface NoteHookInput {
 
 interface CodexSessionState {
   id: string;
+  startedAt: number;
+  transcriptPath?: string;
+  transcriptOffset: number;
+  pendingTranscriptLine: string;
+  seenKeys: Set<string>;
+  lastAssistantMessageId?: string;
   seenAssistantStops: Set<string>;
-  seenToolResults: Set<string>;
+  seenHookToolResults: Set<string>;
 }
 
 const MAX_TEXT_LENGTH = 12_000;
@@ -20,8 +27,46 @@ export class CodexTranscriptSync {
   noteHook(input: NoteHookInput): string | null {
     const sessionId = input.sessionId ?? readSessionId(input.body);
     if (!sessionId) return null;
-    this.ensureSession(sessionId);
+
+    const session = this.ensureSession(sessionId);
+    const transcriptPath = readString(input.body.transcript_path);
+    const isNewTranscript = Boolean(transcriptPath && transcriptPath !== session.transcriptPath);
+    if (transcriptPath) {
+      session.transcriptPath = transcriptPath;
+      if (isNewTranscript) {
+        session.transcriptOffset = 0;
+        session.pendingTranscriptLine = "";
+      }
+    }
+
+    if (input.eventType === "SessionStart") {
+      session.startedAt = Date.now();
+      this.primeTranscript(session);
+    }
+
     return sessionId;
+  }
+
+  drainSession(sessionId: string | null | undefined): CliAgentRelayEvent[] {
+    if (!sessionId) return [];
+    const session = this.sessions.get(sessionId);
+    if (!session) return [];
+    return this.drainTranscript(session);
+  }
+
+  scheduleDrain(
+    sessionId: string | null | undefined,
+    pushEvent: (event: CliAgentRelayEvent) => void,
+  ): void {
+    if (!sessionId) return;
+    const drain = () => {
+      for (const event of this.drainSession(sessionId)) {
+        pushEvent(event);
+      }
+    };
+    drain();
+    setTimeout(drain, 250);
+    setTimeout(drain, 1000);
   }
 
   stopEvents(sessionId: string | null | undefined, body: Record<string, unknown>): CliAgentRelayEvent[] {
@@ -53,14 +98,14 @@ export class CodexTranscriptSync {
     const toolResponse = body.tool_response;
     const key = `${toolName}:${safeJson(toolInput)}:${safeJson(toolResponse)}`;
     const session = this.ensureSession(sessionId);
-    if (session.seenToolResults.has(key)) return [];
-    session.seenToolResults.add(key);
+    if (session.seenHookToolResults.has(key)) return [];
+    session.seenHookToolResults.add(key);
     const createdAt = Date.now();
     return [{
       type: "tool",
       payload: {
         sessionId,
-        messageId: `codex-local-tools-${sessionId}`,
+        messageId: session.lastAssistantMessageId ?? `codex-local-tools-${sessionId}`,
         toolUseId: `codex-local-tool-${hashText(key)}`,
         toolName,
         input: toolInput,
@@ -76,12 +121,242 @@ export class CodexTranscriptSync {
     if (!session) {
       session = {
         id,
+        startedAt: Date.now(),
+        transcriptOffset: 0,
+        pendingTranscriptLine: "",
+        seenKeys: new Set<string>(),
         seenAssistantStops: new Set<string>(),
-        seenToolResults: new Set<string>(),
+        seenHookToolResults: new Set<string>(),
       };
       this.sessions.set(id, session);
     }
     return session;
+  }
+
+  private primeTranscript(session: CodexSessionState): void {
+    if (!session.transcriptPath) return;
+    try {
+      session.transcriptOffset = fs.statSync(session.transcriptPath).size;
+      session.pendingTranscriptLine = "";
+    } catch {
+      session.transcriptOffset = 0;
+      session.pendingTranscriptLine = "";
+    }
+  }
+
+  private drainTranscript(session: CodexSessionState): CliAgentRelayEvent[] {
+    if (!session.transcriptPath) return [];
+
+    const text = this.readTranscriptChunk(session);
+    if (!text && !session.pendingTranscriptLine) {
+      return [];
+    }
+
+    const events: CliAgentRelayEvent[] = [];
+    const rawLines = `${session.pendingTranscriptLine}${text}`.split("\n");
+    session.pendingTranscriptLine = "";
+
+    if (rawLines.length > 0 && !text.endsWith("\n")) {
+      const lastLine = rawLines.pop() ?? "";
+      if (lastLine.trim()) {
+        try {
+          JSON.parse(lastLine);
+          rawLines.push(lastLine);
+        } catch {
+          session.pendingTranscriptLine = lastLine;
+        }
+      }
+    }
+
+    for (const line of rawLines) {
+      if (!line.trim()) continue;
+
+      let obj: Record<string, unknown>;
+      try {
+        const parsed = JSON.parse(line) as unknown;
+        if (!isRecord(parsed)) continue;
+        obj = parsed;
+      } catch {
+        continue;
+      }
+
+      const lineTimestamp = parseTimestamp(obj.timestamp);
+      events.push(...this.transcriptObjectToEvents(session, obj, lineTimestamp));
+    }
+
+    return events;
+  }
+
+  private readTranscriptChunk(session: CodexSessionState): string {
+    if (!session.transcriptPath) return "";
+
+    let fd: number | null = null;
+    try {
+      const stat = fs.statSync(session.transcriptPath);
+      if (stat.size < session.transcriptOffset) {
+        session.transcriptOffset = 0;
+        session.pendingTranscriptLine = "";
+      }
+      const byteLength = stat.size - session.transcriptOffset;
+      if (byteLength <= 0) return "";
+
+      const buffer = Buffer.alloc(byteLength);
+      fd = fs.openSync(session.transcriptPath, "r");
+      fs.readSync(fd, buffer, 0, byteLength, session.transcriptOffset);
+      session.transcriptOffset = stat.size;
+      return buffer.toString("utf8");
+    } catch {
+      return "";
+    } finally {
+      if (fd !== null) {
+        try {
+          fs.closeSync(fd);
+        } catch {}
+      }
+    }
+  }
+
+  private transcriptObjectToEvents(
+    session: CodexSessionState,
+    obj: Record<string, unknown>,
+    timestamp: number,
+  ): CliAgentRelayEvent[] {
+    if (readString(obj.type) !== "response_item") return [];
+    const payload = asRecord(obj.payload);
+    if (!payload) return [];
+
+    const payloadType = readString(payload.type);
+    const events: CliAgentRelayEvent[] = [];
+
+    if (payloadType === "message") {
+      const role = readString(payload.role);
+      if (role !== "assistant") return [];
+      const text = readContentText(payload.content);
+      if (!text) return [];
+      const messageId = makeMessageId(session.id, obj, payload, "message", text);
+      session.lastAssistantMessageId = messageId;
+      this.pushIfNew(
+        session,
+        obj,
+        "assistant-message",
+        0,
+        `${messageId}:${text}`,
+        events,
+        {
+          type: "message",
+          payload: {
+            role: "assistant",
+            sessionId: session.id,
+            messageId,
+            modelId: readString(payload.model) ?? undefined,
+            text: truncateText(text),
+            createdAt: timestamp,
+          },
+        },
+      );
+      return events;
+    }
+
+    if (payloadType === "reasoning") {
+      const text = readReasoningText(payload);
+      if (!text) return [];
+      const messageId = session.lastAssistantMessageId ??
+        makeMessageId(session.id, obj, payload, "reasoning", text);
+      this.pushIfNew(
+        session,
+        obj,
+        "reasoning",
+        0,
+        `${messageId}:${text}`,
+        events,
+        {
+          type: "reasoning",
+          payload: {
+            sessionId: session.id,
+            messageId,
+            text: truncateText(text),
+            createdAt: timestamp,
+          },
+        },
+      );
+      return events;
+    }
+
+    if (payloadType === "function_call" || payloadType === "custom_tool_call") {
+      const toolUseId = readString(payload.call_id) ??
+        makeToolUseId(session.id, obj, payload);
+      const toolName = readString(payload.name) ?? "tool";
+      const input = parseToolInput(payload.arguments ?? payload.input);
+      this.pushIfNew(
+        session,
+        obj,
+        "tool-call",
+        0,
+        `${toolUseId}:${toolName}:${safeJson(input)}`,
+        events,
+        {
+          type: "tool",
+          payload: {
+            sessionId: session.id,
+            messageId: session.lastAssistantMessageId ?? `codex-local-tools-${session.id}`,
+            toolUseId,
+            toolName,
+            input,
+            status: "running",
+            createdAt: timestamp,
+          },
+        },
+      );
+      return events;
+    }
+
+    if (
+      payloadType === "function_call_output" ||
+      payloadType === "custom_tool_call_output"
+    ) {
+      const toolUseId = readString(payload.call_id) ??
+        makeToolUseId(session.id, obj, payload);
+      const output = formatToolOutput(payload.output);
+      this.pushIfNew(
+        session,
+        obj,
+        "tool-output",
+        0,
+        `${toolUseId}:${output}`,
+        events,
+        {
+          type: "tool",
+          payload: {
+            sessionId: session.id,
+            messageId: session.lastAssistantMessageId ?? `codex-local-tools-${session.id}`,
+            toolUseId,
+            toolName: "tool",
+            input: {},
+            output,
+            status: "completed",
+            createdAt: timestamp,
+          },
+        },
+      );
+      return events;
+    }
+
+    return events;
+  }
+
+  private pushIfNew(
+    session: CodexSessionState,
+    obj: Record<string, unknown>,
+    kind: string,
+    index: number,
+    identity: string,
+    events: CliAgentRelayEvent[],
+    event: CliAgentRelayEvent,
+  ): void {
+    const key = transcriptKey(obj, kind, index, identity);
+    if (session.seenKeys.has(key)) return;
+    session.seenKeys.add(key);
+    events.push(event);
   }
 }
 
@@ -104,6 +379,89 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function parseTimestamp(value: unknown): number {
+  if (typeof value !== "string") return Date.now();
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : Date.now();
+}
+
+function readContentText(value: unknown): string | null {
+  if (typeof value === "string") return value.trim() ? value : null;
+  if (!Array.isArray(value)) return null;
+  const parts = value
+    .map((item) => {
+      if (typeof item === "string") return item;
+      if (!isRecord(item)) return "";
+      if (typeof item.text === "string") return item.text;
+      if (typeof item.content === "string") return item.content;
+      return "";
+    })
+    .filter(Boolean);
+  return parts.length > 0 ? parts.join("\n") : null;
+}
+
+function readReasoningText(payload: Record<string, unknown>): string | null {
+  const summary = payload.summary;
+  if (typeof summary === "string") return summary.trim() ? summary : null;
+  if (Array.isArray(summary)) {
+    const text = summary
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (isRecord(item) && typeof item.text === "string") return item.text;
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
+    if (text.trim()) return text;
+  }
+  const content = readContentText(payload.content);
+  return content?.trim() ? content : null;
+}
+
+function makeMessageId(
+  sessionId: string,
+  obj: Record<string, unknown>,
+  payload: Record<string, unknown>,
+  kind: string,
+  identity: string,
+): string {
+  return readString(payload.id) ??
+    readString(payload.message_id) ??
+    `codex-local-${sessionId}-${hashText(`${String(obj.timestamp ?? "")}:${kind}:${identity}`)}`;
+}
+
+function makeToolUseId(
+  sessionId: string,
+  obj: Record<string, unknown>,
+  payload: Record<string, unknown>,
+): string {
+  return `codex-local-tool-${hashText(`${sessionId}:${String(obj.timestamp ?? "")}:${safeJson(payload)}`)}`;
+}
+
+function parseToolInput(value: unknown): Record<string, unknown> {
+  if (isRecord(value)) return value;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      if (isRecord(parsed)) return parsed;
+      return { value: parsed };
+    } catch {
+      return { value };
+    }
+  }
+  if (value === undefined) return {};
+  return { value };
+}
+
+function formatToolOutput(value: unknown): string {
+  if (typeof value === "string") return truncateText(value);
+  return safeJson(value);
+}
+
 function safeJson(value: unknown): string {
   if (typeof value === "string") return truncateText(value);
   try {
@@ -124,4 +482,17 @@ function hashText(text: string): string {
     hash = ((hash << 5) - hash + text.charCodeAt(index)) | 0;
   }
   return String(hash);
+}
+
+function transcriptKey(
+  obj: Record<string, unknown>,
+  kind: string,
+  index: number,
+  identity: string,
+): string {
+  const payload = asRecord(obj.payload);
+  const base = readString(payload?.id) ??
+    readString(payload?.call_id) ??
+    `${String(obj.timestamp ?? "")}:${readString(payload?.type) ?? "item"}`;
+  return `${base}:${kind}:${index}:${hashText(identity)}`;
 }

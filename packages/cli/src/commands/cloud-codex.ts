@@ -59,6 +59,18 @@ function readHookModel(body: Record<string, unknown>): string | null {
   return readString(body.model) ?? readString(body.activeModelId);
 }
 
+function withHooksEnabled(args: string[]): string[] {
+  const hasHooksFlag = args.some((arg, index) =>
+    (arg === "--enable" && args[index + 1] === "hooks") ||
+    arg === "--enable=hooks" ||
+    arg === "-cfeatures.hooks=true" ||
+    arg === "-c" && args[index + 1] === "features.hooks=true" ||
+    arg === "--config=features.hooks=true" ||
+    arg === "--config" && args[index + 1] === "features.hooks=true"
+  );
+  return hasHooksFlag ? args : ["--enable", "hooks", ...args];
+}
+
 function printCloudError(prefix: string, error: unknown): void {
   if (error instanceof CloudAuthError) {
     console.error(`${prefix}: authentication failed. Run 'adit cloud login' again.`);
@@ -237,7 +249,10 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
 
     provider = new CodexCliProvider({
       bin: codexBin,
-      args: opts?.arg ?? [],
+      args: withHooksEnabled([
+        ...(installedHooks.launchArgs ?? []),
+        ...(opts?.arg ?? []),
+      ]),
       cwd: config.projectRoot,
       onEvent: (event) => eventQueue.push(event),
     });
@@ -286,6 +301,9 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
       if (sessionId && isLocalOwner) provider?.noteLocalSession(sessionId);
       if (event.type === "UserPromptSubmit" && isLocalOwner) {
         provider?.markLocalBusy();
+        for (const transcriptEvent of transcriptSync.drainSession(sessionId)) {
+          eventQueue.push(transcriptEvent);
+        }
         const prompt = readString(body.prompt);
         if (sessionId && prompt) {
           eventQueue.push({
@@ -300,11 +318,24 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
         }
       }
       if (event.type === "PostToolUse" && isLocalOwner) {
-        eventQueue.push(...transcriptSync.toolEvents(sessionId, body));
+        const transcriptEvents = transcriptSync.drainSession(sessionId);
+        if (transcriptEvents.length > 0) {
+          eventQueue.push(...transcriptEvents);
+        } else {
+          eventQueue.push(...transcriptSync.toolEvents(sessionId, body));
+        }
       }
       if (event.type === "Stop") {
         if (isLocalOwner) {
-          eventQueue.push(...transcriptSync.stopEvents(sessionId, body));
+          const transcriptEvents = transcriptSync.drainSession(sessionId);
+          if (transcriptEvents.length > 0) {
+            eventQueue.push(...transcriptEvents);
+          } else {
+            eventQueue.push(...transcriptSync.stopEvents(sessionId, body));
+          }
+          transcriptSync.scheduleDrain(sessionId, (transcriptEvent) => {
+            eventQueue.push(transcriptEvent);
+          });
           provider?.markLocalIdle();
         }
       }
@@ -313,6 +344,7 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
     ws.connect();
 
     let stopping = false;
+    let lastLocalTranscriptDrainAt = 0;
     const cleanup = (signal: string) => {
       if (stopping) return;
       stopping = true;
@@ -337,6 +369,16 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
       try {
         if (ws.isOpen && ws.currentConnectionId) {
           ws.sendHeartbeat(provider.state);
+          const state = provider.state;
+          const now = Date.now();
+          if (
+            state.owner === "local" &&
+            state.activeSessionId &&
+            now - lastLocalTranscriptDrainAt > 1000
+          ) {
+            lastLocalTranscriptDrainAt = now;
+            eventQueue.push(...transcriptSync.drainSession(state.activeSessionId));
+          }
           if (eventQueue.length > 0) {
             const batch = eventQueue.splice(0, 50);
             const sent = ws.sendEvents(batch);
