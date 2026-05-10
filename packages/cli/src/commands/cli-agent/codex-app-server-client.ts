@@ -1,6 +1,5 @@
 import { EventEmitter } from "node:events";
 import { spawn, type ChildProcess } from "node:child_process";
-import { randomUUID } from "node:crypto";
 
 export interface CodexJsonRpcMessage {
   id?: string | number;
@@ -192,8 +191,4 @@ export class CodexAppServerClient extends EventEmitter {
     }
     if (!this.stopped) this.opts.onError?.(error);
   }
-}
-
-export function makeCodexRequestId(prefix: string): string {
-  return `${prefix}-${randomUUID()}`;
 }

@@ -1,7 +1,7 @@
 import http, { type Server } from "node:http";
 import { EventEmitter } from "node:events";
 
-export interface ClaudeHookEvent {
+export interface CliAgentHookEvent {
   type: string;
   body: Record<string, unknown>;
 }
@@ -26,7 +26,7 @@ function readSessionId(body: Record<string, unknown>): string | null {
   );
 }
 
-export async function startClaudeHookServer(): Promise<HookServer> {
+export async function startCliAgentHookServer(): Promise<HookServer> {
   const events = new EventEmitter();
 
   const server = http.createServer((request, response) => {
@@ -56,10 +56,10 @@ export async function startClaudeHookServer(): Promise<HookServer> {
               ...body,
               ...(sessionId ? { sessionId } : {}),
             },
-          } satisfies ClaudeHookEvent);
+          } satisfies CliAgentHookEvent);
         }
       } catch {
-        // Hook delivery should never break Claude.
+        // Hook delivery should never break the local CLI agent.
       }
       response.writeHead(204).end();
     });
@@ -76,7 +76,7 @@ export async function startClaudeHookServer(): Promise<HookServer> {
   const address = server.address();
   if (!address || typeof address === "string") {
     await closeServer(server);
-    throw new Error("Unable to bind local Claude hook server");
+    throw new Error("Unable to bind local CLI agent hook server");
   }
 
   return {

@@ -14,7 +14,7 @@ import {
 import { CodexCliProvider } from "./cli-agent/codex-cli-provider.js";
 import { CodexRelayEventDeduper, CodexTranscriptSync } from "./cli-agent/codex-transcript-sync.js";
 import { installCodexHooks, type InstalledHooks } from "./cli-agent/hooks-bootstrap.js";
-import { startClaudeHookServer, type HookServer } from "./cli-agent/hook-server.js";
+import { startCliAgentHookServer, type HookServer } from "./cli-agent/hook-server.js";
 import { CliAgentRelayWebSocket } from "./cli-agent/relay-client.js";
 import type { CliAgentRelayEvent, RelayCommand } from "./cli-agent/types.js";
 
@@ -248,7 +248,7 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
   };
 
   try {
-    hookServer = await startClaudeHookServer();
+    hookServer = await startCliAgentHookServer();
     installedHooks = installCodexHooks({
       cwd: config.projectRoot,
       endpoint: hookServer.endpoint,
@@ -257,10 +257,7 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
 
     provider = new CodexCliProvider({
       bin: codexBin,
-      args: withHooksEnabled([
-        ...(installedHooks.launchArgs ?? []),
-        ...(opts?.arg ?? []),
-      ]),
+      args: withHooksEnabled(opts?.arg ?? []),
       cwd: config.projectRoot,
       onEvent: enqueueEvent,
     });

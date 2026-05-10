@@ -24,7 +24,6 @@ interface CodexHookEntry {
 
 export interface InstalledHooks {
   settingsPath: string;
-  launchArgs?: string[];
   cleanup: () => void;
 }
 

@@ -9,7 +9,6 @@ interface NoteHookInput {
 
 interface CodexSessionState {
   id: string;
-  startedAt: number;
   transcriptPath?: string;
   transcriptOffset: number;
   pendingTranscriptLine: string;
@@ -40,7 +39,6 @@ export class CodexTranscriptSync {
     }
 
     if (input.eventType === "SessionStart") {
-      session.startedAt = Date.now();
       this.primeTranscript(session);
     }
 
@@ -121,7 +119,6 @@ export class CodexTranscriptSync {
     if (!session) {
       session = {
         id,
-        startedAt: Date.now(),
         transcriptOffset: 0,
         pendingTranscriptLine: "",
         seenKeys: new Set<string>(),

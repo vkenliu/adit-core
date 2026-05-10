@@ -14,7 +14,7 @@ import {
 import { ClaudeCodeProvider } from "./cli-agent/claude-code-provider.js";
 import { ClaudeTranscriptSync } from "./cli-agent/claude-transcript-sync.js";
 import { installClaudeHooks, type InstalledHooks } from "./cli-agent/hooks-bootstrap.js";
-import { startClaudeHookServer, type HookServer } from "./cli-agent/hook-server.js";
+import { startCliAgentHookServer, type HookServer } from "./cli-agent/hook-server.js";
 import { CliAgentRelayWebSocket } from "./cli-agent/relay-client.js";
 import type { CliAgentRelayEvent, RelayCommand } from "./cli-agent/types.js";
 
@@ -222,7 +222,7 @@ export async function cloudClaudeCommand(opts?: CloudClaudeOptions): Promise<voi
   const transcriptSync = new ClaudeTranscriptSync();
 
   try {
-    hookServer = await startClaudeHookServer();
+    hookServer = await startCliAgentHookServer();
     const hookSettingsPath = join(
       config.projectRoot,
       ".claude",
