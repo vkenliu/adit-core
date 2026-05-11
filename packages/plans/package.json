@@ -1,6 +1,6 @@
 {
   "name": "@varveai/adit-plans",
-  "version": "0.3.0",
+  "version": "0.3.2",
   "description": "SpecFlow-inspired plan artifact generator for ADIT",
   "type": "module",
   "files": [

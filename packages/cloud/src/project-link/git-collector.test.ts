@@ -92,6 +92,25 @@ describe("Git Collector (with temp repo)", () => {
     expect(main!.headSha).toBeTruthy();
   });
 
+  it("collectBranches skips remote HEAD aliases", async () => {
+    execSync("git remote add origin https://github.com/test/repo.git", { cwd: repoDir, stdio: "pipe" });
+    execSync("git update-ref refs/remotes/origin/main HEAD", { cwd: repoDir, stdio: "pipe" });
+    execSync("git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main", {
+      cwd: repoDir,
+      stdio: "pipe",
+    });
+
+    const rawBranches = execSync(
+      "git branch -a --format='%(refname)|%(refname:short)|%(objectname:short)'",
+      { cwd: repoDir, encoding: "utf-8" },
+    );
+    expect(rawBranches).toContain("refs/remotes/origin/HEAD|origin|");
+
+    const branches = await collectBranches(repoDir);
+    expect(branches.some((branch) => branch.name === "origin")).toBe(false);
+    expect(branches.filter((branch) => branch.name === "main")).toHaveLength(1);
+  });
+
   it("collectCommitLogs returns commits", async () => {
     // Add a second commit
     writeFileSync(join(repoDir, "file.txt"), "hello\n");
