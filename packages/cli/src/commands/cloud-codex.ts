@@ -221,7 +221,7 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
   const client = new CloudClient(serverUrl, credentials);
   const terminalId = randomUUID();
   const projectName = basename(config.projectRoot);
-  const panelName = `Codex - ${projectName}`;
+  const panelName = projectName;
 
   try {
     await client.get("/api/sync/status");

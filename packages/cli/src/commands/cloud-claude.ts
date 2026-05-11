@@ -203,7 +203,7 @@ export async function cloudClaudeCommand(opts?: CloudClaudeOptions): Promise<voi
   const client = new CloudClient(serverUrl, credentials);
   const terminalId = randomUUID();
   const projectName = basename(config.projectRoot);
-  const panelName = `Claude - ${projectName}`;
+  const panelName = projectName;
 
   try {
     await client.get("/api/sync/status");
