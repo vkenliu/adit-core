@@ -14,7 +14,7 @@ import {
 
 interface PendingPrompt {
   message: string;
-  mode: "build" | "plan";
+  mode: CodexPromptMode;
   pendingSessionId: string | null;
   resolve: () => void;
   reject: (error: Error) => void;
@@ -43,6 +43,8 @@ interface CodexCliProviderOptions {
   onEvent?: (event: CliAgentRelayEvent) => void;
 }
 
+export type CodexPromptMode = "build" | "plan";
+
 const RECLAIM_COMMAND = "/local";
 const TERMINAL_RECLAIM_RESET = [
   "\x1b[?1004l", // Focus in/out reporting.
@@ -53,6 +55,13 @@ const TERMINAL_RECLAIM_RESET = [
   "\x1b[>4;0m", // xterm modifyOtherKeys.
   "\x1b[?25h", // Cursor visible.
 ].join("");
+
+const CODEX_PLAN_MODE_INSTRUCTION = [
+  "ADIT Plan mode is active.",
+  "Do not modify files, create files, apply patches, install packages, start services, commit changes, or otherwise change the working tree.",
+  "Use read-only inspection only. If implementation is needed, return a concrete plan with files, steps, risks, and questions instead of editing.",
+  "Do not announce that you are about to edit files; stop at the plan.",
+].join("\n");
 
 export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   readonly provider = "codex" as const;
@@ -341,7 +350,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     this.promptActive = true;
     try {
       await this.ensureAppServer();
-      const threadId = await this.ensureThreadForPrompt(item.pendingSessionId);
+      const threadId = await this.ensureThreadForPrompt(item.pendingSessionId, item.mode);
       this.pushEvent("message", {
         role: "user",
         sessionId: threadId,
@@ -350,10 +359,15 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       });
       const result = asRecord(await this.appServer?.request("turn/start", {
         threadId,
-        input: [{ type: "text", text: item.message, text_elements: [] }],
+        input: [
+          {
+            type: "text",
+            text: promptInputForCodexMode(item.message, item.mode),
+            text_elements: [],
+          },
+        ],
         cwd: this.opts.cwd,
-        approvalPolicy: "on-request",
-        approvalsReviewer: "user",
+        ...codexTurnModeOverrides(item.mode, this.opts.cwd),
       }));
       const turn = asRecord(result?.turn);
       this.activeTurnId = readString(turn?.id) ?? this.activeTurnId;
@@ -371,9 +385,12 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     }
   }
 
-  private async ensureThreadForPrompt(pendingSessionId: string | null): Promise<string> {
+  private async ensureThreadForPrompt(
+    pendingSessionId: string | null,
+    mode: CodexPromptMode,
+  ): Promise<string> {
     if (pendingSessionId) {
-      const threadId = await this.startThread();
+      const threadId = await this.startThread(mode);
       this.bindPendingSession(pendingSessionId, threadId);
       return threadId;
     }
@@ -381,12 +398,12 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     const existing = this.activeSessionId ?? this.resumeSessionId;
     if (existing) {
       if (!this.loadedThreadIds.has(existing)) {
-        await this.resumeThread(existing);
+        await this.resumeThread(existing, mode);
       }
       return existing;
     }
 
-    return this.startThread();
+    return this.startThread(mode);
   }
 
   private async ensureAppServer(): Promise<void> {
@@ -405,13 +422,11 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     await client.start();
   }
 
-  private async startThread(): Promise<string> {
+  private async startThread(mode: CodexPromptMode): Promise<string> {
     await this.ensureAppServer();
     const result = asRecord(await this.appServer?.request("thread/start", {
       cwd: this.opts.cwd,
-      approvalPolicy: "on-request",
-      approvalsReviewer: "user",
-      sandbox: "workspace-write",
+      ...codexThreadModeOverrides(mode),
       experimentalRawEvents: false,
       persistExtendedHistory: true,
     }));
@@ -422,14 +437,15 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     return threadId;
   }
 
-  private async resumeThread(threadId: string): Promise<void> {
+  private async resumeThread(
+    threadId: string,
+    mode: CodexPromptMode = "build",
+  ): Promise<void> {
     await this.ensureAppServer();
     const result = asRecord(await this.appServer?.request("thread/resume", {
       threadId,
       cwd: this.opts.cwd,
-      approvalPolicy: "on-request",
-      approvalsReviewer: "user",
-      sandbox: "workspace-write",
+      ...codexThreadModeOverrides(mode),
       persistExtendedHistory: true,
     }));
     const thread = asRecord(result?.thread);
@@ -904,6 +920,52 @@ function applyReclaimText(buffer: string, text: string): string {
     }
   }
   return next;
+}
+
+export function promptInputForCodexMode(
+  prompt: string,
+  mode: CodexPromptMode,
+): string {
+  if (mode !== "plan") return prompt;
+  return `${CODEX_PLAN_MODE_INSTRUCTION}\n\nUser request:\n${prompt}`;
+}
+
+export function codexThreadModeOverrides(
+  mode: CodexPromptMode,
+): Record<string, unknown> {
+  return {
+    approvalPolicy: mode === "plan" ? "never" : "on-request",
+    approvalsReviewer: "user",
+    sandbox: mode === "plan" ? "read-only" : "workspace-write",
+  };
+}
+
+export function codexTurnModeOverrides(
+  mode: CodexPromptMode,
+  cwd: string,
+): Record<string, unknown> {
+  if (mode === "plan") {
+    return {
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
+      sandboxPolicy: {
+        type: "readOnly",
+        networkAccess: false,
+      },
+    };
+  }
+
+  return {
+    approvalPolicy: "on-request",
+    approvalsReviewer: "user",
+    sandboxPolicy: {
+      type: "workspaceWrite",
+      writableRoots: [cwd],
+      networkAccess: false,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    },
+  };
 }
 
 function readString(value: unknown): string | null {

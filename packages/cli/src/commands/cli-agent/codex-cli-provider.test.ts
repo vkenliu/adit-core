@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { normalizeCodexReclaimInput } from "./codex-cli-provider.js";
+import {
+  codexThreadModeOverrides,
+  codexTurnModeOverrides,
+  normalizeCodexReclaimInput,
+  promptInputForCodexMode,
+} from "./codex-cli-provider.js";
 
 describe("normalizeCodexReclaimInput", () => {
   it("preserves normal reclaim input", () => {
@@ -16,5 +21,54 @@ describe("normalizeCodexReclaimInput", () => {
     const encoded = "\x1b[?1004h\x1b[47;1:3u\x1b[108;1:3u\x1b[111;1:3u\x1b[99;1:3u\x1b[97;1:3u\x1b[108;1:3u";
 
     expect(normalizeCodexReclaimInput(encoded)).toBe("/local");
+  });
+});
+
+describe("Codex prompt modes", () => {
+  it("wraps plan prompts with read-only planning instructions", () => {
+    const prompt = promptInputForCodexMode("add login", "plan");
+
+    expect(prompt).toContain("ADIT Plan mode is active.");
+    expect(prompt).toContain("Do not modify files");
+    expect(prompt).toContain("User request:\nadd login");
+  });
+
+  it("leaves build prompts unchanged", () => {
+    expect(promptInputForCodexMode("add login", "build")).toBe("add login");
+  });
+
+  it("uses read-only sandbox overrides in plan mode", () => {
+    expect(codexThreadModeOverrides("plan")).toEqual({
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
+      sandbox: "read-only",
+    });
+    expect(codexTurnModeOverrides("plan", "/repo")).toEqual({
+      approvalPolicy: "never",
+      approvalsReviewer: "user",
+      sandboxPolicy: {
+        type: "readOnly",
+        networkAccess: false,
+      },
+    });
+  });
+
+  it("restores writable sandbox overrides in build mode", () => {
+    expect(codexThreadModeOverrides("build")).toEqual({
+      approvalPolicy: "on-request",
+      approvalsReviewer: "user",
+      sandbox: "workspace-write",
+    });
+    expect(codexTurnModeOverrides("build", "/repo")).toEqual({
+      approvalPolicy: "on-request",
+      approvalsReviewer: "user",
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: ["/repo"],
+        networkAccess: false,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false,
+      },
+    });
   });
 });
