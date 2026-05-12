@@ -7,8 +7,8 @@
  * Sync is triggered when any of the following is true:
  * - `options.force` is true (used on session-end to flush all data), OR
  * - The number of unsynced records meets the configured threshold
- *   (ADIT_CLOUD_SYNC_THRESHOLD, default 50), OR
- * - More than syncTimeoutHours (default 12h) have elapsed since
+ *   (ADIT_CLOUD_SYNC_THRESHOLD, default 20), OR
+ * - More than syncTimeoutHours (default 2h) have elapsed since
  *   the last successful sync (ADIT_CLOUD_SYNC_TIMEOUT_HOURS).
  *
  * The time-based trigger is checked first using the already-loaded

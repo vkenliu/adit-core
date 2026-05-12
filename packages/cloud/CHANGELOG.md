@@ -1,5 +1,15 @@
 # @varveai/adit-cloud
 
+## 0.3.7
+
+### Patch Changes
+
+- 部分代码重构
+- Updated dependencies
+  - @varveai/adit-engine@0.3.7
+  - @varveai/adit-plans@0.3.7
+  - @varveai/adit-core@0.3.7
+
 ## 0.3.6
 
 ### Patch Changes

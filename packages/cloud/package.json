@@ -1,6 +1,6 @@
 {
   "name": "@varveai/adit-cloud",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "description": "Cloud sync client for ADIT — device auth, incremental push, conflict resolution",
   "type": "module",
   "files": [

@@ -60,10 +60,13 @@ vi.mock("../common/context.js", () => ({
 import { dispatchHook } from "./unified.js";
 import { endSession } from "@varveai/adit-core";
 import { getChangedFiles } from "@varveai/adit-engine";
+import { triggerAutoSync, triggerTranscriptUpload } from "@varveai/adit-cloud";
 import type { NormalizedHookInput } from "../adapters/types.js";
 
 const mockEndSession = vi.mocked(endSession);
 const mockGetChangedFiles = vi.mocked(getChangedFiles);
+const mockTriggerAutoSync = vi.mocked(triggerAutoSync);
+const mockTriggerTranscriptUpload = vi.mocked(triggerTranscriptUpload);
 
 describe("dispatchHook", () => {
   beforeEach(() => {
@@ -90,6 +93,22 @@ describe("dispatchHook", () => {
         actor: "user",
         promptText: "Fix the bug in auth.ts",
       }),
+    );
+  });
+
+  it("triggers cloud auto-sync after hook events", async () => {
+    const input: NormalizedHookInput = {
+      cwd: "/test",
+      hookType: "prompt-submit",
+      prompt: "Fix the bug in auth.ts",
+    };
+
+    await dispatchHook(input);
+
+    expect(mockTriggerAutoSync).toHaveBeenCalledWith(
+      expect.anything(),
+      "proj-001",
+      undefined,
     );
   });
 
@@ -123,6 +142,24 @@ describe("dispatchHook", () => {
         actor: "assistant",
         responseText: "Done fixing the bug.",
       }),
+    );
+  });
+
+  it("force-syncs on stop so pending records flush when the agent goes idle", async () => {
+    mockGetChangedFiles.mockResolvedValue([]);
+
+    const input: NormalizedHookInput = {
+      cwd: "/test",
+      hookType: "stop",
+      stopReason: "completed",
+    };
+
+    await dispatchHook(input);
+
+    expect(mockTriggerAutoSync).toHaveBeenCalledWith(
+      expect.anything(),
+      "proj-001",
+      { force: true },
     );
   });
 
@@ -173,6 +210,39 @@ describe("dispatchHook", () => {
       expect.anything(),
       "sess-001",
       "completed",
+    );
+  });
+
+  it("force-syncs on session-end before closing the database", async () => {
+    const input: NormalizedHookInput = {
+      cwd: "/test",
+      hookType: "session-end",
+      sessionEndReason: "exit",
+    };
+
+    await dispatchHook(input);
+
+    expect(mockTriggerAutoSync).toHaveBeenCalledWith(
+      expect.anything(),
+      "proj-001",
+      { force: true },
+    );
+  });
+
+  it("triggers transcript upload through the cloud package when a transcript path exists", async () => {
+    const input: NormalizedHookInput = {
+      cwd: "/test",
+      hookType: "prompt-submit",
+      prompt: "Fix the bug in auth.ts",
+      transcriptPath: "/tmp/transcript.jsonl",
+    };
+
+    await dispatchHook(input);
+
+    expect(mockTriggerTranscriptUpload).toHaveBeenCalledWith(
+      expect.anything(),
+      "sess-001",
+      "/tmp/transcript.jsonl",
     );
   });
 
