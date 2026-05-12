@@ -38,10 +38,12 @@ import {
   clearProjectLinkCache,
   updateCachedCommitSha,
   updateCachedDocHashes,
+  updateCachedMetadata,
   updateCachedQualified,
 } from "./cache.js";
 import { checkQuality, formatQualityFeedback } from "./qualify.js";
 import { validateDocument } from "@varveai/adit-plans";
+import { collectGitRefsFingerprint, REFS_FINGERPRINT_CACHE_KEY } from "./auto-link.js";
 
 /** Maximum number of commits per upload batch */
 const COMMIT_BATCH_SIZE = 1000;
@@ -206,10 +208,9 @@ export async function linkCommand(
 
   if (!options.skipCommits) {
     // Collect commits and resolve per-commit branch assignment by checking
-    // which branches each commit is reachable from. Non-default branches
-    // take priority so merged feature-branch commits keep their origin.
+    // all refs, including local-only branches that are not checked out.
     const commits = await collectCommitLogs(projectRoot, {
-      sinceCommitSha: cache.lastCommitSha,
+      allRefs: true,
     });
     const totalCommits = await collectCommitCount(projectRoot);
 
@@ -233,7 +234,7 @@ export async function linkCommand(
           "/api/project-link/commits",
           {
             projectId: effectiveProjectId,
-            sinceCommitSha: cache.lastCommitSha,
+            sinceCommitSha: null,
             commits: batch.map((c) => ({
               sha: c.sha,
               authorName: c.authorName,
@@ -261,6 +262,16 @@ export async function linkCommand(
       }
 
       log(`  ${uploaded} new commits uploaded (${commitCount} total)`);
+    }
+
+    const refsFingerprint = await collectGitRefsFingerprint(projectRoot);
+    if (refsFingerprint) {
+      const docHashes = {
+        ...cache.docHashes,
+        [REFS_FINGERPRINT_CACHE_KEY]: refsFingerprint,
+      };
+      updateCachedMetadata(db, effectiveProjectId, serverUrl, docHashes);
+      cache.docHashes = docHashes;
     }
   } else {
     log("  Skipping commit history (--skip-commits)");

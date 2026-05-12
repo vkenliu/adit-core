@@ -41,8 +41,7 @@ export async function initHookContext(
   let session: AditSession | null = null;
   if (platformSessionId) {
     session = getSessionByPlatformSessionId(db, platformSessionId);
-  }
-  if (!session) {
+  } else {
     session = getActiveSession(db, config.projectId, config.clientId);
   }
   if (!session) {

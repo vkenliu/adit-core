@@ -14,6 +14,12 @@ vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => mockSpawn(...args),
 }));
 
+// Mock git runner for lightweight refs fingerprint checks
+const mockRunGit = vi.fn();
+vi.mock("@varveai/adit-engine", () => ({
+  runGit: (...args: unknown[]) => mockRunGit(...args),
+}));
+
 // Mock credentials
 const mockLoadCredentials = vi.fn();
 const mockCredentialsFromEnvToken = vi.fn();
@@ -75,6 +81,11 @@ describe("triggerProjectLinkSync", () => {
     mockLoadCredentials.mockReturnValue(defaultCredentials());
     mockIsSyncDisabled.mockReturnValue(false);
     mockGetProjectLinkCache.mockReturnValue(null);
+    mockRunGit.mockResolvedValue({
+      exitCode: 0,
+      stdout: "refs/heads/main\u0000abc123\n",
+      stderr: "",
+    });
     mockSpawn.mockReturnValue(mockChildProcess());
   });
 
@@ -138,16 +149,43 @@ describe("triggerProjectLinkSync", () => {
     expect(mockSpawn).not.toHaveBeenCalled();
   });
 
-  it("skips when cached data is still fresh", async () => {
+  it("skips when cached data is still fresh and git refs are unchanged", async () => {
     // Cache was synced 30 minutes ago (< 2 hour stale threshold)
     const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
     mockGetProjectLinkCache.mockReturnValue({
       lastBranchSyncAt: thirtyMinutesAgo,
+      docHashes: {
+        __adit_git_refs_fingerprint: "c3808dd5cdda8bf40a9d4e16ce059c6ef14bbc84caf22705d8b1ab66fb351fb6",
+      },
     });
 
     await triggerProjectLinkSync(fakeDb, "proj_123", "/tmp/project");
 
     expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
+  it("spawns a git-only link when cached data is fresh but git refs changed", async () => {
+    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    mockGetProjectLinkCache.mockReturnValue({
+      projectId: "proj_123",
+      serverUrl: "https://adit-cloud.varve.ai",
+      confirmedProjectId: "proj_123",
+      lastCommitSha: null,
+      lastBranchSyncAt: thirtyMinutesAgo,
+      lastDocSyncAt: null,
+      docHashes: {
+        __adit_git_refs_fingerprint: "old-fingerprint",
+      },
+      qualified: false,
+      initializedAt: thirtyMinutesAgo,
+      updatedAt: thirtyMinutesAgo,
+    });
+
+    await triggerProjectLinkSync(fakeDb, "proj_123", "/tmp/project");
+
+    expect(mockSpawn).toHaveBeenCalledOnce();
+    const [, args] = mockSpawn.mock.calls[0];
+    expect(args).toEqual(["adit", "cloud", "link", "--json", "--skip-qualify", "--skip-docs"]);
   });
 
   it("spawns when cached data is stale", async () => {

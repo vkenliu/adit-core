@@ -17,6 +17,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import type Database from "better-sqlite3";
 import { loadCloudConfig, DEFAULT_SERVER_URL } from "../config.js";
 import {
@@ -25,10 +26,13 @@ import {
   isSyncDisabled,
 } from "../auth/credentials.js";
 import { getProjectLinkCache } from "./cache.js";
+import { runGit } from "@varveai/adit-engine";
+
+export const REFS_FINGERPRINT_CACHE_KEY = "__adit_git_refs_fingerprint";
 
 /**
- * Trigger a background project-link sync if credentials exist and
- * the cached link data is stale.
+ * Trigger a background project-link sync if credentials exist and the
+ * cached link data is stale or git refs changed since the last check.
  *
  * This function is designed to be called as fire-and-forget:
  *   triggerProjectLinkSync(db, projectId, projectRoot).catch(() => {})
@@ -70,15 +74,26 @@ export async function triggerProjectLinkSync(
 
   if (!serverUrl) return;
 
-  // 3. Check staleness — skip if cached data is fresh enough
+  // 3. Check staleness. If the cache is still fresh, do one cheap refs
+  //    fingerprint check so new branches/commits can still trigger a git-only
+  //    link without scanning docs.
   const cache = getProjectLinkCache(db, projectId, serverUrl);
+  let gitOnlySync = false;
+
   if (cache?.lastBranchSyncAt) {
     const staleMs = cloudConfig.projectLink.staleHours * 60 * 60 * 1000;
     const lastSyncTime = new Date(cache.lastBranchSyncAt).getTime();
     // Guard against corrupted date strings that produce NaN
     if (!Number.isNaN(lastSyncTime)) {
       const elapsed = Date.now() - lastSyncTime;
-      if (elapsed < staleMs) return;
+      if (elapsed < staleMs) {
+        const refsFingerprint = await collectGitRefsFingerprint(projectRoot);
+        const cachedRefsFingerprint = typeof cache.docHashes[REFS_FINGERPRINT_CACHE_KEY] === "string"
+          ? cache.docHashes[REFS_FINGERPRINT_CACHE_KEY]
+          : null;
+        if (!refsFingerprint || refsFingerprint === cachedRefsFingerprint) return;
+        gitOnlySync = true;
+      }
     }
   }
 
@@ -86,9 +101,14 @@ export async function triggerProjectLinkSync(
   //    Uses `npx adit cloud link` which handles its own
   //    credential loading, database opening, and error handling.
   try {
+    const args = ["adit", "cloud", "link", "--json", "--skip-qualify"];
+    if (gitOnlySync) {
+      args.push("--skip-docs");
+    }
+
     const child = spawn(
       "npx",
-      ["adit", "cloud", "link", "--json", "--skip-qualify"],
+      args,
       {
         cwd: projectRoot,
         stdio: ["ignore", "ignore", "ignore"],
@@ -102,4 +122,20 @@ export async function triggerProjectLinkSync(
   } catch {
     // fail-open — spawn itself may throw (e.g. npx not found)
   }
+}
+
+export async function collectGitRefsFingerprint(projectRoot: string): Promise<string | null> {
+  const result = await runGit(
+    [
+      "for-each-ref",
+      "refs/heads",
+      "refs/remotes",
+      "--sort=refname",
+      "--format=%(refname)%00%(objectname)",
+    ],
+    { cwd: projectRoot, timeout: 5_000 },
+  );
+
+  if (result.exitCode !== 0) return null;
+  return createHash("sha256").update(result.stdout).digest("hex");
 }

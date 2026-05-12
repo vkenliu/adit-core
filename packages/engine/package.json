@@ -1,6 +1,6 @@
 {
   "name": "@varveai/adit-engine",
-  "version": "0.3.2",
+  "version": "0.3.6",
   "description": "Git operations, snapshots, detection, and timeline engine for ADIT",
   "type": "module",
   "files": [

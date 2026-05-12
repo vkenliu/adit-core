@@ -70,7 +70,7 @@ export async function collectCurrentBranch(cwd: string): Promise<string | null> 
  */
 export async function collectBranches(cwd: string): Promise<GitBranch[]> {
   const result = await runGit(
-    ["branch", "-a", "--format=%(refname)|%(refname:short)|%(objectname:short)"],
+    ["branch", "-a", "--format=%(refname)|%(refname:short)|%(objectname)"],
     { cwd },
   );
 
@@ -129,6 +129,8 @@ export interface CollectCommitOptions {
   sinceCommitSha?: string | null;
   /** Branch name to tag on each returned commit (legacy — prefer resolveCommitBranches). */
   branch?: string | null;
+  /** Collect commits reachable from every local/remote branch instead of only HEAD. */
+  allRefs?: boolean;
 }
 
 /**
@@ -136,7 +138,8 @@ export interface CollectCommitOptions {
  *
  * When `sinceCommitSha` is provided, only commits after that SHA
  * are returned (incremental sync). Otherwise, all commits are returned.
- * Commits are ordered newest-first (git log default).
+ * Commits are ordered newest-first (git log default). When `allRefs`
+ * is true, commits are collected from every local/remote branch ref.
  *
  * When `branch` is provided, each returned commit will have its
  * `branch` field set to that value. For accurate per-commit branch
@@ -153,9 +156,10 @@ export async function collectCommitLogs(
 ): Promise<GitCommit[]> {
   // Support both the old positional signature and the new options object.
   // Old: collectCommitLogs(cwd, sinceCommitSha)
-  // New: collectCommitLogs(cwd, { sinceCommitSha, branch })
+  // New: collectCommitLogs(cwd, { sinceCommitSha, branch, allRefs })
   let sinceCommitSha: string | null | undefined;
   let branch: string | null | undefined;
+  let allRefs = false;
 
   if (
     sinceCommitShaOrOptions !== null &&
@@ -164,6 +168,7 @@ export async function collectCommitLogs(
   ) {
     sinceCommitSha = sinceCommitShaOrOptions.sinceCommitSha;
     branch = sinceCommitShaOrOptions.branch;
+    allRefs = sinceCommitShaOrOptions.allRefs === true;
   } else {
     sinceCommitSha = sinceCommitShaOrOptions;
   }
@@ -175,11 +180,15 @@ export async function collectCommitLogs(
   // %x01 = SOH field delimiter, %x00 = NUL record delimiter
   const args = ["log", "--format=%H%x01%an%x01%ae%x01%aI%x01%B%x00"];
 
+  if (allRefs) {
+    args.push("--branches", "--remotes");
+  }
+
   if (sinceCommitSha) {
     // Verify the SHA still exists (could have been force-pushed away)
     const exists = await runGit(["cat-file", "-t", sinceCommitSha], { cwd });
     if (exists.exitCode === 0) {
-      args.push(`${sinceCommitSha}..HEAD`);
+      args.push(allRefs ? `^${sinceCommitSha}` : `${sinceCommitSha}..HEAD`);
     }
     // If SHA doesn't exist, fall through to full log
   }
@@ -216,11 +225,10 @@ export async function collectCommitLogs(
 /**
  * Resolve per-commit branch assignments for a set of commits.
  *
- * For each known branch, runs `git log <branch> --format=%H` to collect
- * the SHAs reachable from that branch. Commits are assigned to the most
- * specific branch (non-default branches take priority over the default
- * branch, so a commit on `feature/x` that was later merged into `main`
- * is attributed to `feature/x`).
+ * For each known branch, runs `git rev-list <branch>` to collect the SHAs
+ * reachable from that branch, newest first. Commits are assigned to the
+ * nearest branch head that contains them, so a branch-tip commit stays on
+ * that branch even if another branch was created from it later.
  *
  * Only SHAs present in `commitShas` are assigned — this avoids building
  * a map for the entire repository history when doing incremental sync.
@@ -239,39 +247,70 @@ export async function resolveCommitBranches(
   // Build a set of SHAs we care about for fast lookup
   const targetShas = new Set(commits.map((c) => c.sha));
 
-  // Map from SHA → branch name. Non-default branches are processed first
-  // so their assignments take priority (a commit reachable from both
-  // `feature/x` and `main` should be attributed to `feature/x`).
-  const shaToBranch = new Map<string, string>();
+  type BranchCandidate = {
+    branch: string;
+    rank: number;
+    isDefault: boolean;
+    order: number;
+  };
 
-  // Sort branches: default branch last so non-default branches win
+  const shaToCandidate = new Map<string, BranchCandidate>();
+
+  function isBetterCandidate(
+    candidate: BranchCandidate,
+    existing: BranchCandidate | undefined,
+  ): boolean {
+    if (!existing) return true;
+    if (candidate.rank !== existing.rank) return candidate.rank < existing.rank;
+    if (candidate.isDefault !== existing.isDefault) return !candidate.isDefault;
+    return candidate.order < existing.order;
+  }
+
+  // Sort branches deterministically. Non-default branches win ties, while
+  // distance from the branch head is the primary signal.
   const sorted = [...branches].sort((a, b) => {
     const aIsDefault = a.name === defaultBranch ? 1 : 0;
     const bIsDefault = b.name === defaultBranch ? 1 : 0;
-    return aIsDefault - bIsDefault;
+    return aIsDefault - bIsDefault || a.name.localeCompare(b.name);
   });
 
-  for (const branch of sorted) {
-    const result = await runGit(
-      ["log", branch.name, "--format=%H"],
+  for (const [order, branch] of sorted.entries()) {
+    let result = await runGit(
+      ["rev-list", branch.name],
       { cwd, timeout: 30_000 },
     );
+
+    if (result.exitCode !== 0 && branch.headSha) {
+      result = await runGit(
+        ["rev-list", branch.headSha],
+        { cwd, timeout: 30_000 },
+      );
+    }
+
     if (result.exitCode !== 0) continue;
 
-    for (const line of result.stdout.trim().split("\n")) {
+    const lines = result.stdout.trim().split("\n");
+    for (let rank = 0; rank < lines.length; rank++) {
+      const line = lines[rank];
       const sha = line.trim();
       if (!sha || !targetShas.has(sha)) continue;
 
-      // Only assign if not already claimed by a non-default branch
-      if (!shaToBranch.has(sha)) {
-        shaToBranch.set(sha, branch.name);
+      const candidate: BranchCandidate = {
+        branch: branch.name,
+        rank,
+        isDefault: branch.name === defaultBranch,
+        order,
+      };
+
+      if (isBetterCandidate(candidate, shaToCandidate.get(sha))) {
+        shaToCandidate.set(sha, candidate);
       }
     }
   }
 
   // Apply resolved branches to commits
   for (const commit of commits) {
-    const resolved = shaToBranch.get(commit.sha);
+    const resolved = shaToCandidate.get(commit.sha)?.branch;
     if (resolved) {
       commit.branch = resolved;
     }
@@ -280,9 +319,9 @@ export async function resolveCommitBranches(
   return commits;
 }
 
-/** Count total commits reachable from HEAD. */
+/** Count total commits reachable from all local/remote branch refs. */
 export async function collectCommitCount(cwd: string): Promise<number> {
-  const result = await runGit(["rev-list", "--count", "HEAD"], { cwd });
+  const result = await runGit(["rev-list", "--count", "--branches", "--remotes"], { cwd });
   if (result.exitCode !== 0) return 0;
   return parseInt(result.stdout.trim(), 10) || 0;
 }

@@ -20,7 +20,9 @@ export interface TokenResponse {
   accessToken: string;
   refreshToken: string;
   clientId: string;
-  expiresAt: string;
+  tokenType?: "Bearer";
+  expiresIn?: number;
+  expiresAt?: string;
 }
 
 export interface DeviceAuthOptions {
