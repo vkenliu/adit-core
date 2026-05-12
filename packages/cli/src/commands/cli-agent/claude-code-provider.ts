@@ -25,6 +25,7 @@ import type {
   CliPermissionRequest,
   CliSlashCommand,
   CliSlashCommandInfo,
+  CliRewindResponse,
 } from "./types.js";
 
 interface PendingPrompt {
@@ -75,6 +76,20 @@ interface CliQuestionRequest {
   createdAt: number;
 }
 
+interface ClaudeRewindCheckpoint {
+  messageId: string;
+  label: string;
+  preview: string;
+  timestamp: number;
+  files: number;
+}
+
+interface PendingRewindRequest {
+  id: string;
+  sessionId: string;
+  checkpoints: ClaudeRewindCheckpoint[];
+}
+
 export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider {
   readonly provider = "claude-code" as const;
   private local: ChildProcess | null = null;
@@ -105,6 +120,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     resolve: (result: PermissionResult) => void;
     reject: (error: Error) => void;
   }>();
+  private pendingRewinds = new Map<string, PendingRewindRequest>();
   private boundPendingSessionIds = new Set<string>();
   private lastAssistantMessageBySession = new Map<string, string>();
   private slashCommandsByName = new Map<string, CliSlashCommandInfo>();
@@ -317,6 +333,11 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     if (!name) return;
     const normalized = name.toLowerCase();
 
+    if (normalized === "rewind") {
+      this.requestRewind(command.sessionId);
+      return;
+    }
+
     if (normalized === "mcp") {
       this.pushNotice({
         title: "/mcp",
@@ -348,6 +369,124 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     await this.sendPrompt(command.raw.startsWith("/") ? command.raw : `/${command.raw}`, {
       mode: "build",
     });
+  }
+
+  private requestRewind(sessionIdInput?: string | null): void {
+    const sessionId = sessionIdInput ?? this.activeSessionId ?? this.resumeSessionId ?? this.sdkSessionId;
+    if (!sessionId || !isValidClaudeSession(sessionId, this.opts.cwd)) {
+      this.pushNotice({
+        title: "/rewind",
+        text: "Claude Code does not have an active session that can be rewound.",
+        sessionId,
+      });
+      return;
+    }
+
+    const checkpoints = readClaudeRewindCheckpoints(this.opts.cwd, sessionId, 30);
+    if (checkpoints.length === 0) {
+      this.pushNotice({
+        title: "/rewind",
+        text: "No Claude Code user messages were found for this session.",
+        sessionId,
+      });
+      return;
+    }
+
+    const id = `rewind-${randomUUID()}`;
+    this.pendingRewinds.set(id, { id, sessionId, checkpoints });
+    this.pushEvent("rewind.requested", {
+      id,
+      sessionId,
+      checkpoints,
+      createdAt: Date.now(),
+    });
+  }
+
+  async answerRewind(response: CliRewindResponse): Promise<void> {
+    const pending = this.pendingRewinds.get(response.id);
+    if (response.rejected) {
+      if (pending) this.pendingRewinds.delete(response.id);
+      this.pushEvent("rewind.rejected", {
+        id: response.id,
+        sessionId: pending?.sessionId ?? response.sessionId,
+        createdAt: Date.now(),
+      });
+      return;
+    }
+
+    const sessionId = response.sessionId ?? pending?.sessionId;
+    const userMessageId = response.userMessageId;
+    if (!sessionId || !userMessageId) {
+      throw Object.assign(new Error("rewind sessionId and userMessageId are required"), {
+        statusCode: 400,
+      });
+    }
+    if (this.busyValue) {
+      throw Object.assign(new Error("Claude Code is busy; wait for the current run before rewinding."), {
+        statusCode: 409,
+      });
+    }
+
+    const result = await this.runRewindFiles(sessionId, userMessageId, response.dryRun === true);
+    const checkpoint = pending?.checkpoints.find((item) => item.messageId === userMessageId);
+    if (response.dryRun !== true) {
+      this.pendingRewinds.delete(response.id);
+    }
+    this.pushEvent("rewind.completed", {
+      id: response.id,
+      sessionId,
+      userMessageId,
+      dryRun: response.dryRun === true,
+      checkpoint,
+      result,
+      createdAt: Date.now(),
+    });
+    this.pushNotice({
+      title: response.dryRun === true ? "Rewind preview" : "Rewind files",
+      text: formatRewindResult(result, response.dryRun === true, checkpoint?.files),
+      sessionId,
+    });
+  }
+
+  private async runRewindFiles(
+    sessionId: string,
+    userMessageId: string,
+    dryRun: boolean,
+  ): Promise<{
+    canRewind: boolean;
+    error?: string;
+    filesChanged?: string[];
+    insertions?: number;
+    deletions?: number;
+  }> {
+    const abortController = new AbortController();
+    const rewindQuery = query({
+      prompt: this.createCapabilityProbeStream(abortController.signal),
+      options: {
+        cwd: this.opts.cwd,
+        pathToClaudeCodeExecutable: this.opts.bin,
+        env: this.buildEnv(),
+        settings: this.opts.hookSettingsPath,
+        resume: sessionId,
+        permissionMode: "bypassPermissions",
+        allowDangerouslySkipPermissions: true,
+        forkSession: false,
+        enableFileCheckpointing: true,
+        abortController,
+        includePartialMessages: false,
+        forwardSubagentText: false,
+      },
+    });
+
+    try {
+      await rewindQuery.supportedCommands().catch(() => [] as SlashCommand[]);
+      return await rewindQuery.rewindFiles(userMessageId, { dryRun });
+    } finally {
+      abortController.abort();
+      try {
+        rewindQuery.close?.();
+      } catch {}
+    }
   }
 
   async answerPermission(
@@ -468,6 +607,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       pending.reject(new Error("Claude provider stopped"));
     }
     this.pendingQuestions.clear();
+    this.pendingRewinds.clear();
     this.detachReclaimInput();
     try {
       this.local?.kill("SIGTERM");
@@ -756,6 +896,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     for (const resolve of this.promptResolvers.splice(0)) {
       resolve(null);
     }
+    this.pendingRewinds.clear();
   }
 
   private handleSdkMessage(
@@ -1396,6 +1537,124 @@ function toUserMessage(message: string, sessionId?: string): SDKUserMessage {
       content: message,
     },
   };
+}
+
+function readClaudeRewindCheckpoints(
+  cwd: string,
+  sessionId: string,
+  limit: number,
+): ClaudeRewindCheckpoint[] {
+  const file = path.join(getClaudeProjectDir(cwd), `${sessionId}.jsonl`);
+  let text: string;
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch {
+    return [];
+  }
+
+  const snapshots = new Map<string, number>();
+  const checkpoints: ClaudeRewindCheckpoint[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let value: unknown;
+    try {
+      value = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const record = asRecord(value);
+    const type = readString(record.type);
+
+    if (type === "file-history-snapshot") {
+      const snapshot = asRecord(record.snapshot);
+      const messageId = readString(snapshot.messageId);
+      if (!messageId) continue;
+      const backups = asRecord(snapshot.trackedFileBackups);
+      snapshots.set(messageId, Object.keys(backups).length);
+      continue;
+    }
+
+    if (type !== "user" || record.isSidechain === true || record.isMeta === true) continue;
+    const message = asRecord(record.message);
+    if (message.role !== "user") continue;
+    const messageId = readString(record.uuid);
+    if (!messageId) continue;
+    const preview = previewClaudeUserContent(message.content);
+    if (!preview) continue;
+    const timestamp = Date.parse(readString(record.timestamp) ?? "") || Date.now();
+    checkpoints.push({
+      messageId,
+      preview,
+      timestamp,
+      label: new Date(timestamp).toLocaleString(),
+      files: snapshots.get(messageId) ?? 0,
+    });
+  }
+
+  return checkpoints
+    .map((checkpoint) => ({
+      ...checkpoint,
+      files: snapshots.get(checkpoint.messageId) ?? checkpoint.files,
+    }))
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, limit);
+}
+
+function previewClaudeUserContent(content: unknown): string {
+  const raw = typeof content === "string"
+    ? content
+    : Array.isArray(content)
+      ? content
+          .map((part) => readString(asRecord(part).text))
+          .filter((part): part is string => Boolean(part))
+          .join("\n")
+      : "";
+  if (!raw.trim()) return "";
+
+  const commandName = raw.match(/<command-name>([\s\S]*?)<\/command-name>/)?.[1]?.trim();
+  if (commandName) {
+    const args = raw.match(/<command-args>([\s\S]*?)<\/command-args>/)?.[1]?.trim();
+    return truncatePlain(`${commandName}${args ? ` ${args}` : ""}`, 160);
+  }
+
+  return truncatePlain(raw.replace(/<[^>]+>/g, " "), 160);
+}
+
+function truncatePlain(value: string, max: number): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  if (compact.length <= max) return compact;
+  return `${compact.slice(0, Math.max(0, max - 1)).trimEnd()}…`;
+}
+
+function formatRewindResult(
+  result: {
+    canRewind: boolean;
+    error?: string;
+    filesChanged?: string[];
+    insertions?: number;
+    deletions?: number;
+  },
+  dryRun: boolean,
+  fallbackFileCount?: number,
+): string {
+  if (result.error) return `Rewind failed: ${result.error}`;
+  if (!result.canRewind) {
+    return "Claude Code reported that this checkpoint cannot be rewound.";
+  }
+
+  const fileCount = Array.isArray(result.filesChanged)
+    ? result.filesChanged.length
+    : Math.max(0, Math.floor(fallbackFileCount ?? 0));
+  const summary = `${fileCount} file${fileCount === 1 ? "" : "s"}`;
+  const stats = [
+    Number.isFinite(result.insertions) ? `${result.insertions} insertions` : null,
+    Number.isFinite(result.deletions) ? `${result.deletions} deletions` : null,
+  ].filter(Boolean).join(", ");
+  const detail = stats ? ` (${stats})` : "";
+  if (dryRun) {
+    return `Preview only: rewinding to the selected message would change ${summary}${detail}.`;
+  }
+  return `Rewound files to the selected message. Changed ${summary}${detail}. Conversation history is unchanged.`;
 }
 
 function extractSessionId(message: SDKMessage): string | null {

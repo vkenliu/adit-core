@@ -52,7 +52,8 @@ function asCommand(value: unknown): RelayCommand | null {
     type !== "question" &&
     type !== "takeover" &&
     type !== "switch-session" &&
-    type !== "slash-command"
+    type !== "slash-command" &&
+    type !== "rewind"
   ) {
     return null;
   }

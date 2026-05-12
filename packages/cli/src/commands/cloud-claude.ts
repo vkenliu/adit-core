@@ -121,6 +121,19 @@ async function processCommand(
     return;
   }
 
+  if (command.type === "rewind") {
+    const id = readString(command.payload.id);
+    if (!id) return;
+    await provider.answerRewind?.({
+      id,
+      sessionId: readString(command.payload.sessionId),
+      userMessageId: readString(command.payload.userMessageId),
+      dryRun: command.payload.dryRun === true,
+      rejected: command.payload.rejected === true,
+    });
+    return;
+  }
+
   if (command.type === "abort") {
     await provider.abort();
     return;

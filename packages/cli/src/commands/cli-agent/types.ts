@@ -32,6 +32,14 @@ export interface CliSlashCommand {
   sessionId?: string | null;
 }
 
+export interface CliRewindResponse {
+  id: string;
+  sessionId?: string | null;
+  userMessageId?: string | null;
+  dryRun?: boolean;
+  rejected?: boolean;
+}
+
 export interface CliSlashCommandInfo {
   name: string;
   description?: string;
@@ -52,6 +60,7 @@ export interface CliAgentProvider {
     localMessageId?: string | null;
   }): Promise<void>;
   handleSlashCommand(command: CliSlashCommand): Promise<void>;
+  answerRewind?(response: CliRewindResponse): Promise<void>;
   answerPermission(
     id: string,
     approved: boolean,
@@ -69,7 +78,7 @@ export interface CliAgentRelayEvent {
 
 export interface RelayCommand {
   id: string;
-  type: "prompt" | "abort" | "permission" | "question" | "takeover" | "switch-session" | "slash-command";
+  type: "prompt" | "abort" | "permission" | "question" | "takeover" | "switch-session" | "slash-command" | "rewind";
   payload: Record<string, unknown>;
   createdAt: number;
 }
