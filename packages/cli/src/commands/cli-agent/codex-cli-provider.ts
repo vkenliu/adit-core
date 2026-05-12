@@ -300,10 +300,16 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
         cwds: [this.opts.cwd],
         forceReload: false,
       });
+      const skills = extractCodexSkills(result);
       this.pushNotice({
         title: "/skills",
-        text: formatCodexSkills(result),
+        text: formatCodexSkills(skills),
         sessionId: command.sessionId,
+        data: {
+          noticeKind: "skills",
+          provider: this.provider,
+          skills,
+        },
       });
       return;
     }
@@ -941,11 +947,13 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     title: string;
     text: string;
     sessionId?: string | null;
+    data?: Record<string, unknown>;
   }): void {
     this.pushEvent("notice", {
       title: input.title,
       text: input.text,
       sessionId: input.sessionId ?? this.activeSessionId ?? this.resumeSessionId,
+      ...(input.data ?? {}),
       createdAt: Date.now(),
     });
   }
@@ -1151,9 +1159,9 @@ function formatCodexMcpStatus(value: unknown): string {
   }).join("\n");
 }
 
-function formatCodexSkills(value: unknown): string {
+function extractCodexSkills(value: unknown): Array<Record<string, unknown>> {
   const data = Array.isArray(asRecord(value)?.data) ? asRecord(value)?.data as unknown[] : [];
-  const lines: string[] = [];
+  const skillsOut: Array<Record<string, unknown>> = [];
   for (const entry of data) {
     const record = asRecord(entry) ?? {};
     const cwd = readString(record.cwd);
@@ -1162,11 +1170,36 @@ function formatCodexSkills(value: unknown): string {
       const skill = asRecord(rawSkill) ?? {};
       const name = readString(skill.name);
       if (!name) continue;
-      const enabled = skill.enabled === false ? "disabled" : "enabled";
-      const description = readString(skill.shortDescription) ?? readString(skill.description);
-      lines.push(`- ${name} (${enabled})${cwd ? ` @ ${cwd}` : ""}${description ? `: ${description}` : ""}`);
+      const skillInterface = asRecord(skill.interface) ?? {};
+      skillsOut.push({
+        name,
+        displayName: readString(skillInterface.displayName),
+        description:
+          readString(skillInterface.shortDescription) ??
+          readString(skill.shortDescription) ??
+          readString(skill.description),
+        path: readString(skill.path),
+        scope: readString(skill.scope),
+        cwd,
+        enabled: skill.enabled !== false,
+        defaultPrompt:
+          readString(skillInterface.defaultPrompt) ??
+          readString(skill.defaultPrompt),
+      });
     }
   }
+  return skillsOut;
+}
+
+function formatCodexSkills(skills: Array<Record<string, unknown>>): string {
+  const lines = skills.map((skill) => {
+    const name = readString(skill.name);
+    if (!name) return null;
+    const enabled = skill.enabled === false ? "disabled" : "enabled";
+    const cwd = readString(skill.cwd);
+    const description = readString(skill.description);
+    return `- ${name} (${enabled})${cwd ? ` @ ${cwd}` : ""}${description ? `: ${description}` : ""}`;
+  }).filter((line): line is string => Boolean(line));
   return lines.join("\n") || "Codex did not report any skills for this workspace.";
 }
 

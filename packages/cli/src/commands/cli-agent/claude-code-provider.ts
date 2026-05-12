@@ -352,6 +352,14 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
         title: "/skills",
         text: formatClaudeSkills(this.skills, this.slashCommandsByName),
         sessionId: command.sessionId,
+        data: {
+          noticeKind: "skills",
+          provider: this.provider,
+          skills: this.skills.map((name) => ({
+            name,
+            enabled: true,
+          })),
+        },
       });
       return;
     }
@@ -1459,11 +1467,13 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     title: string;
     text: string;
     sessionId?: string | null;
+    data?: Record<string, unknown>;
   }): void {
     this.pushEvent("notice", {
       title: input.title,
       text: input.text,
       sessionId: input.sessionId ?? this.activeSessionId ?? this.resumeSessionId,
+      ...(input.data ?? {}),
       createdAt: Date.now(),
     });
   }
