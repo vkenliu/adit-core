@@ -29,6 +29,7 @@ import {
   incrementSyncErrors,
   clearSyncErrors,
   isSyncDisabled,
+  recordAuthFailure,
   type CloudCredentials,
 } from "../auth/credentials.js";
 import { CloudClient } from "../http/client.js";
@@ -143,6 +144,12 @@ export async function triggerAutoSync(
   } catch (error) {
     // Track consecutive failures — disable sync after threshold
     const disabled = incrementSyncErrors();
+    if (error instanceof CloudAuthError) {
+      recordAuthFailure({
+        stage: "auto-sync",
+        message: error.message,
+      });
+    }
 
     // Fail silently — this is fire-and-forget.
     // CloudNetworkError: server unreachable, will retry next trigger

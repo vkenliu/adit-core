@@ -238,6 +238,38 @@ describe("Git Collector (with temp repo)", () => {
     expect(commits[0].branch).toBeUndefined();
   });
 
+  it("collectCommitLogs can include commits from branches outside current HEAD", async () => {
+    execSync("git checkout -b plan/day-25", { cwd: repoDir, stdio: "pipe" });
+    writeFileSync(join(repoDir, "day-25.txt"), "plan\n");
+    execSync("git add . && git commit -m 'Day 25 plan'", { cwd: repoDir, stdio: "pipe" });
+
+    execSync("git checkout main", { cwd: repoDir, stdio: "pipe" });
+
+    const headCommits = await collectCommitLogs(repoDir);
+    expect(headCommits.some((commit) => commit.message === "Day 25 plan")).toBe(false);
+
+    const allCommits = await collectCommitLogs(repoDir, { allRefs: true });
+    expect(allCommits.some((commit) => commit.message === "Day 25 plan")).toBe(true);
+  });
+
+  it("collectCommitLogs excludes ADIT checkpoint refs from allRefs collection", async () => {
+    const headSha = execSync("git rev-parse HEAD", { cwd: repoDir, encoding: "utf-8" }).trim();
+    const treeSha = execSync("git write-tree", { cwd: repoDir, encoding: "utf-8" }).trim();
+    const checkpointSha = execSync(
+      `git commit-tree ${treeSha} -p ${headSha} -m '[adit] assistant response (completed)'`,
+      { cwd: repoDir, encoding: "utf-8" },
+    ).trim();
+    execSync(`git update-ref refs/adit/checkpoints/01TEST ${checkpointSha}`, {
+      cwd: repoDir,
+      stdio: "pipe",
+    });
+
+    const commits = await collectCommitLogs(repoDir, { allRefs: true });
+
+    expect(commits.some((commit) => commit.sha === checkpointSha)).toBe(false);
+    expect(commits.some((commit) => commit.message === "[adit] assistant response (completed)")).toBe(false);
+  });
+
   it("collectCommitCount returns total count", async () => {
     const count = await collectCommitCount(repoDir);
     expect(count).toBe(1);
@@ -247,6 +279,41 @@ describe("Git Collector (with temp repo)", () => {
 
     const count2 = await collectCommitCount(repoDir);
     expect(count2).toBe(2);
+  });
+
+  it("collectCommitCount includes commits reachable only from other branches", async () => {
+    execSync("git checkout -b plan/day-25", { cwd: repoDir, stdio: "pipe" });
+    writeFileSync(join(repoDir, "branch-only.txt"), "branch\n");
+    execSync("git add . && git commit -m 'Branch only commit'", { cwd: repoDir, stdio: "pipe" });
+
+    execSync("git checkout main", { cwd: repoDir, stdio: "pipe" });
+
+    const headCount = Number(execSync("git rev-list --count HEAD", { cwd: repoDir, encoding: "utf-8" }).trim());
+    const allCount = await collectCommitCount(repoDir);
+
+    expect(headCount).toBe(1);
+    expect(allCount).toBe(2);
+  });
+
+  it("collectCommitCount excludes commits only reachable from ADIT checkpoint refs", async () => {
+    const headSha = execSync("git rev-parse HEAD", { cwd: repoDir, encoding: "utf-8" }).trim();
+    const treeSha = execSync("git write-tree", { cwd: repoDir, encoding: "utf-8" }).trim();
+    const checkpointSha = execSync(
+      `git commit-tree ${treeSha} -p ${headSha} -m '[adit] assistant response (completed)'`,
+      { cwd: repoDir, encoding: "utf-8" },
+    ).trim();
+    execSync(`git update-ref refs/adit/checkpoints/01TEST ${checkpointSha}`, {
+      cwd: repoDir,
+      stdio: "pipe",
+    });
+
+    const count = await collectCommitCount(repoDir);
+    const allRefCount = Number(
+      execSync("git rev-list --count --all", { cwd: repoDir, encoding: "utf-8" }).trim(),
+    );
+
+    expect(count).toBe(1);
+    expect(allRefCount).toBe(2);
   });
 
   it("resolveCommitBranches assigns correct branch per commit", async () => {
@@ -302,6 +369,29 @@ describe("Git Collector (with temp repo)", () => {
     const commitB = commits.find((c) => c.message === "Commit on B");
     expect(commitB).toBeDefined();
     expect(commitB!.branch).toBe("feature/b");
+  });
+
+  it("resolveCommitBranches prefers the nearest branch head for shared commits", async () => {
+    execSync("git checkout -b plan/day-25", { cwd: repoDir, stdio: "pipe" });
+    writeFileSync(join(repoDir, "day-25.txt"), "plan\n");
+    execSync("git add . && git commit -m 'Day 25 plan'", { cwd: repoDir, stdio: "pipe" });
+
+    execSync("git checkout -b feature/add-agents-md", { cwd: repoDir, stdio: "pipe" });
+    writeFileSync(join(repoDir, "agents.md"), "agents\n");
+    execSync("git add . && git commit -m 'Add agents doc'", { cwd: repoDir, stdio: "pipe" });
+
+    const commits = await collectCommitLogs(repoDir, { allRefs: true });
+    const branches = await collectBranches(repoDir);
+
+    await resolveCommitBranches(repoDir, commits, branches, "main");
+
+    const day25Commit = commits.find((c) => c.message === "Day 25 plan");
+    expect(day25Commit).toBeDefined();
+    expect(day25Commit!.branch).toBe("plan/day-25");
+
+    const agentsCommit = commits.find((c) => c.message === "Add agents doc");
+    expect(agentsCommit).toBeDefined();
+    expect(agentsCommit!.branch).toBe("feature/add-agents-md");
   });
 
   it("resolveCommitBranches handles empty commits array", async () => {

@@ -29,6 +29,9 @@ import {
   incrementSyncErrors,
   clearSyncErrors,
   isSyncDisabled,
+  isTokenExpired,
+  recordAuthFailure,
+  clearAuthFailure,
   type CloudCredentials,
 } from "./credentials.js";
 
@@ -182,5 +185,35 @@ describe("Circuit Breaker", () => {
     clearCredentials();
     // Should not throw
     clearSyncErrors();
+  });
+});
+
+describe("Token expiry diagnostics", () => {
+  it("treats missing or invalid device expiresAt as expired", () => {
+    expect(isTokenExpired(makeCreds({ authType: "device", refreshToken: "r", expiresAt: "" }))).toBe(true);
+    expect(isTokenExpired(makeCreds({ authType: "device", refreshToken: "r", expiresAt: "not-a-date" }))).toBe(true);
+  });
+
+  it("does not expire static token credentials", () => {
+    expect(isTokenExpired(makeCreds({ authType: "token", expiresAt: "" }))).toBe(false);
+  });
+
+  it("records and clears last auth failure", () => {
+    mkdirSync(join(tempHome, ".adit"), { recursive: true });
+    saveCredentials(makeCreds());
+
+    recordAuthFailure({
+      stage: "refresh",
+      message: "refresh failed",
+      status: 401,
+      code: "token_revoked",
+    });
+
+    const failed = loadCredentials();
+    expect(failed?.lastAuthFailure?.stage).toBe("refresh");
+    expect(failed?.lastAuthFailure?.code).toBe("token_revoked");
+
+    clearAuthFailure();
+    expect(loadCredentials()?.lastAuthFailure).toBeUndefined();
   });
 });

@@ -14,7 +14,26 @@ import {
   mkdirSync,
   unlinkSync,
   chmodSync,
+  openSync,
+  closeSync,
+  writeSync,
+  statSync,
 } from "node:fs";
+
+export type CloudAuthFailureStage = "refresh" | "request" | "auto-sync" | "status";
+
+export interface CloudAuthFailure {
+  /** ISO 8601 timestamp when the auth failure was observed */
+  at: string;
+  /** Part of the auth flow that failed */
+  stage: CloudAuthFailureStage;
+  /** Human-readable error message */
+  message: string;
+  /** HTTP status when available */
+  status?: number;
+  /** Server-provided reason/code when available */
+  code?: string;
+}
 
 export interface CloudCredentials {
   /** Authentication type: "device" (default) or "token" (static JWT) */
@@ -35,9 +54,13 @@ export interface CloudCredentials {
   syncDisabled?: boolean;
   /** ISO 8601 timestamp of the first error in the current failure window */
   firstSyncErrorAt?: string;
+  /** Most recent auth/refresh failure observed by auto-sync or CloudClient */
+  lastAuthFailure?: CloudAuthFailure;
 }
 
 const CREDENTIALS_FILE = "cloud-credentials.json";
+const REFRESH_LOCK_FILE = "cloud-credentials.refresh.lock";
+const REFRESH_LOCK_STALE_MS = 30_000;
 
 function credentialsPath(): string {
   return join(homedir(), ".adit", CREDENTIALS_FILE);
@@ -86,9 +109,89 @@ export function clearCredentials(): void {
 export function isTokenExpired(creds: CloudCredentials): boolean {
   // Static tokens never expire
   if (creds.authType === "token") return false;
+  if (!creds.expiresAt) return true;
   const expiresAt = new Date(creds.expiresAt).getTime();
+  if (!Number.isFinite(expiresAt)) return true;
   const safetyMarginMs = 60_000; // Refresh 60s before actual expiry
   return Date.now() >= expiresAt - safetyMarginMs;
+}
+
+function refreshLockPath(): string {
+  return join(homedir(), ".adit", REFRESH_LOCK_FILE);
+}
+
+/** Record the most recent auth failure for diagnostics in `adit cloud status`. */
+export function recordAuthFailure(
+  failure: Omit<CloudAuthFailure, "at"> & { at?: string },
+): void {
+  const creds = loadCredentials();
+  if (!creds) return;
+  saveCredentials({
+    ...creds,
+    lastAuthFailure: {
+      ...failure,
+      at: failure.at ?? new Date().toISOString(),
+    },
+  });
+}
+
+/** Clear the stored auth failure after a successful authenticated request. */
+export function clearAuthFailure(): void {
+  const creds = loadCredentials();
+  if (!creds?.lastAuthFailure) return;
+  saveCredentials({
+    ...creds,
+    lastAuthFailure: undefined,
+  });
+}
+
+/** Run a refresh operation under a local file lock shared across hook processes. */
+export async function withCredentialsRefreshLock<T>(fn: () => Promise<T>): Promise<T> {
+  const fd = await acquireRefreshLock();
+  try {
+    return await fn();
+  } finally {
+    try {
+      closeSync(fd);
+    } catch {
+      // best-effort
+    }
+    try {
+      unlinkSync(refreshLockPath());
+    } catch {
+      // best-effort
+    }
+  }
+}
+
+async function acquireRefreshLock(): Promise<number> {
+  const path = refreshLockPath();
+  mkdirSync(join(homedir(), ".adit"), { recursive: true });
+
+  for (let attempt = 0; attempt < 80; attempt++) {
+    try {
+      const fd = openSync(path, "wx", 0o600);
+      writeSync(fd, `${process.pid} ${new Date().toISOString()}\n`);
+      return fd;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EEXIST") throw error;
+
+      try {
+        const stat = statSync(path);
+        if (Date.now() - stat.mtimeMs > REFRESH_LOCK_STALE_MS) {
+          unlinkSync(path);
+          continue;
+        }
+      } catch {
+        continue;
+      }
+
+      await sleep(Math.min(50 + attempt * 25, 250));
+    }
+  }
+
+  throw new Error("Timed out waiting for cloud credential refresh lock");
 }
 
 /**
@@ -109,6 +212,10 @@ export function credentialsFromEnvToken(
     expiresAt: "",
     serverUrl,
   };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /** Default circuit breaker window in milliseconds (1 hour) */

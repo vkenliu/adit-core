@@ -133,6 +133,25 @@ export function updateCachedDocHashes(
   );
 }
 
+/** Update cached metadata JSON without marking documents as synced. */
+export function updateCachedMetadata(
+  db: Database.Database,
+  projectId: string,
+  serverUrl: string,
+  hashes: Record<string, string>,
+): void {
+  db.prepare(`
+    UPDATE project_link_cache
+    SET doc_hashes_json = ?, updated_at = ?
+    WHERE project_id = ? AND server_url = ?
+  `).run(
+    JSON.stringify(hashes),
+    new Date().toISOString(),
+    projectId,
+    serverUrl,
+  );
+}
+
 /** Mark as qualified or not */
 export function updateCachedQualified(
   db: Database.Database,
