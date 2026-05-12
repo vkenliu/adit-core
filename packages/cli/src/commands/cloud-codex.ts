@@ -55,6 +55,11 @@ function readStringMatrix(value: unknown): string[][] {
   );
 }
 
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string" && item.length > 0);
+}
+
 function readHookModel(body: Record<string, unknown>): string | null {
   return readString(body.model) ?? readString(body.activeModelId);
 }
@@ -107,11 +112,24 @@ async function processCommand(
     if (!text) return;
     const sessionId = readString(command.payload.sessionId);
     const pendingSessionId = readString(command.payload.pendingSessionId);
+    const localMessageId = readString(command.payload.localMessageId);
     const mode = readString(command.payload.mode) === "plan" ? "plan" : "build";
     if (!pendingSessionId && sessionId && provider.state.activeSessionId !== sessionId) {
       await provider.switchSession(sessionId);
     }
-    await provider.sendPrompt(text, { mode, pendingSessionId });
+    await provider.sendPrompt(text, { mode, pendingSessionId, localMessageId });
+    return;
+  }
+
+  if (command.type === "slash-command") {
+    const name = readString(command.payload.command) ?? readString(command.payload.name);
+    if (!name) return;
+    await provider.handleSlashCommand({
+      name,
+      args: readStringArray(command.payload.args),
+      raw: readString(command.payload.raw) ?? `/${name}`,
+      sessionId: readString(command.payload.sessionId),
+    });
     return;
   }
 

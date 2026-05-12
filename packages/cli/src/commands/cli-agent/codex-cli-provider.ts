@@ -6,6 +6,8 @@ import type {
   CliAgentState,
   CliPermissionRequest,
   CliQuestionResponse,
+  CliSlashCommand,
+  CliSlashCommandInfo,
 } from "./types.js";
 import {
   CodexAppServerClient,
@@ -16,6 +18,7 @@ interface PendingPrompt {
   message: string;
   mode: CodexPromptMode;
   pendingSessionId: string | null;
+  localMessageId: string | null;
   resolve: () => void;
   reject: (error: Error) => void;
 }
@@ -63,6 +66,16 @@ const CODEX_PLAN_MODE_INSTRUCTION = [
   "Do not announce that you are about to edit files; stop at the plan.",
 ].join("\n");
 
+const CODEX_CLOUD_SLASH_COMMANDS: CliSlashCommandInfo[] = [
+  { name: "compact", description: "Compress the current Codex thread" },
+  { name: "mcp", description: "Show Codex MCP server status" },
+  { name: "skills", description: "List Codex skills" },
+  { name: "fork", description: "Fork the current Codex thread" },
+  { name: "model", description: "List available Codex models" },
+  { name: "new", description: "Start a new Codex thread" },
+  { name: "clear", description: "Start a clean Codex thread" },
+];
+
 export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   readonly provider = "codex" as const;
   private local: ChildProcess | null = null;
@@ -89,6 +102,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   constructor(private readonly opts: CodexCliProviderOptions) {
     super();
     this.startLocal();
+    this.emitSlashCommands();
   }
 
   get state(): CliAgentState {
@@ -134,7 +148,10 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   }
 
   async takeover(): Promise<void> {
-    if (this.ownerValue === "web") return;
+    if (this.ownerValue === "web") {
+      this.emitSlashCommands();
+      return;
+    }
     if (this.ownerValue !== "local") {
       throw Object.assign(new Error("local Codex owner is not available"), {
         statusCode: 409,
@@ -161,6 +178,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
 
     this.ownerValue = "web";
     this.emitState();
+    this.emitSlashCommands();
     restoreTerminalForCodexReclaim();
     process.stderr.write(
       `\n[adit cloud codex] Web has taken over Codex CLI. Type ${RECLAIM_COMMAND} here to reclaim local control.\n`,
@@ -215,7 +233,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
 
   async sendPrompt(
     prompt: string,
-    opts: { mode?: "build" | "plan"; pendingSessionId?: string | null } = {},
+    opts: { mode?: "build" | "plan"; pendingSessionId?: string | null; localMessageId?: string | null } = {},
   ): Promise<void> {
     if (this.ownerValue !== "web") {
       throw Object.assign(new Error("Web has not taken over this Codex session"), {
@@ -230,11 +248,116 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
         message: trimmed,
         mode: opts.mode === "plan" ? "plan" : "build",
         pendingSessionId: opts.pendingSessionId ?? null,
+        localMessageId: opts.localMessageId ?? null,
         resolve,
         reject,
       });
       void this.drainPromptQueue();
     });
+  }
+
+  async handleSlashCommand(command: CliSlashCommand): Promise<void> {
+    const name = command.name.trim().replace(/^\//, "").toLowerCase();
+    if (!name) return;
+    if (!CODEX_CLOUD_SLASH_COMMANDS.some((item) => item.name === name)) {
+      throw Object.assign(
+        new Error(`Codex Cloud Coding does not expose /${command.name} as an executable native command.`),
+        { statusCode: 400 },
+      );
+    }
+    if (this.ownerValue !== "web") {
+      throw Object.assign(new Error("Web has not taken over this Codex session"), {
+        statusCode: 409,
+      });
+    }
+
+    if (name === "new" || name === "clear") {
+      const threadId = await this.startThread("build");
+      this.pushNotice({
+        title: `/${name}`,
+        text: `Started a clean Codex thread: ${threadId}`,
+        sessionId: threadId,
+      });
+      return;
+    }
+
+    if (name === "mcp") {
+      await this.ensureAppServer();
+      const result = await this.appServer?.request("mcpServerStatus/list", {
+        detail: "toolsAndAuthOnly",
+      });
+      this.pushNotice({
+        title: "/mcp",
+        text: formatCodexMcpStatus(result),
+        sessionId: command.sessionId,
+      });
+      return;
+    }
+
+    if (name === "skills") {
+      await this.ensureAppServer();
+      const result = await this.appServer?.request("skills/list", {
+        cwds: [this.opts.cwd],
+        forceReload: false,
+      });
+      this.pushNotice({
+        title: "/skills",
+        text: formatCodexSkills(result),
+        sessionId: command.sessionId,
+      });
+      return;
+    }
+
+    if (name === "model") {
+      await this.ensureAppServer();
+      const result = await this.appServer?.request("model/list", {
+        includeHidden: false,
+      });
+      this.pushNotice({
+        title: "/model",
+        text: formatCodexModels(result),
+        sessionId: command.sessionId,
+      });
+      return;
+    }
+
+    const threadId = command.sessionId ?? this.activeSessionId ?? this.resumeSessionId;
+    if (!threadId) {
+      throw Object.assign(new Error(`/${name} requires an active Codex thread.`), {
+        statusCode: 400,
+      });
+    }
+    if (!this.loadedThreadIds.has(threadId)) {
+      await this.resumeThread(threadId);
+    }
+
+    if (name === "compact") {
+      await this.appServer?.request("thread/compact/start", { threadId });
+      this.pushNotice({
+        title: "/compact",
+        text: "Started Codex thread compaction.",
+        sessionId: threadId,
+      });
+      return;
+    }
+
+    if (name === "fork") {
+      const result = asRecord(await this.appServer?.request("thread/fork", {
+        threadId,
+        cwd: this.opts.cwd,
+        ...codexThreadModeOverrides("build"),
+      })) ?? {};
+      const thread = asRecord(result.thread) ?? {};
+      const forkedThreadId = readString(thread.id);
+      if (forkedThreadId) this.noteThread(thread, result);
+      this.pushNotice({
+        title: "/fork",
+        text: forkedThreadId
+          ? `Forked Codex thread: ${forkedThreadId}`
+          : "Forked the current Codex thread.",
+        sessionId: forkedThreadId ?? threadId,
+      });
+    }
   }
 
   async answerPermission(
@@ -354,6 +477,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       this.pushEvent("message", {
         role: "user",
         sessionId: threadId,
+        ...(item.localMessageId ? { messageId: item.localMessageId } : {}),
         text: item.message,
         createdAt: Date.now(),
       });
@@ -813,6 +937,27 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     this.opts.onEvent?.({ type, payload });
   }
 
+  private pushNotice(input: {
+    title: string;
+    text: string;
+    sessionId?: string | null;
+  }): void {
+    this.pushEvent("notice", {
+      title: input.title,
+      text: input.text,
+      sessionId: input.sessionId ?? this.activeSessionId ?? this.resumeSessionId,
+      createdAt: Date.now(),
+    });
+  }
+
+  private emitSlashCommands(): void {
+    this.pushEvent("slash-commands", {
+      provider: this.provider,
+      commands: CODEX_CLOUD_SLASH_COMMANDS,
+      createdAt: Date.now(),
+    });
+  }
+
   private buildEnv(): NodeJS.ProcessEnv {
     return {
       ...process.env,
@@ -991,6 +1136,53 @@ function safeJson(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function formatCodexMcpStatus(value: unknown): string {
+  const data = Array.isArray(asRecord(value)?.data) ? asRecord(value)?.data as unknown[] : [];
+  if (data.length === 0) return "Codex did not report any MCP servers.";
+  return data.map((item) => {
+    const server = asRecord(item) ?? {};
+    const name = readString(server.name) ?? "unnamed";
+    const tools = asRecord(server.tools);
+    const toolCount = tools ? Object.keys(tools).length : 0;
+    const authStatus = readString(server.authStatus) ?? "unknown";
+    return `- ${name}: auth=${authStatus}, tools=${toolCount}`;
+  }).join("\n");
+}
+
+function formatCodexSkills(value: unknown): string {
+  const data = Array.isArray(asRecord(value)?.data) ? asRecord(value)?.data as unknown[] : [];
+  const lines: string[] = [];
+  for (const entry of data) {
+    const record = asRecord(entry) ?? {};
+    const cwd = readString(record.cwd);
+    const skills = Array.isArray(record.skills) ? record.skills : [];
+    for (const rawSkill of skills) {
+      const skill = asRecord(rawSkill) ?? {};
+      const name = readString(skill.name);
+      if (!name) continue;
+      const enabled = skill.enabled === false ? "disabled" : "enabled";
+      const description = readString(skill.shortDescription) ?? readString(skill.description);
+      lines.push(`- ${name} (${enabled})${cwd ? ` @ ${cwd}` : ""}${description ? `: ${description}` : ""}`);
+    }
+  }
+  return lines.join("\n") || "Codex did not report any skills for this workspace.";
+}
+
+function formatCodexModels(value: unknown): string {
+  const data = Array.isArray(asRecord(value)?.data) ? asRecord(value)?.data as unknown[] : [];
+  const lines = data
+    .map((item) => {
+      const model = asRecord(item) ?? {};
+      const id = readString(model.id) ?? readString(model.model);
+      if (!id) return null;
+      const displayName = readString(model.displayName);
+      const suffix = model.isDefault === true ? " [default]" : "";
+      return `- ${displayName ?? id} (${id})${suffix}`;
+    })
+    .filter((line): line is string => Boolean(line));
+  return lines.join("\n") || "Codex did not report any available models.";
 }
 
 function normalizeCodexUsage(value: Record<string, unknown> | null): Record<string, number> | undefined {

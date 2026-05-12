@@ -15,6 +15,7 @@ import {
   type SDKMessage,
   type SDKSystemMessage,
   type SDKUserMessage,
+  type SlashCommand,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
   CliAgentProvider,
@@ -22,12 +23,15 @@ import type {
   CliQuestionResponse,
   CliAgentState,
   CliPermissionRequest,
+  CliSlashCommand,
+  CliSlashCommandInfo,
 } from "./types.js";
 
 interface PendingPrompt {
   message: string;
   mode: "build" | "plan";
   pendingSessionId: string | null;
+  localMessageId: string | null;
   promptEvent: PendingPromptEvent;
   resolve: () => void;
   reject: (error: Error) => void;
@@ -37,11 +41,13 @@ interface QueuedSdkPrompt {
   message: string;
   mode: "build" | "plan";
   pendingSessionId: string | null;
+  localMessageId: string | null;
   promptEvent: PendingPromptEvent;
 }
 
 interface PendingPromptEvent {
   text: string;
+  messageId?: string;
   createdAt: number;
 }
 
@@ -56,6 +62,12 @@ interface ClaudeCodeProviderOptions {
 const RECLAIM_COMMAND = "/local";
 const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
 const EXIT_PLAN_MODE_TOOL = "ExitPlanMode";
+const CLAUDE_FALLBACK_SLASH_COMMANDS = new Set([
+  "compact",
+  "rewind",
+  "btw",
+  "memory",
+]);
 
 interface CliQuestionRequest {
   id: string;
@@ -67,6 +79,8 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
   readonly provider = "claude-code" as const;
   private local: ChildProcess | null = null;
   private remoteQuery: Query | null = null;
+  private capabilityProbeQuery: Query | null = null;
+  private capabilityProbeAbortController: AbortController | null = null;
   private remoteAbortController: AbortController | null = null;
   private remoteLoopGeneration = 0;
   private ownerValue: CliAgentState["owner"] = "stopped";
@@ -93,6 +107,10 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
   }>();
   private boundPendingSessionIds = new Set<string>();
   private lastAssistantMessageBySession = new Map<string, string>();
+  private slashCommandsByName = new Map<string, CliSlashCommandInfo>();
+  private mcpServers: Array<{ name: string; status: string }> = [];
+  private skills: string[] = [];
+  private capabilityHydrateGeneration = 0;
   private reclaimingToLocal = false;
   private reclaimBuffer = "";
   private reclaimAttached = false;
@@ -101,6 +119,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
   constructor(private readonly opts: ClaudeCodeProviderOptions) {
     super();
     this.startLocal();
+    this.emitFallbackSlashCommands();
   }
 
   get state(): CliAgentState {
@@ -148,7 +167,11 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
   }
 
   async takeover(): Promise<void> {
-    if (this.ownerValue === "web") return;
+    if (this.ownerValue === "web") {
+      this.emitSlashCommands();
+      void this.hydrateCapabilities(this.remoteLoopGeneration);
+      return;
+    }
     if (this.ownerValue !== "local") {
       throw Object.assign(new Error("local Claude owner is not available"), {
         statusCode: 409,
@@ -174,7 +197,9 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       `\n[adit cloud claude] Web has taken over Claude Code. Type ${RECLAIM_COMMAND} here to reclaim local control.\n`,
     );
     this.attachReclaimInput();
-    void this.runRemoteLoop(++this.remoteLoopGeneration);
+    const generation = ++this.remoteLoopGeneration;
+    void this.runRemoteLoop(generation);
+    void this.hydrateCapabilities(generation);
   }
 
   async releaseToLocal(): Promise<void> {
@@ -182,6 +207,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     if (this.reclaimingToLocal) return;
     this.reclaimingToLocal = true;
     this.detachReclaimInput();
+    this.stopCapabilityProbe();
     process.stderr.write("\n[adit cloud claude] releasing Web control back to local Claude CLI...\n");
     this.finishWebPrompts(new Error("Web control released to local CLI"));
     for (const pending of this.pendingPermissions.values()) {
@@ -256,7 +282,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
 
   async sendPrompt(
     prompt: string,
-    opts: { mode?: "build" | "plan"; pendingSessionId?: string | null } = {},
+    opts: { mode?: "build" | "plan"; pendingSessionId?: string | null; localMessageId?: string | null } = {},
   ): Promise<void> {
     if (this.ownerValue !== "web") {
       throw Object.assign(new Error("Web has not taken over this Claude session"), {
@@ -273,14 +299,54 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
         message: trimmed,
         mode: opts.mode === "plan" ? "plan" : "build",
         pendingSessionId: opts.pendingSessionId ?? null,
+        localMessageId: opts.localMessageId ?? null,
         promptEvent: {
           text: trimmed,
+          ...(opts.localMessageId ? { messageId: opts.localMessageId } : {}),
           createdAt: Date.now(),
         },
         resolve,
         reject,
       });
       this.drainPromptResolvers();
+    });
+  }
+
+  async handleSlashCommand(command: CliSlashCommand): Promise<void> {
+    const name = command.name.trim().replace(/^\//, "");
+    if (!name) return;
+    const normalized = name.toLowerCase();
+
+    if (normalized === "mcp") {
+      this.pushNotice({
+        title: "/mcp",
+        text: formatClaudeMcpServers(this.mcpServers),
+        sessionId: command.sessionId,
+      });
+      return;
+    }
+
+    if (normalized === "skills") {
+      this.pushNotice({
+        title: "/skills",
+        text: formatClaudeSkills(this.skills, this.slashCommandsByName),
+        sessionId: command.sessionId,
+      });
+      return;
+    }
+
+    const hasDynamicCommandList = this.slashCommandsByName.size > 0;
+    const supported = this.slashCommandsByName.has(normalized) ||
+      (!hasDynamicCommandList && CLAUDE_FALLBACK_SLASH_COMMANDS.has(normalized));
+    if (!supported) {
+      throw Object.assign(
+        new Error(`Claude Code did not expose /${name} for this Cloud session.`),
+        { statusCode: 400 },
+      );
+    }
+
+    await this.sendPrompt(command.raw.startsWith("/") ? command.raw : `/${command.raw}`, {
+      mode: "build",
     });
   }
 
@@ -389,6 +455,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
 
   stop(): void {
     this.finishWebPrompts(new Error("Claude provider stopped"));
+    this.stopCapabilityProbe();
     this.remoteAbortController?.abort();
     this.remoteQuery?.close?.();
     this.remoteQuery = null;
@@ -414,6 +481,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
 
   private startLocal(extraArgs: string[] = []): void {
     this.detachReclaimInput();
+    this.stopCapabilityProbe();
     this.reclaimingToLocal = false;
     this.finishWebPrompts(new Error("local mode active"));
     this.remoteQuery = null;
@@ -453,6 +521,77 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     });
   }
 
+  private async hydrateCapabilities(generation: number): Promise<void> {
+    if (this.ownerValue !== "web" || this.remoteLoopGeneration !== generation) return;
+    this.capabilityHydrateGeneration += 1;
+    const hydrateGeneration = this.capabilityHydrateGeneration;
+    const abortController = new AbortController();
+    this.capabilityProbeAbortController = abortController;
+    const probe = query({
+      prompt: this.createCapabilityProbeStream(abortController.signal),
+      options: {
+        cwd: this.opts.cwd,
+        pathToClaudeCodeExecutable: this.opts.bin,
+        env: this.buildEnv(),
+        settings: this.opts.hookSettingsPath,
+        permissionMode: "plan",
+        forkSession: false,
+        abortController,
+        includePartialMessages: false,
+        forwardSubagentText: false,
+      },
+    });
+    this.capabilityProbeQuery = probe;
+
+    try {
+      const [commands, mcpServers] = await Promise.all([
+        probe.supportedCommands().catch(() => [] as SlashCommand[]),
+        probe.mcpServerStatus().catch(() => []),
+      ]);
+      if (
+        this.ownerValue !== "web" ||
+        this.remoteLoopGeneration !== generation ||
+        this.capabilityHydrateGeneration !== hydrateGeneration ||
+        this.capabilityProbeQuery !== probe
+      ) {
+        return;
+      }
+      this.applyClaudeCapabilitySnapshot({
+        commands: commands.map(commandInfoFromClaudeSlashCommand),
+        mcpServers: mcpServers.map((server) => ({
+          name: readString(asRecord(server).name) ?? "",
+          status: readString(asRecord(server).status) ?? "unknown",
+        })).filter((server) => server.name.length > 0),
+      });
+    } catch (error) {
+      if (!abortController.signal.aborted) {
+        const message = error instanceof Error ? error.message : String(error);
+        process.stderr.write(`\n[adit cloud claude] capability hydrate failed: ${message}\n`);
+      }
+    } finally {
+      if (this.capabilityProbeQuery === probe) {
+        this.capabilityProbeQuery = null;
+      }
+      if (this.capabilityProbeAbortController === abortController) {
+        this.capabilityProbeAbortController = null;
+      }
+      abortController.abort();
+      try {
+        probe.close();
+      } catch {}
+    }
+  }
+
+  private stopCapabilityProbe(): void {
+    this.capabilityHydrateGeneration += 1;
+    this.capabilityProbeAbortController?.abort();
+    try {
+      this.capabilityProbeQuery?.close?.();
+    } catch {}
+    this.capabilityProbeQuery = null;
+    this.capabilityProbeAbortController = null;
+  }
+
   private async runRemoteLoop(generation: number): Promise<void> {
     while (this.ownerValue === "web" && this.remoteLoopGeneration === generation) {
       let first: QueuedSdkPrompt | null;
@@ -463,6 +602,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       }
       if (!first || this.ownerValue !== "web" || this.remoteLoopGeneration !== generation) return;
 
+      this.stopCapabilityProbe();
       const pendingSessionId = first.pendingSessionId;
       const pendingClaudeSessionId = pendingSessionId ? randomUUID() : null;
       const canonicalSessionId = pendingSessionId
@@ -491,6 +631,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
         permissionMode,
         ...(permissionMode === "bypassPermissions" ? { allowDangerouslySkipPermissions: true } : {}),
         forkSession: false,
+        enableFileCheckpointing: true,
         abortController,
         includePartialMessages: true,
         forwardSubagentText: true,
@@ -563,6 +704,16 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     yield first;
   }
 
+  private async *createCapabilityProbeStream(
+    signal: AbortSignal,
+  ): AsyncIterable<SDKUserMessage> {
+    if (!signal.aborted) {
+      await new Promise<void>((resolve) => {
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    }
+  }
+
   private nextPrompt(): Promise<QueuedSdkPrompt | null> {
     if (this.promptQueue.length > 0) {
       const item = this.promptQueue.shift();
@@ -572,6 +723,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
         message: item.message,
         mode: item.mode,
         pendingSessionId: item.pendingSessionId,
+        localMessageId: item.localMessageId,
         promptEvent: item.promptEvent,
       });
     }
@@ -590,6 +742,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
         message: item.message,
         mode: item.mode,
         pendingSessionId: item.pendingSessionId,
+        localMessageId: item.localMessageId,
         promptEvent: item.promptEvent,
       });
     }
@@ -629,6 +782,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
 
     if (message.type === "system" && (message as SDKSystemMessage).subtype === "init") {
       const init = message as SDKSystemMessage;
+      this.updateClaudeCapabilities(init);
       if (init.session_id) {
         this.noteSdkSession(init.session_id, {
           keepActiveSession: Boolean(canonicalSessionId && init.session_id !== canonicalSessionId),
@@ -654,6 +808,76 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       this.setBusy(false);
     }
     return sdkSessionId;
+  }
+
+  private updateClaudeCapabilities(init: SDKSystemMessage): void {
+    const commands = Array.isArray(init.slash_commands)
+      ? init.slash_commands
+          .filter((command): command is string => typeof command === "string" && command.trim().length > 0)
+          .map((command) => commandInfoFromClaudeSlashName(command.trim().replace(/^\//, "")))
+      : [];
+    this.applyClaudeCapabilitySnapshot({
+      commands,
+      mcpServers: Array.isArray(init.mcp_servers)
+        ? init.mcp_servers
+            .map((server) => ({
+              name: typeof server.name === "string" ? server.name : "",
+              status: typeof server.status === "string" ? server.status : "unknown",
+            }))
+            .filter((server) => server.name.length > 0)
+        : [],
+      skills: Array.isArray(init.skills)
+        ? init.skills.filter((skill): skill is string => typeof skill === "string" && skill.length > 0)
+        : [],
+    });
+  }
+
+  private applyClaudeCapabilitySnapshot(input: {
+    commands?: CliSlashCommandInfo[];
+    mcpServers?: Array<{ name: string; status: string }>;
+    skills?: string[];
+  }): void {
+    if (input.mcpServers) this.mcpServers = input.mcpServers;
+    if (input.skills) this.skills = input.skills;
+    const commands = input.commands ?? [];
+    if (commands.length > 0) {
+      this.slashCommandsByName = new Map(
+        commands.map((command) => [command.name.toLowerCase(), command]),
+      );
+    }
+    this.emitSlashCommands();
+  }
+
+  private emitFallbackSlashCommands(): void {
+    const fallbackCommands = Array.from(CLAUDE_FALLBACK_SLASH_COMMANDS)
+      .map(commandInfoFromClaudeSlashName);
+    this.pushEvent("slash-commands", {
+      provider: this.provider,
+      commands: [
+        ...fallbackCommands,
+        { name: "mcp", description: describeClaudeSlashCommand("mcp") },
+        { name: "skills", description: describeClaudeSlashCommand("skills") },
+      ],
+      createdAt: Date.now(),
+    });
+  }
+
+  private emitSlashCommands(): void {
+    const commands = this.slashCommandsByName.size > 0
+      ? Array.from(this.slashCommandsByName.values())
+      : [
+          ...Array.from(CLAUDE_FALLBACK_SLASH_COMMANDS).map(commandInfoFromClaudeSlashName),
+          { name: "mcp", description: describeClaudeSlashCommand("mcp") },
+          { name: "skills", description: describeClaudeSlashCommand("skills") },
+        ];
+    this.slashCommandsByName = new Map(
+      commands.map((command) => [command.name.toLowerCase(), command]),
+    );
+    this.pushEvent("slash-commands", {
+      provider: this.provider,
+      commands,
+      createdAt: Date.now(),
+    });
   }
 
   private noteSdkSession(id: string, opts: { keepActiveSession?: boolean } = {}): void {
@@ -710,6 +934,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     this.pushEvent("message", {
       role: "user",
       sessionId,
+      ...(prompt.messageId ? { messageId: prompt.messageId } : {}),
       text: prompt.text,
       createdAt: prompt.createdAt,
     });
@@ -1089,6 +1314,19 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     this.opts.onEvent?.({ type, payload });
   }
 
+  private pushNotice(input: {
+    title: string;
+    text: string;
+    sessionId?: string | null;
+  }): void {
+    this.pushEvent("notice", {
+      title: input.title,
+      text: input.text,
+      sessionId: input.sessionId ?? this.activeSessionId ?? this.resumeSessionId,
+      createdAt: Date.now(),
+    });
+  }
+
   private buildEnv(): NodeJS.ProcessEnv {
     return {
       ...process.env,
@@ -1273,6 +1511,66 @@ function formatToolResult(content: unknown): string {
   } catch {
     return String(content);
   }
+}
+
+function commandInfoFromClaudeSlashName(name: string): CliSlashCommandInfo {
+  const normalized = name.trim().replace(/^\//, "");
+  return {
+    name: normalized,
+    description: describeClaudeSlashCommand(normalized.toLowerCase()),
+  };
+}
+
+function commandInfoFromClaudeSlashCommand(command: SlashCommand): CliSlashCommandInfo {
+  return {
+    name: command.name.trim().replace(/^\//, ""),
+    description: command.description || describeClaudeSlashCommand(command.name.toLowerCase()),
+    argumentHint: command.argumentHint || undefined,
+    aliases: command.aliases,
+  };
+}
+
+function describeClaudeSlashCommand(name: string): string {
+  switch (name) {
+    case "compact":
+      return "Compact the current Claude Code conversation";
+    case "mcp":
+      return "Show Claude MCP server status";
+    case "skills":
+      return "Show Claude skills and slash commands";
+    case "rewind":
+      return "Rewind Claude Code files when checkpointing is available";
+    case "btw":
+      return "Send a Claude Code by-the-way note";
+    case "memory":
+      return "Open Claude Code memory command";
+    default:
+      return "Claude Code slash command";
+  }
+}
+
+function formatClaudeMcpServers(servers: Array<{ name: string; status: string }>): string {
+  if (servers.length === 0) {
+    return "Claude Code has not reported any MCP servers for this Cloud session.";
+  }
+  return servers
+    .map((server) => `- ${server.name}: ${server.status}`)
+    .join("\n");
+}
+
+function formatClaudeSkills(
+  skills: string[],
+  commands: Map<string, CliSlashCommandInfo>,
+): string {
+  const parts: string[] = [];
+  if (skills.length > 0) {
+    parts.push(`Skills:\n${skills.map((skill) => `- ${skill}`).join("\n")}`);
+  }
+  const commandList = Array.from(commands.values());
+  if (commandList.length > 0) {
+    parts.push(`Slash commands:\n${commandList.map((command) => `- /${command.name}`).join("\n")}`);
+  }
+  return parts.join("\n\n") || "Claude Code has not reported any skills or slash commands for this Cloud session.";
 }
 
 function getClaudeProjectDir(cwd: string): string {
