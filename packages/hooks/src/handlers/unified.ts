@@ -76,7 +76,7 @@ export async function dispatchHook(input: NormalizedHookInput): Promise<void> {
     // (ensures data is persisted even if /exit doesn't fire a session-end).
     try {
       await withPerf(dataDir, "network", "cloud-auto-sync", async () => {
-        const cloudModuleName = ["@adit", "cloud"].join("/");
+        const cloudModuleName = ["@varveai", "adit-cloud"].join("/");
         const cloudModule = await import(cloudModuleName) as {
           triggerAutoSync: (db: unknown, projectId: string, options?: { force?: boolean }) => Promise<void>;
         };
@@ -291,7 +291,7 @@ async function handleSessionStart(ctx: HookContext, input: NormalizedHookInput):
   // Spawns a detached background process to sync branches, commits,
   // and documents — won't be killed by the 10s hook timeout.
   try {
-    const cloudModuleName = ["@adit", "cloud"].join("/");
+    const cloudModuleName = ["@varveai", "adit-cloud"].join("/");
     const { triggerProjectLinkSync } = await import(cloudModuleName) as {
       triggerProjectLinkSync: (db: unknown, projectId: string, projectRoot: string) => Promise<void>;
     };
@@ -414,7 +414,7 @@ async function triggerTranscriptUploadIfEnabled(
   if (!input.transcriptPath) return;
 
   try {
-    const cloudModuleName = ["@adit", "cloud"].join("/");
+    const cloudModuleName = ["@varveai", "adit-cloud"].join("/");
     const cloudModule = (await import(cloudModuleName)) as {
       triggerTranscriptUpload: (
         db: unknown,
