@@ -1,5 +1,21 @@
 # @varveai/adit-engine
 
+## 0.3.2
+
+### Patch Changes
+
+- 部分重构
+- Updated dependencies
+  - @varveai/adit-core@0.3.2
+
+## 0.3.1
+
+### Patch Changes
+
+- Daily update
+- Updated dependencies
+  - @varveai/adit-core@0.3.1
+
 ## 0.3.0
 
 ### Minor Changes

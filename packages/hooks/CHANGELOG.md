@@ -1,5 +1,15 @@
 # @varveai/adit-hooks
 
+## 0.3.2
+
+### Patch Changes
+
+- 部分重构
+- Updated dependencies
+  - @varveai/adit-engine@0.3.2
+  - @varveai/adit-cloud@0.3.2
+  - @varveai/adit-core@0.3.2
+
 ## 0.3.0
 
 ### Minor Changes

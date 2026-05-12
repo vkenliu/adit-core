@@ -1,5 +1,13 @@
 # @varveai/adit-plans
 
+## 0.3.2
+
+### Patch Changes
+
+- 部分重构
+- Updated dependencies
+  - @varveai/adit-core@0.3.2
+
 ## 0.3.0
 
 ### Minor Changes

@@ -70,7 +70,7 @@ export async function collectCurrentBranch(cwd: string): Promise<string | null> 
  */
 export async function collectBranches(cwd: string): Promise<GitBranch[]> {
   const result = await runGit(
-    ["branch", "-a", "--format=%(refname:short)|%(objectname:short)"],
+    ["branch", "-a", "--format=%(refname)|%(refname:short)|%(objectname:short)"],
     { cwd },
   );
 
@@ -81,14 +81,12 @@ export async function collectBranches(cwd: string): Promise<GitBranch[]> {
 
   for (const line of result.stdout.trim().split("\n")) {
     if (!line) continue;
-    const [rawName, headSha] = line.split("|");
-    if (!rawName || !headSha) continue;
+    const [fullRef, rawName, headSha] = line.split("|");
+    if (!fullRef || !rawName || !headSha) continue;
+    if (fullRef.startsWith("refs/remotes/") && fullRef.endsWith("/HEAD")) continue;
 
-    // Normalize remote branch names: "origin/main" → "main"
-    let name = rawName.trim();
-    if (name.startsWith("origin/")) {
-      name = name.slice("origin/".length);
-    }
+    const name = normalizeBranchRef(fullRef, rawName);
+    if (!name) continue;
     // Skip HEAD pointer
     if (name === "HEAD" || name.includes("->")) continue;
 
@@ -103,6 +101,24 @@ export async function collectBranches(cwd: string): Promise<GitBranch[]> {
   }
 
   return Array.from(seen.values());
+}
+
+function normalizeBranchRef(fullRef: string, shortRef: string): string | null {
+  const trimmedFullRef = fullRef.trim();
+  const trimmedShortRef = shortRef.trim();
+
+  if (trimmedFullRef.startsWith("refs/heads/")) {
+    return trimmedFullRef.slice("refs/heads/".length);
+  }
+
+  if (trimmedFullRef.startsWith("refs/remotes/")) {
+    const remoteBranch = trimmedFullRef.slice("refs/remotes/".length);
+    const slashIndex = remoteBranch.indexOf("/");
+    if (slashIndex < 0) return null;
+    return remoteBranch.slice(slashIndex + 1);
+  }
+
+  return trimmedShortRef || null;
 }
 
 /**
