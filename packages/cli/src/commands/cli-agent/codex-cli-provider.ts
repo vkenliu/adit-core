@@ -497,7 +497,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
           },
         ],
         cwd: this.opts.cwd,
-        ...codexTurnModeOverrides(item.mode, this.opts.cwd),
+        ...codexTurnModeOverrides(item.mode),
       }));
       const turn = asRecord(result?.turn);
       this.activeTurnId = readString(turn?.id) ?? this.activeTurnId;
@@ -1087,15 +1087,14 @@ export function codexThreadModeOverrides(
   mode: CodexPromptMode,
 ): Record<string, unknown> {
   return {
-    approvalPolicy: mode === "plan" ? "never" : "on-request",
+    approvalPolicy: "never",
     approvalsReviewer: "user",
-    sandbox: mode === "plan" ? "read-only" : "workspace-write",
+    sandbox: mode === "plan" ? "read-only" : "danger-full-access",
   };
 }
 
 export function codexTurnModeOverrides(
   mode: CodexPromptMode,
-  cwd: string,
 ): Record<string, unknown> {
   if (mode === "plan") {
     return {
@@ -1109,14 +1108,10 @@ export function codexTurnModeOverrides(
   }
 
   return {
-    approvalPolicy: "on-request",
+    approvalPolicy: "never",
     approvalsReviewer: "user",
     sandboxPolicy: {
-      type: "workspaceWrite",
-      writableRoots: [cwd],
-      networkAccess: false,
-      excludeTmpdirEnvVar: false,
-      excludeSlashTmp: false,
+      type: "dangerFullAccess",
     },
   };
 }

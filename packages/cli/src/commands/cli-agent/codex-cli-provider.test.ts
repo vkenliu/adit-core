@@ -43,7 +43,7 @@ describe("Codex prompt modes", () => {
       approvalsReviewer: "user",
       sandbox: "read-only",
     });
-    expect(codexTurnModeOverrides("plan", "/repo")).toEqual({
+    expect(codexTurnModeOverrides("plan")).toEqual({
       approvalPolicy: "never",
       approvalsReviewer: "user",
       sandboxPolicy: {
@@ -53,21 +53,17 @@ describe("Codex prompt modes", () => {
     });
   });
 
-  it("restores writable sandbox overrides in build mode", () => {
+  it("uses full-access sandbox overrides in build mode", () => {
     expect(codexThreadModeOverrides("build")).toEqual({
-      approvalPolicy: "on-request",
+      approvalPolicy: "never",
       approvalsReviewer: "user",
-      sandbox: "workspace-write",
+      sandbox: "danger-full-access",
     });
-    expect(codexTurnModeOverrides("build", "/repo")).toEqual({
-      approvalPolicy: "on-request",
+    expect(codexTurnModeOverrides("build")).toEqual({
+      approvalPolicy: "never",
       approvalsReviewer: "user",
       sandboxPolicy: {
-        type: "workspaceWrite",
-        writableRoots: ["/repo"],
-        networkAccess: false,
-        excludeTmpdirEnvVar: false,
-        excludeSlashTmp: false,
+        type: "dangerFullAccess",
       },
     });
   });
