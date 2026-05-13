@@ -265,16 +265,6 @@ export function installCodexHooks(opts: {
   const hooksPath = path.join(codexDir, "hooks.json");
   const configPath = path.join(codexDir, "config.toml");
   const command = `curl -sS --fail --max-time 3 -X POST -H 'content-type: application/json' --data-binary @- '${opts.endpoint}?${opts.marker}' >/dev/null || true`;
-  const hookStates = buildCodexHookStates({
-    hooksPath,
-    command,
-  });
-  const userConfigCleanup = installCodexHookTrustConfig({
-    codexHome: opts.codexHome,
-    marker: opts.marker,
-    states: hookStates,
-  });
-
   const dirExisted = fs.existsSync(codexDir);
   const fileExisted = fs.existsSync(hooksPath);
   const originalContent = fileExisted ? readFile(hooksPath) : null;
@@ -300,12 +290,25 @@ export function installCodexHooks(opts: {
     hooks: [{ type: "command", command, timeout: 30 }],
   }, opts.marker);
 
+  const hookStates = buildCodexHookStates({
+    hooksPath,
+    hooks,
+    marker: opts.marker,
+  });
+  const userConfigCleanup = installCodexHookTrustConfig({
+    codexHome: opts.codexHome,
+    marker: opts.marker,
+    states: hookStates,
+  });
+
   fs.writeFileSync(hooksPath, JSON.stringify(existing, null, 2) + "\n");
-  fs.writeFileSync(configPath, enableCodexHooksFeature(originalConfigContent ?? ""));
+  const installedConfigContent = enableCodexHooksFeature(readFile(configPath) ?? "");
+  fs.writeFileSync(configPath, installedConfigContent);
 
   return {
     settingsPath: hooksPath,
     cleanup: () => {
+      let hookConfigChangedByOthers = false;
       try {
         const current = parseObject(readFile(hooksPath));
         if (!current) {
@@ -324,6 +327,10 @@ export function installCodexHooks(opts: {
             }
             if (Object.keys(currentHooks).length === 0) delete current.hooks;
           }
+          hookConfigChangedByOthers = !sameJsonObject(
+            stripCloudCodexHookEntries(parseObject(originalContent) ?? {}),
+            stripCloudCodexHookEntries(current),
+          );
 
           if (Object.keys(current).length === 0 && !fileExisted) {
             try {
@@ -342,12 +349,14 @@ export function installCodexHooks(opts: {
         restoreCodexHooks({ hooksPath, codexDir, dirExisted, fileExisted, originalContent });
       } finally {
         userConfigCleanup();
-        restoreCodexConfig({
+        cleanupCodexConfig({
           configPath,
           codexDir,
           dirExisted,
           configFileExisted,
           originalConfigContent,
+          installedConfigContent,
+          hookConfigChangedByOthers,
         });
       }
     },
@@ -442,7 +451,8 @@ interface CodexHookState {
 
 function buildCodexHookStates(input: {
   hooksPath: string;
-  command: string;
+  hooks: Record<string, unknown>;
+  marker: string;
 }): CodexHookState[] {
   const hooksPath = path.resolve(input.hooksPath);
   const definitions = [
@@ -452,15 +462,31 @@ function buildCodexHookStates(input: {
     { eventName: "Stop", keyLabel: "stop" },
   ];
 
-  return definitions.map((definition) => {
-    const key = `${hooksPath}:${definition.keyLabel}:0:0`;
-    const trustedHash = codexHookTrustedHash({
-      eventName: definition.keyLabel,
-      matcher: definition.matcher,
-      command: input.command,
-      timeout: 30,
-    });
-    return { key, trustedHash };
+  return definitions.flatMap((definition) => {
+    const entries = input.hooks[definition.eventName];
+    if (!Array.isArray(entries)) return [];
+
+    const states: CodexHookState[] = [];
+    for (let entryIndex = 0; entryIndex < entries.length; entryIndex++) {
+      const entry = asObject(entries[entryIndex]);
+      if (!entry || !codexEntryHasMarker(entry, input.marker)) continue;
+      const hookEntries = entry.hooks;
+      if (!Array.isArray(hookEntries)) continue;
+      for (let hookIndex = 0; hookIndex < hookEntries.length; hookIndex++) {
+        const hook = asObject(hookEntries[hookIndex]);
+        if (!hook || typeof hook.command !== "string") continue;
+        states.push({
+          key: `${hooksPath}:${definition.keyLabel}:${entryIndex}:${hookIndex}`,
+          trustedHash: codexHookTrustedHash({
+            eventName: definition.keyLabel,
+            matcher: typeof entry.matcher === "string" ? entry.matcher : definition.matcher,
+            command: hook.command,
+            timeout: typeof hook.timeout === "number" ? hook.timeout : 30,
+          }),
+        });
+      }
+    }
+    return states;
   });
 }
 
@@ -523,6 +549,7 @@ function appendCodexHookTrustBlock(
   const cleaned = stripAditCodexHookTrustBlocks(text, {
     marker,
     keys: states.map((state) => state.key),
+    trustedHashes: states.map((state) => state.trustedHash),
   }).replace(/\s+$/u, "");
   const block = [
     `# >>> adit-cloud-codex ${marker}`,
@@ -539,14 +566,39 @@ function appendCodexHookTrustBlock(
 
 function stripAditCodexHookTrustBlocks(
   text: string,
-  opts?: { marker?: string; keys?: string[] },
+  opts?: { marker?: string; keys?: string[]; trustedHashes?: string[] },
 ): string {
   const lines = text.split(/\r?\n/u);
   const kept: string[] = [];
   const keys = opts?.keys ?? [];
+  const trustedHashes = opts?.trustedHashes ?? [];
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index] ?? "";
     if (!/^\s*# >>> adit-cloud-codex\b/u.test(line)) {
+      const stateKey = parseHookStateTableKey(line);
+      if (stateKey !== null) {
+        const block = [line];
+        while (index + 1 < lines.length) {
+          index++;
+          const blockLine = lines[index] ?? "";
+          block.push(blockLine);
+          const nextLine = lines[index + 1] ?? "";
+          if (/^\s*\[[^\]]+\]\s*$/u.test(nextLine)) break;
+        }
+        const blockText = block.join("\n");
+        const matchesKey = keys.includes(stateKey);
+        const matchesTrustedHash = trustedHashes.some((hash) =>
+          blockText.includes(`trusted_hash = ${JSON.stringify(hash)}`),
+        );
+        if (matchesKey || matchesTrustedHash) {
+          continue;
+        }
+        kept.push(...block);
+        continue;
+      }
+      if (opts?.marker && /^\s*# <<< adit-cloud-codex\b/u.test(line) && line.includes(opts.marker)) {
+        continue;
+      }
       kept.push(line);
       continue;
     }
@@ -569,6 +621,17 @@ function stripAditCodexHookTrustBlocks(
     kept.push(...block);
   }
   return kept.join("\n");
+}
+
+function parseHookStateTableKey(line: string): string | null {
+  const match = line.match(/^\s*\[hooks\.state\.("(?:\\.|[^"\\])*")\]\s*$/u);
+  if (!match?.[1]) return null;
+  try {
+    const parsed = JSON.parse(match[1]);
+    return typeof parsed === "string" ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 function codexHookTrustedHash(input: {
@@ -602,13 +665,24 @@ function canonicalJson(value: unknown): unknown {
   );
 }
 
-function restoreCodexConfig(opts: {
+function cleanupCodexConfig(opts: {
   configPath: string;
   codexDir: string;
   dirExisted: boolean;
   configFileExisted: boolean;
   originalConfigContent: string | null;
+  installedConfigContent: string;
+  hookConfigChangedByOthers: boolean;
 }): void {
+  if (opts.hookConfigChangedByOthers) {
+    return;
+  }
+
+  const current = readFile(opts.configPath);
+  if (current === null || current !== opts.installedConfigContent) {
+    return;
+  }
+
   if (opts.configFileExisted && opts.originalConfigContent !== null) {
     try {
       fs.writeFileSync(opts.configPath, opts.originalConfigContent);
@@ -616,14 +690,50 @@ function restoreCodexConfig(opts: {
     return;
   }
 
-  try {
-    fs.unlinkSync(opts.configPath);
-  } catch {}
+  if (!opts.configFileExisted && isOnlyCodexHooksFeatureConfig(current)) {
+    try {
+      fs.unlinkSync(opts.configPath);
+    } catch {}
+  }
   if (!opts.dirExisted) {
     try {
       fs.rmdirSync(opts.codexDir);
     } catch {}
   }
+}
+
+function isOnlyCodexHooksFeatureConfig(text: string): boolean {
+  const normalized = text.replace(/\s+$/u, "");
+  return normalized === "[features]\nhooks = true";
+}
+
+function stripCloudCodexHookEntries(input: Record<string, unknown>): Record<string, unknown> {
+  const next: Record<string, unknown> = { ...input };
+  const hooks = asObject(next.hooks);
+  if (!hooks) return next;
+
+  const nextHooks: Record<string, unknown> = {};
+  for (const [eventName, entries] of Object.entries(hooks)) {
+    if (!Array.isArray(entries)) {
+      nextHooks[eventName] = entries;
+      continue;
+    }
+    const filtered = entries.filter((entry) => !codexEntryHasMarker(entry, "from=adit-cloud-codex-"));
+    if (filtered.length > 0) {
+      nextHooks[eventName] = filtered;
+    }
+  }
+
+  if (Object.keys(nextHooks).length > 0) {
+    next.hooks = nextHooks;
+  } else {
+    delete next.hooks;
+  }
+  return next;
+}
+
+function sameJsonObject(left: Record<string, unknown>, right: Record<string, unknown>): boolean {
+  return JSON.stringify(canonicalJson(left)) === JSON.stringify(canonicalJson(right));
 }
 
 function escapeRegExp(value: string): string {

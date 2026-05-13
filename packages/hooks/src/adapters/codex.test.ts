@@ -322,6 +322,63 @@ describe("Codex CLI Hook Chaining", () => {
     expect(result.checks.every((c) => c.ok)).toBe(true);
   });
 
+  it("replaces existing bare trusted hook states when reinstalling", async () => {
+    await codexAdapter.installHooks(projectRoot, "npx adit-hook");
+    const userConfigPath = join(codexHome, "config.toml");
+    const firstUserConfig = readFileSync(userConfigPath, "utf-8");
+    const keyMatch = firstUserConfig.match(/\[hooks\.state\.(".*?:stop:0:0")\]/u);
+    expect(keyMatch?.[1]).toBeDefined();
+    const key = keyMatch?.[1] ?? "";
+
+    writeFileSync(
+      userConfigPath,
+      [
+        "[hooks.state]",
+        "",
+        `[hooks.state.${key}]`,
+        "trusted_hash = \"sha256:stale\"",
+        "",
+      ].join("\n"),
+    );
+
+    await codexAdapter.installHooks(projectRoot, "npx adit-hook");
+    const userConfig = readFileSync(userConfigPath, "utf-8");
+
+    expect(userConfig.match(new RegExp(`\\[hooks\\.state\\.${key.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}\\]`, "gu"))).toHaveLength(1);
+    expect(userConfig).toContain("enabled = true");
+    expect(userConfig).not.toContain("sha256:stale");
+    const result = await codexAdapter.validateInstallation(projectRoot);
+    expect(result.valid).toBe(true);
+  });
+
+  it("removes stale trusted hook states for the same command hash", async () => {
+    await codexAdapter.installHooks(projectRoot, "npx adit-hook");
+    const userConfigPath = join(codexHome, "config.toml");
+    const firstUserConfig = readFileSync(userConfigPath, "utf-8");
+    const stopHashMatch = firstUserConfig.match(/stop:0:0"\]\nenabled = true\ntrusted_hash = "(sha256:[^"]+)"/u);
+    expect(stopHashMatch?.[1]).toBeDefined();
+    const stopHash = stopHashMatch?.[1] ?? "";
+
+    writeFileSync(
+      userConfigPath,
+      [
+        "[hooks.state]",
+        "",
+        `[hooks.state.${JSON.stringify(`${projectRoot}/.codex/hooks.json:stop:1:0`)}]`,
+        "enabled = true",
+        `trusted_hash = ${JSON.stringify(stopHash)}`,
+        "",
+      ].join("\n"),
+    );
+
+    await codexAdapter.installHooks(projectRoot, "npx adit-hook");
+    const userConfig = readFileSync(userConfigPath, "utf-8");
+
+    expect(userConfig).not.toContain(":stop:1:0");
+    expect(userConfig).toContain(":stop:0:0");
+    expect(userConfig.split(stopHash).length - 1).toBe(1);
+  });
+
   describe("Hook mappings", () => {
     it("has exactly 4 hook mappings", () => {
       expect(codexAdapter.hookMappings).toHaveLength(4);

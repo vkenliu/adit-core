@@ -457,6 +457,7 @@ function appendCodexHookTrustBlock(
   const cleaned = stripAditCodexHookTrustBlocks(text, {
     marker,
     keys: states.map((state) => state.key),
+    trustedHashes: states.map((state) => state.trustedHash),
   }).replace(/\s+$/u, "");
   const block = [
     `# >>> adit-codex-hooks ${marker}`,
@@ -473,14 +474,39 @@ function appendCodexHookTrustBlock(
 
 function stripAditCodexHookTrustBlocks(
   text: string,
-  opts?: { marker?: string; keys?: string[] },
+  opts?: { marker?: string; keys?: string[]; trustedHashes?: string[] },
 ): string {
   const lines = text.split(/\r?\n/u);
   const kept: string[] = [];
   const keys = opts?.keys ?? [];
+  const trustedHashes = opts?.trustedHashes ?? [];
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index] ?? "";
     if (!/^\s*# >>> adit-codex-hooks\b/u.test(line)) {
+      const stateKey = parseHookStateTableKey(line);
+      if (stateKey !== null) {
+        const block = [line];
+        while (index + 1 < lines.length) {
+          index++;
+          const blockLine = lines[index] ?? "";
+          block.push(blockLine);
+          const nextLine = lines[index + 1] ?? "";
+          if (/^\s*\[[^\]]+\]\s*$/u.test(nextLine)) break;
+        }
+        const blockText = block.join("\n");
+        const matchesKey = keys.includes(stateKey);
+        const matchesTrustedHash = trustedHashes.some((hash) =>
+          blockText.includes(`trusted_hash = ${JSON.stringify(hash)}`),
+        );
+        if (matchesKey || matchesTrustedHash) {
+          continue;
+        }
+        kept.push(...block);
+        continue;
+      }
+      if (opts?.marker && /^\s*# <<< adit-codex-hooks\b/u.test(line) && line.includes(opts.marker)) {
+        continue;
+      }
       kept.push(line);
       continue;
     }
@@ -503,6 +529,17 @@ function stripAditCodexHookTrustBlocks(
     kept.push(...block);
   }
   return kept.join("\n");
+}
+
+function parseHookStateTableKey(line: string): string | null {
+  const match = line.match(/^\s*\[hooks\.state\.("(?:\\.|[^"\\])*")\]\s*$/u);
+  if (!match?.[1]) return null;
+  try {
+    const parsed = JSON.parse(match[1]);
+    return typeof parsed === "string" ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 function hasTrustedHookState(text: string, state: CodexHookState): boolean {

@@ -206,4 +206,133 @@ describe("installCodexHooks", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("trusts cloud hooks at their final index when plugin hooks already exist", () => {
+    const dir = tempDir();
+    const codexHome = join(dir, "codex-home");
+    try {
+      const codexDir = join(dir, ".codex");
+      const hooksPath = join(codexDir, "hooks.json");
+      mkdirSync(codexDir, { recursive: true });
+      writeFileSync(
+        hooksPath,
+        JSON.stringify(
+          {
+            hooks: {
+              PostToolUse: [
+                {
+                  matcher: "Bash",
+                  hooks: [
+                    {
+                      type: "command",
+                      command: "CODEX=1 /usr/local/bin/adit-hook notification",
+                      timeout: 30,
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+          null,
+          2,
+        ) + "\n",
+      );
+
+      const installed = installCodexHooks({
+        cwd: dir,
+        codexHome,
+        endpoint: "http://127.0.0.1:1234/hook",
+        marker: "from=adit-cloud-codex-test",
+      });
+
+      const userConfig = readFileSync(join(codexHome, "config.toml"), "utf8");
+      expect(userConfig).toContain(".codex/hooks.json:post_tool_use:1:0");
+      expect(userConfig).not.toContain(".codex/hooks.json:post_tool_use:0:0");
+
+      installed.cleanup();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps plugin Codex hooks installed during a cloud relay session", () => {
+    const dir = tempDir();
+    const codexHome = join(dir, "codex-home");
+    try {
+      const installed = installCodexHooks({
+        cwd: dir,
+        codexHome,
+        endpoint: "http://127.0.0.1:1234/hook",
+        marker: "from=adit-cloud-codex-test",
+      });
+
+      const hooksPath = join(dir, ".codex", "hooks.json");
+      const hooksConfig = JSON.parse(readFileSync(hooksPath, "utf8"));
+      const pluginCommand = "CODEX=1 /usr/local/bin/adit-hook prompt-submit";
+      hooksConfig.hooks.UserPromptSubmit.push({
+        hooks: [{ type: "command", command: pluginCommand, timeout: 30 }],
+      });
+      writeFileSync(hooksPath, JSON.stringify(hooksConfig, null, 2) + "\n");
+
+      const userConfigPath = join(codexHome, "config.toml");
+      writeFileSync(
+        userConfigPath,
+        `${readFileSync(userConfigPath, "utf8")}\n`
+          + "# >>> adit-codex-hooks plugin\n"
+          + "[hooks.state.\"/tmp/project/.codex/hooks.json:user_prompt_submit:1:0\"]\n"
+          + "enabled = true\n"
+          + "trusted_hash = \"sha256:plugin\"\n"
+          + "# <<< adit-codex-hooks plugin\n",
+      );
+
+      installed.cleanup();
+
+      const cleanedHooks = JSON.parse(readFileSync(hooksPath, "utf8"));
+      expect(cleanedHooks.hooks.UserPromptSubmit).toHaveLength(1);
+      expect(cleanedHooks.hooks.UserPromptSubmit[0].hooks[0].command).toBe(pluginCommand);
+      expect(readFileSync(join(dir, ".codex", "config.toml"), "utf8")).toContain("hooks = true");
+
+      const cleanedUserConfig = readFileSync(userConfigPath, "utf8");
+      expect(cleanedUserConfig).not.toContain("adit-cloud-codex");
+      expect(cleanedUserConfig).toContain("adit-codex-hooks plugin");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("replaces existing bare cloud trusted hook states when installing", () => {
+    const dir = tempDir();
+    const codexHome = join(dir, "codex-home");
+    try {
+      mkdirSync(codexHome, { recursive: true });
+      const stateKey = join(dir, ".codex", "hooks.json") + ":post_tool_use:0:0";
+      const tableHeader = `[hooks.state.${JSON.stringify(stateKey)}]`;
+      writeFileSync(
+        join(codexHome, "config.toml"),
+        [
+          "[hooks.state]",
+          "",
+          tableHeader,
+          "trusted_hash = \"sha256:stale\"",
+          "",
+        ].join("\n"),
+      );
+
+      const installed = installCodexHooks({
+        cwd: dir,
+        codexHome,
+        endpoint: "http://127.0.0.1:1234/hook",
+        marker: "from=adit-cloud-codex-test",
+      });
+
+      const userConfig = readFileSync(join(codexHome, "config.toml"), "utf8");
+      expect(userConfig.split(tableHeader).length - 1).toBe(1);
+      expect(userConfig).toContain("enabled = true");
+      expect(userConfig).not.toContain("sha256:stale");
+
+      installed.cleanup();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
