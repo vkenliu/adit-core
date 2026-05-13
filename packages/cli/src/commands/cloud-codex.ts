@@ -365,7 +365,7 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
     ws.connect();
 
     let stopping = false;
-    let lastLocalTranscriptDrainAt = 0;
+    let lastTranscriptDrainAt = 0;
     const cleanup = (signal: string) => {
       if (stopping) return;
       stopping = true;
@@ -392,12 +392,8 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
           ws.sendHeartbeat(provider.state);
           const state = provider.state;
           const now = Date.now();
-          if (
-            state.owner === "local" &&
-            state.activeSessionId &&
-            now - lastLocalTranscriptDrainAt > 1000
-          ) {
-            lastLocalTranscriptDrainAt = now;
+          if (state.activeSessionId && now - lastTranscriptDrainAt > 1000) {
+            lastTranscriptDrainAt = now;
             enqueueEvents(transcriptSync.drainSession(state.activeSessionId));
           }
           if (eventQueue.length > 0) {

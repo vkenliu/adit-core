@@ -1,5 +1,11 @@
 import fs from "node:fs";
 import type { CliAgentRelayEvent } from "./types.js";
+import {
+  CODEX_UPDATE_PLAN_TOOL,
+  type CodexUpdatePlanSnapshot,
+  normalizeCodexUpdatePlanInput,
+  parseCodexToolInput,
+} from "./codex-plan-normalizer.js";
 
 interface NoteHookInput {
   eventType: string;
@@ -92,19 +98,21 @@ export class CodexTranscriptSync {
   toolEvents(sessionId: string | null | undefined, body: Record<string, unknown>): CliAgentRelayEvent[] {
     if (!sessionId) return [];
     const toolName = readString(body.tool_name) ?? "tool";
-    const toolInput = asRecord(body.tool_input) ?? {};
+    const toolInput = parseCodexToolInput(body.tool_input);
     const toolResponse = body.tool_response;
     const key = `${toolName}:${safeJson(toolInput)}:${safeJson(toolResponse)}`;
     const session = this.ensureSession(sessionId);
     if (session.seenHookToolResults.has(key)) return [];
     session.seenHookToolResults.add(key);
     const createdAt = Date.now();
-    return [{
+    const toolUseId = `codex-local-tool-${hashText(key)}`;
+    const messageId = session.lastAssistantMessageId ?? `codex-local-tools-${sessionId}`;
+    const events: CliAgentRelayEvent[] = [{
       type: "tool",
       payload: {
         sessionId,
-        messageId: session.lastAssistantMessageId ?? `codex-local-tools-${sessionId}`,
-        toolUseId: `codex-local-tool-${hashText(key)}`,
+        messageId,
+        toolUseId,
         toolName,
         input: toolInput,
         output: safeJson(toolResponse),
@@ -112,6 +120,19 @@ export class CodexTranscriptSync {
         createdAt,
       },
     }];
+    const updatePlan = toolName === CODEX_UPDATE_PLAN_TOOL
+      ? normalizeCodexUpdatePlanInput(toolInput)
+      : null;
+    if (updatePlan) {
+      events.push(updatePlanEvent({
+        sessionId,
+        messageId,
+        toolUseId,
+        updatePlan,
+        createdAt,
+      }));
+    }
+    return events;
   }
 
   private ensureSession(id: string): CodexSessionState {
@@ -283,7 +304,8 @@ export class CodexTranscriptSync {
       const toolUseId = readString(payload.call_id) ??
         makeToolUseId(session.id, obj, payload);
       const toolName = readString(payload.name) ?? "tool";
-      const input = parseToolInput(payload.arguments ?? payload.input);
+      const input = parseCodexToolInput(payload.arguments ?? payload.input);
+      const messageId = session.lastAssistantMessageId ?? `codex-local-tools-${session.id}`;
       this.pushIfNew(
         session,
         obj,
@@ -295,7 +317,7 @@ export class CodexTranscriptSync {
           type: "tool",
           payload: {
             sessionId: session.id,
-            messageId: session.lastAssistantMessageId ?? `codex-local-tools-${session.id}`,
+            messageId,
             toolUseId,
             toolName,
             input,
@@ -304,6 +326,26 @@ export class CodexTranscriptSync {
           },
         },
       );
+      const updatePlan = toolName === CODEX_UPDATE_PLAN_TOOL
+        ? normalizeCodexUpdatePlanInput(input)
+        : null;
+      if (updatePlan) {
+        this.pushIfNew(
+          session,
+          obj,
+          "todos-updated",
+          1,
+          `${toolUseId}:${safeJson(updatePlan.todos)}:${updatePlan.explanation ?? ""}`,
+          events,
+          updatePlanEvent({
+            sessionId: session.id,
+            messageId,
+            toolUseId,
+            updatePlan,
+            createdAt: timestamp,
+          }),
+        );
+      }
       return events;
     }
 
@@ -370,18 +412,27 @@ export class CodexRelayEventDeduper {
   private readonly messageAlias = new Map<string, string>();
   private readonly seenAssistantMessageIds = new Set<string>();
   private readonly seenUsageKeys = new Set<string>();
+  private readonly seenTodoSnapshotKeys = new Set<string>();
 
   filter(event: CliAgentRelayEvent): CliAgentRelayEvent | null {
     if (event.type === "message") {
       return this.filterMessage(event);
     }
 
-    if (event.type === "assistant-delta" || event.type === "reasoning" || event.type === "tool") {
+    if (
+      event.type === "assistant-delta" ||
+      event.type === "reasoning" ||
+      event.type === "tool"
+    ) {
       return this.rewriteMessageScopedEvent(event);
     }
 
     if (event.type === "usage") {
       return this.filterUsage(event);
+    }
+
+    if (event.type === "todos.updated") {
+      return this.filterTodoSnapshot(event);
     }
 
     return event;
@@ -474,6 +525,27 @@ export class CodexRelayEventDeduper {
     this.seenUsageKeys.add(key);
     return rewritten;
   }
+
+  private filterTodoSnapshot(event: CliAgentRelayEvent): CliAgentRelayEvent | null {
+    const rewritten = this.rewriteMessageScopedEvent(event);
+    if (!rewritten) return null;
+
+    const sessionId = readString(rewritten.payload.sessionId);
+    if (!sessionId) return rewritten;
+
+    const scopeId = readString(rewritten.payload.scopeId) ?? "main";
+    const turn = this.turnBySession.get(sessionId) ?? 0;
+    const key = [
+      sessionId,
+      turn,
+      scopeId,
+      safeJson(rewritten.payload.todos),
+      readString(rewritten.payload.explanation) ?? "",
+    ].join(":");
+    if (this.seenTodoSnapshotKeys.has(key)) return null;
+    this.seenTodoSnapshotKeys.add(key);
+    return rewritten;
+  }
 }
 
 function readString(value: unknown): string | null {
@@ -558,24 +630,30 @@ function makeToolUseId(
   return `codex-local-tool-${hashText(`${sessionId}:${String(obj.timestamp ?? "")}:${safeJson(payload)}`)}`;
 }
 
-function parseToolInput(value: unknown): Record<string, unknown> {
-  if (isRecord(value)) return value;
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value) as unknown;
-      if (isRecord(parsed)) return parsed;
-      return { value: parsed };
-    } catch {
-      return { value };
-    }
-  }
-  if (value === undefined) return {};
-  return { value };
-}
-
 function formatToolOutput(value: unknown): string {
   if (typeof value === "string") return truncateText(value);
   return safeJson(value);
+}
+
+function updatePlanEvent(input: {
+  sessionId: string;
+  messageId: string;
+  toolUseId: string;
+  updatePlan: CodexUpdatePlanSnapshot;
+  createdAt: number;
+}): CliAgentRelayEvent {
+  return {
+    type: "todos.updated",
+    payload: {
+      sessionId: input.sessionId,
+      messageId: input.messageId,
+      toolUseId: input.toolUseId,
+      scopeId: "main",
+      todos: input.updatePlan.todos,
+      ...(input.updatePlan.explanation ? { explanation: input.updatePlan.explanation } : {}),
+      createdAt: input.createdAt,
+    },
+  };
 }
 
 function safeJson(value: unknown): string {

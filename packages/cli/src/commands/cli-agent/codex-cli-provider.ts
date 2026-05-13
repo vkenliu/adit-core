@@ -13,6 +13,11 @@ import {
   CodexAppServerClient,
   type CodexJsonRpcMessage,
 } from "./codex-app-server-client.js";
+import {
+  CODEX_UPDATE_PLAN_TOOL,
+  normalizeCodexUpdatePlanInput,
+  parseCodexToolInput,
+} from "./codex-plan-normalizer.js";
 
 interface PendingPrompt {
   message: string;
@@ -858,15 +863,27 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       return;
     }
 
-    if (type === "mcpToolCall" || type === "dynamicToolCall" || type === "webSearch") {
-      const toolName = readString(item.tool) ?? readString(item.server) ?? type;
+    if (isCodexToolItemType(type)) {
+      const toolName = readString(item.tool) ??
+        readString(item.name) ??
+        readString(item.toolName) ??
+        readString(item.server) ??
+        type;
       const status = readString(item.status);
+      const messageId = this.lastAssistantMessageBySession.get(sessionId) ?? `codex-tools-${sessionId}`;
+      const input = item.arguments !== undefined
+        ? parseCodexToolInput(item.arguments)
+        : item.input !== undefined
+          ? parseCodexToolInput(item.input)
+          : item.toolInput !== undefined
+            ? parseCodexToolInput(item.toolInput)
+            : { query: item.query };
       this.pushEvent("tool", {
         sessionId,
-        messageId: this.lastAssistantMessageBySession.get(sessionId) ?? `codex-tools-${sessionId}`,
+        messageId,
         toolUseId: id,
         toolName,
-        input: asRecord(item.arguments) ?? { query: item.query },
+        input,
         output: item.result !== undefined ? safeJson(item.result) : undefined,
         error: item.error !== undefined ? safeJson(item.error) : undefined,
         status: opts.running || status === "inProgress" || status === "running"
@@ -874,7 +891,36 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
           : item.error ? "error" : "completed",
         createdAt,
       });
+      if (toolName === CODEX_UPDATE_PLAN_TOOL) {
+        this.emitUpdatePlan({
+          sessionId,
+          messageId,
+          toolUseId: id,
+          input,
+          createdAt,
+        });
+      }
     }
+  }
+
+  private emitUpdatePlan(input: {
+    sessionId: string;
+    messageId: string;
+    toolUseId: string;
+    input: unknown;
+    createdAt: number;
+  }): void {
+    const snapshot = normalizeCodexUpdatePlanInput(input.input);
+    if (!snapshot) return;
+    this.pushEvent("todos.updated", {
+      sessionId: input.sessionId,
+      messageId: input.messageId,
+      toolUseId: input.toolUseId,
+      scopeId: "main",
+      todos: snapshot.todos,
+      ...(snapshot.explanation ? { explanation: snapshot.explanation } : {}),
+      createdAt: input.createdAt,
+    });
   }
 
   private bindPendingSession(pendingSessionId: string, sessionId: string): void {
@@ -1239,6 +1285,16 @@ function approvalToolName(method: string, params: Record<string, unknown>): stri
     return "CodexPermissions";
   }
   return readString(params.toolName) ?? "Codex";
+}
+
+function isCodexToolItemType(type: string): boolean {
+  return type === "mcpToolCall" ||
+    type === "dynamicToolCall" ||
+    type === "webSearch" ||
+    type === "functionCall" ||
+    type === "function_call" ||
+    type === "customToolCall" ||
+    type === "custom_tool_call";
 }
 
 function buildApprovalResponse(
