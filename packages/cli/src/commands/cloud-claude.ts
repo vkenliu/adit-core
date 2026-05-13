@@ -13,7 +13,11 @@ import {
 } from "@varveai/adit-cloud";
 import { ClaudeCodeProvider } from "./cli-agent/claude-code-provider.js";
 import { ClaudeTranscriptSync } from "./cli-agent/claude-transcript-sync.js";
-import { installClaudeHooks, type InstalledHooks } from "./cli-agent/hooks-bootstrap.js";
+import {
+  cleanupStaleClaudeCloudSettings,
+  installClaudeHooks,
+  type InstalledHooks,
+} from "./cli-agent/hooks-bootstrap.js";
 import { startCliAgentHookServer, type HookServer } from "./cli-agent/hook-server.js";
 import { CliAgentRelayWebSocket } from "./cli-agent/relay-client.js";
 import type { CliAgentRelayEvent, RelayCommand } from "./cli-agent/types.js";
@@ -46,6 +50,11 @@ function readStringMatrix(value: unknown): string[][] {
       ? item.filter((answer): answer is string => typeof answer === "string")
       : [],
   );
+}
+
+function readStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string" && item.length > 0);
 }
 
 function readHookModel(body: Record<string, unknown>): string | null {
@@ -95,11 +104,37 @@ async function processCommand(
     if (!text) return;
     const sessionId = readString(command.payload.sessionId);
     const pendingSessionId = readString(command.payload.pendingSessionId);
+    const localMessageId = readString(command.payload.localMessageId);
     const mode = readString(command.payload.mode) === "plan" ? "plan" : "build";
     if (!pendingSessionId && sessionId && provider.state.activeSessionId !== sessionId) {
       await provider.switchSession(sessionId);
     }
-    await provider.sendPrompt(text, { mode, pendingSessionId });
+    await provider.sendPrompt(text, { mode, pendingSessionId, localMessageId });
+    return;
+  }
+
+  if (command.type === "slash-command") {
+    const name = readString(command.payload.command) ?? readString(command.payload.name);
+    if (!name) return;
+    await provider.handleSlashCommand({
+      name,
+      args: readStringArray(command.payload.args),
+      raw: readString(command.payload.raw) ?? `/${name}`,
+      sessionId: readString(command.payload.sessionId),
+    });
+    return;
+  }
+
+  if (command.type === "rewind") {
+    const id = readString(command.payload.id);
+    if (!id) return;
+    await provider.answerRewind?.({
+      id,
+      sessionId: readString(command.payload.sessionId),
+      userMessageId: readString(command.payload.userMessageId),
+      dryRun: command.payload.dryRun === true,
+      rejected: command.payload.rejected === true,
+    });
     return;
   }
 
@@ -203,7 +238,7 @@ export async function cloudClaudeCommand(opts?: CloudClaudeOptions): Promise<voi
   const client = new CloudClient(serverUrl, credentials);
   const terminalId = randomUUID();
   const projectName = basename(config.projectRoot);
-  const panelName = `Claude - ${projectName}`;
+  const panelName = projectName;
 
   try {
     await client.get("/api/sync/status");
@@ -222,6 +257,7 @@ export async function cloudClaudeCommand(opts?: CloudClaudeOptions): Promise<voi
   const transcriptSync = new ClaudeTranscriptSync();
 
   try {
+    await cleanupStaleClaudeCloudSettings({ cwd: config.projectRoot });
     hookServer = await startCliAgentHookServer();
     const hookSettingsPath = join(
       config.projectRoot,
@@ -322,21 +358,44 @@ export async function cloudClaudeCommand(opts?: CloudClaudeOptions): Promise<voi
     ws.connect();
 
     let stopping = false;
-    const cleanup = (signal: string) => {
-      if (stopping) return;
-      stopping = true;
-      console.log(`\n[adit cloud claude] received ${signal}, shutting down...`);
-      provider?.stop();
-      ws.close();
+    let resourcesCleaned = false;
+    const cleanupResources = () => {
+      if (resourcesCleaned) return;
+      resourcesCleaned = true;
+      try {
+        provider?.stop();
+      } catch {}
+      try {
+        ws.close();
+      } catch {}
       try {
         installedHooks?.cleanup();
       } catch {}
-      void hookServer?.close().catch(() => undefined);
-      setTimeout(() => process.exit(0), 100);
+      try {
+        void hookServer?.close().catch(() => undefined);
+      } catch {}
+    };
+    const cleanup = (signal: string, exitCode = 0) => {
+      if (stopping) return;
+      stopping = true;
+      process.exitCode = exitCode;
+      console.log(`\n[adit cloud claude] received ${signal}, shutting down...`);
+      cleanupResources();
+      setTimeout(() => process.exit(exitCode), 100);
     };
 
     process.on("SIGINT", () => cleanup("SIGINT"));
     process.on("SIGTERM", () => cleanup("SIGTERM"));
+    process.on("SIGHUP", () => cleanup("SIGHUP"));
+    process.on("exit", cleanupResources);
+    process.on("uncaughtException", (error) => {
+      printCloudError("[adit cloud claude] uncaught exception", error);
+      cleanup("uncaughtException", 1);
+    });
+    process.on("unhandledRejection", (error) => {
+      printCloudError("[adit cloud claude] unhandled rejection", error);
+      cleanup("unhandledRejection", 1);
+    });
 
     provider.on("exit", () => {
       cleanup("Claude CLI exit");

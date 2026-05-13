@@ -25,6 +25,28 @@ export interface CliQuestionResponse {
   rejected?: boolean;
 }
 
+export interface CliSlashCommand {
+  name: string;
+  args: string[];
+  raw: string;
+  sessionId?: string | null;
+}
+
+export interface CliRewindResponse {
+  id: string;
+  sessionId?: string | null;
+  userMessageId?: string | null;
+  dryRun?: boolean;
+  rejected?: boolean;
+}
+
+export interface CliSlashCommandInfo {
+  name: string;
+  description?: string;
+  argumentHint?: string;
+  aliases?: string[];
+}
+
 export interface CliAgentProvider {
   readonly provider: CliAgentProviderName;
   readonly state: CliAgentState;
@@ -32,7 +54,13 @@ export interface CliAgentProvider {
   takeover(): Promise<void>;
   releaseToLocal(): Promise<void>;
   switchSession(sessionId: string): Promise<void>;
-  sendPrompt(prompt: string, opts?: { mode?: "build" | "plan"; pendingSessionId?: string | null }): Promise<void>;
+  sendPrompt(prompt: string, opts?: {
+    mode?: "build" | "plan";
+    pendingSessionId?: string | null;
+    localMessageId?: string | null;
+  }): Promise<void>;
+  handleSlashCommand(command: CliSlashCommand): Promise<void>;
+  answerRewind?(response: CliRewindResponse): Promise<void>;
   answerPermission(
     id: string,
     approved: boolean,
@@ -50,7 +78,7 @@ export interface CliAgentRelayEvent {
 
 export interface RelayCommand {
   id: string;
-  type: "prompt" | "abort" | "permission" | "question" | "takeover" | "switch-session";
+  type: "prompt" | "abort" | "permission" | "question" | "takeover" | "switch-session" | "slash-command" | "rewind";
   payload: Record<string, unknown>;
   createdAt: number;
 }
