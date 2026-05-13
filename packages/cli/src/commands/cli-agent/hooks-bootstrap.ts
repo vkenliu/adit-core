@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { connect } from "node:net";
 
 const EVENTS = [
   "SessionStart",
@@ -25,6 +26,49 @@ interface CodexHookEntry {
 export interface InstalledHooks {
   settingsPath: string;
   cleanup: () => void;
+}
+
+export async function cleanupStaleClaudeCloudSettings(opts: {
+  cwd: string;
+  maxAgeMs?: number;
+  portProbeTimeoutMs?: number;
+  isPortActive?: (port: number) => Promise<boolean>;
+}): Promise<string[]> {
+  const claudeDir = path.join(opts.cwd, ".claude");
+  if (!fs.existsSync(claudeDir)) return [];
+
+  const maxAgeMs = opts.maxAgeMs ?? 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const removed: string[] = [];
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(claudeDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  for (const entry of entries) {
+    if (!entry.isFile() || !/^adit-cloud-.+\.settings\.local\.json$/u.test(entry.name)) {
+      continue;
+    }
+
+    const settingsPath = path.join(claudeDir, entry.name);
+    const shouldRemove = await shouldRemoveClaudeCloudSettings({
+      settingsPath,
+      maxAgeMs,
+      now,
+      portProbeTimeoutMs: opts.portProbeTimeoutMs,
+      isPortActive: opts.isPortActive,
+    });
+    if (!shouldRemove) continue;
+
+    try {
+      fs.unlinkSync(settingsPath);
+      removed.push(settingsPath);
+    } catch {}
+  }
+
+  return removed;
 }
 
 export function installClaudeHooks(opts: {
@@ -129,6 +173,86 @@ export function installClaudeHooks(opts: {
       }
     },
   };
+}
+
+async function shouldRemoveClaudeCloudSettings(opts: {
+  settingsPath: string;
+  maxAgeMs: number;
+  now: number;
+  portProbeTimeoutMs?: number;
+  isPortActive?: (port: number) => Promise<boolean>;
+}): Promise<boolean> {
+  const port = readClaudeCloudHookPort(opts.settingsPath);
+  if (port !== null) {
+    try {
+      const isActive = opts.isPortActive
+        ? await opts.isPortActive(port)
+        : await isLocalPortListening(port, opts.portProbeTimeoutMs ?? 150);
+      return !isActive;
+    } catch {
+      return false;
+    }
+  }
+
+  try {
+    const stat = fs.statSync(opts.settingsPath);
+    return opts.now - stat.mtimeMs > opts.maxAgeMs;
+  } catch {
+    return false;
+  }
+}
+
+function readClaudeCloudHookPort(settingsPath: string): number | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+  } catch {
+    return null;
+  }
+
+  const root = asObject(parsed);
+  if (!root) return null;
+  const hooks = asObject(root.hooks);
+  if (!hooks) return null;
+  for (const eventHooks of Object.values(hooks)) {
+    if (!Array.isArray(eventHooks)) continue;
+    for (const entry of eventHooks) {
+      const entryObject = asObject(entry);
+      if (!entryObject) continue;
+      const hookEntries = entryObject.hooks;
+      if (!Array.isArray(hookEntries)) continue;
+      for (const hook of hookEntries) {
+        const hookObject = asObject(hook);
+        if (!hookObject) continue;
+        const command = hookObject.command;
+        if (typeof command !== "string") continue;
+        const match = command.match(/https?:\/\/127\.0\.0\.1:(\d+)\/hook\?from=adit-cloud-cli-\d+\b/u);
+        if (!match?.[1]) continue;
+        const port = Number.parseInt(match[1], 10);
+        if (Number.isInteger(port) && port > 0 && port <= 65535) return port;
+      }
+    }
+  }
+
+  return null;
+}
+
+function isLocalPortListening(port: number, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = connect({ host: "127.0.0.1", port });
+    let settled = false;
+    const settle = (active: boolean) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(active);
+    };
+
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => settle(true));
+    socket.once("error", () => settle(false));
+    socket.once("timeout", () => settle(false));
+  });
 }
 
 export function installCodexHooks(opts: {
