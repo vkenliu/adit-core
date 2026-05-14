@@ -36,6 +36,7 @@ import {
   CodexCliProvider,
   codexThreadModeOverrides,
   codexTurnModeOverrides,
+  formatCodexTerminalNotice,
   normalizeCodexReclaimInput,
   promptInputForCodexMode,
 } from "./codex-cli-provider.js";
@@ -90,6 +91,20 @@ describe("normalizeCodexReclaimInput", () => {
     const encoded = "\x1b[?1004h\x1b[47;1:3u\x1b[108;1:3u\x1b[111;1:3u\x1b[99;1:3u\x1b[97;1:3u\x1b[108;1:3u";
 
     expect(normalizeCodexReclaimInput(encoded)).toBe("/local");
+  });
+});
+
+describe("formatCodexTerminalNotice", () => {
+  it("clears stale TUI content when writing notices to a TTY", () => {
+    expect(formatCodexTerminalNotice("[adit cloud codex] taken over", true)).toBe(
+      "\r\x1b[2K\r\n\r\x1b[2K[adit cloud codex] taken over\x1b[0K\r\n",
+    );
+  });
+
+  it("keeps plain newlines for non-TTY output", () => {
+    expect(formatCodexTerminalNotice("[adit cloud codex] taken over\n", false)).toBe(
+      "\n[adit cloud codex] taken over\n",
+    );
   });
 });
 

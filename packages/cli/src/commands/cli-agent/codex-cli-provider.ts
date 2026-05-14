@@ -54,6 +54,8 @@ interface CodexCliProviderOptions {
 export type CodexPromptMode = "build" | "plan";
 
 const RECLAIM_COMMAND = "/local";
+const CLEAR_TERMINAL_LINE = "\r\x1b[2K";
+const CLEAR_TO_END_OF_LINE = "\x1b[0K";
 const TERMINAL_RECLAIM_RESET = [
   "\x1b[?1004l", // Focus in/out reporting.
   "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l", // Mouse modes.
@@ -187,8 +189,8 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     this.emitState();
     this.emitSlashCommands();
     restoreTerminalForCodexReclaim();
-    process.stderr.write(
-      `\n[adit cloud codex] Web has taken over Codex CLI. Type ${RECLAIM_COMMAND} here to reclaim local control.\n`,
+    writeCodexTerminalNotice(
+      `[adit cloud codex] Web has taken over Codex CLI. Type ${RECLAIM_COMMAND} here to reclaim local control.`,
     );
     this.attachReclaimInput();
   }
@@ -1074,11 +1076,21 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       return;
     }
     if (text.includes("\n") || text.includes("\r")) {
-      process.stderr.write(
+      writeCodexTerminalNotice(
         `[adit cloud codex] Web owns this session. Type ${RECLAIM_COMMAND} to reclaim.\n`,
       );
     }
   };
+}
+
+function writeCodexTerminalNotice(message: string): void {
+  process.stderr.write(formatCodexTerminalNotice(message));
+}
+
+export function formatCodexTerminalNotice(message: string, isTTY = Boolean(process.stderr.isTTY)): string {
+  const text = message.replace(/\r?\n$/u, "");
+  if (!isTTY) return `\n${text}\n`;
+  return `${CLEAR_TERMINAL_LINE}\r\n${CLEAR_TERMINAL_LINE}${text}${CLEAR_TO_END_OF_LINE}\r\n`;
 }
 
 function restoreTerminalForCodexReclaim(): void {
