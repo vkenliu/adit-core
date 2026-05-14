@@ -16,6 +16,7 @@ import type {
   ValidationResult,
   AditHookType,
 } from "./types.js";
+import { buildAditHookCommand, isAditHookCommand } from "./command.js";
 
 const HOOK_MAPPINGS: HookMapping[] = [
   { platformEvent: "SessionStart", aditHandler: "session-start" },
@@ -30,11 +31,6 @@ const HOOK_MAPPINGS: HookMapping[] = [
 const PLATFORM_TO_ADIT: Record<string, AditHookType> = Object.fromEntries(
   HOOK_MAPPINGS.map((m) => [m.platformEvent, m.aditHandler]),
 ) as Record<string, AditHookType>;
-
-/** Check if a command string is an ADIT hook (matches both npx and resolved-path formats) */
-function isAditHookCommand(command: string): boolean {
-  return command.includes("adit-hook") || command.includes("hooks/dist/index.js");
-}
 
 export const geminiAdapter: PlatformAdapter = {
   platform: "gemini" as Platform,
@@ -76,20 +72,26 @@ export const geminiAdapter: PlatformAdapter = {
   },
 
   generateHookConfig(aditBinaryPath: string): PlatformHookConfig {
-    const makeHookEntry = (command: string) => [
-      { hooks: [{ type: "command", command: `CLAUDE_CODE= GEMINI=1 ${command}`, timeout: 5000 }] },
+    const makeHookEntry = (hookType: AditHookType) => [
+      {
+        hooks: [{
+          type: "command",
+          command: buildAditHookCommand(aditBinaryPath, "gemini", hookType),
+          timeout: 5000,
+        }],
+      },
     ];
 
     return {
       configPath: ".gemini/settings.json",
       content: {
         hooks: {
-          SessionStart: makeHookEntry(`${aditBinaryPath} session-start`),
-          BeforeAgent: makeHookEntry(`${aditBinaryPath} prompt-submit`),
-          AfterAgent: makeHookEntry(`${aditBinaryPath} stop`),
-          SessionEnd: makeHookEntry(`${aditBinaryPath} session-end`),
-          AfterTool: makeHookEntry(`${aditBinaryPath} notification`),
-          Notification: makeHookEntry(`${aditBinaryPath} notification`),
+          SessionStart: makeHookEntry("session-start"),
+          BeforeAgent: makeHookEntry("prompt-submit"),
+          AfterAgent: makeHookEntry("stop"),
+          SessionEnd: makeHookEntry("session-end"),
+          AfterTool: makeHookEntry("notification"),
+          Notification: makeHookEntry("notification"),
         },
       },
     };

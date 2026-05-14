@@ -188,11 +188,12 @@ describe("Gemini CLI Hook Chaining", () => {
       expect(config.content.hooks.Notification).toBeDefined();
     });
 
-    it("uses GEMINI=1 prefix and timeout 5000", () => {
+    it("uses explicit platform argument and timeout 5000", () => {
       const config = geminiAdapter.generateHookConfig("npx adit-hook");
 
       const entry = config.content.hooks.SessionStart[0];
-      expect((entry as { hooks: Array<{ command: string }> }).hooks[0].command).toContain("GEMINI=1");
+      expect((entry as { hooks: Array<{ command: string }> }).hooks[0].command).toContain("--platform gemini");
+      expect((entry as { hooks: Array<{ command: string }> }).hooks[0].command).not.toContain("GEMINI=1");
       expect((entry as { hooks: Array<{ command: string }> }).hooks[0].command).toContain("npx adit-hook");
       expect((entry as { hooks: Array<{ command: string }> }).hooks[0].command).toContain("session-start");
       expect((entry as { hooks: Array<{ command: string }> }).hooks[0].timeout).toBe(5000);

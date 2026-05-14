@@ -72,8 +72,9 @@ export async function dispatchHook(input: NormalizedHookInput): Promise<void> {
     // Auto-sync to cloud on every hook event (fail-open).
     // Uses dynamic import so @varveai/adit-cloud is not a build-time dependency.
     // The module name is constructed to prevent TypeScript from resolving it.
-    // Force sync on session-end (flush all data) and on stop/session.idle
-    // (ensures data is persisted even if /exit doesn't fire a session-end).
+    // Force sync only on session-end to flush final data. Other hook events,
+    // including stop/session.idle, use the count/time thresholds in
+    // triggerAutoSync so a normal conversation does not push every turn.
     try {
       await withPerf(dataDir, "network", "cloud-auto-sync", async () => {
         const cloudModuleName = ["@varveai", "adit-cloud"].join("/");
@@ -82,7 +83,7 @@ export async function dispatchHook(input: NormalizedHookInput): Promise<void> {
         };
         // Awaited so db stays open until it finishes querying.
         // The actual network push happens inside triggerAutoSync's own fire-and-forget.
-        const force = input.hookType === "session-end" || input.hookType === "stop";
+        const force = input.hookType === "session-end";
         await cloudModule.triggerAutoSync(ctx.db, ctx.config.projectId, force ? { force: true } : undefined);
       });
     } catch {

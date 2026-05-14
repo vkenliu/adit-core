@@ -16,6 +16,7 @@ import type {
   ValidationResult,
   AditHookType,
 } from "./types.js";
+import { buildAditHookCommand, isAditHookCommand } from "./command.js";
 
 const HOOK_MAPPINGS: HookMapping[] = [
   { platformEvent: "UserPromptSubmit", aditHandler: "prompt-submit" },
@@ -97,11 +98,6 @@ Shows intents (development plans) and tasks from the connected adit-cloud projec
 /** Filenames of old command files to clean up during install */
 const LEGACY_COMMAND_FILES = ["adit-link.md", "adit-intent.md"];
 
-/** Check if a command string is an ADIT hook (matches both npx and resolved-path formats) */
-function isAditHookCommand(command: string): boolean {
-  return command.includes("adit-hook") || command.includes("hooks/dist/index.js");
-}
-
 /**
  * Detect system-injected prompts that Claude Code sends through UserPromptSubmit
  * (e.g. background task completion callbacks wrapped in <task-notification> XML).
@@ -176,22 +172,28 @@ export const claudeCodeAdapter: PlatformAdapter = {
   },
 
   generateHookConfig(aditBinaryPath: string): PlatformHookConfig {
-    const makeHookEntry = (command: string) => [
-      { hooks: [{ type: "command", command: `CLAUDE_CODE=1 ${command}`, timeout: 10000 }] },
+    const makeHookEntry = (hookType: AditHookType) => [
+      {
+        hooks: [{
+          type: "command",
+          command: buildAditHookCommand(aditBinaryPath, "claude", hookType),
+          timeout: 10000,
+        }],
+      },
     ];
 
     return {
       configPath: ".claude/settings.local.json",
       content: {
         hooks: {
-          UserPromptSubmit: makeHookEntry(`${aditBinaryPath} prompt-submit`),
-          Stop: makeHookEntry(`${aditBinaryPath} stop`),
-          SessionStart: makeHookEntry(`${aditBinaryPath} session-start`),
-          SessionEnd: makeHookEntry(`${aditBinaryPath} session-end`),
-          TaskCompleted: makeHookEntry(`${aditBinaryPath} task-completed`),
-          Notification: makeHookEntry(`${aditBinaryPath} notification`),
-          SubagentStart: makeHookEntry(`${aditBinaryPath} subagent-start`),
-          SubagentStop: makeHookEntry(`${aditBinaryPath} subagent-stop`),
+          UserPromptSubmit: makeHookEntry("prompt-submit"),
+          Stop: makeHookEntry("stop"),
+          SessionStart: makeHookEntry("session-start"),
+          SessionEnd: makeHookEntry("session-end"),
+          TaskCompleted: makeHookEntry("task-completed"),
+          Notification: makeHookEntry("notification"),
+          SubagentStart: makeHookEntry("subagent-start"),
+          SubagentStop: makeHookEntry("subagent-stop"),
         },
       },
     };

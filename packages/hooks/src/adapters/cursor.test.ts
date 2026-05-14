@@ -60,13 +60,14 @@ describe("Cursor Adapter - Hook Generation", () => {
     expect(Array.isArray((stopEntry as Record<string, unknown>).hooks)).toBe(false);
   });
 
-  it("includes CURSOR=1 prefix in commands", () => {
+  it("includes explicit platform argument in commands", () => {
     const config = cursorAdapter.generateHookConfig("npx adit-hook");
     const hooks = config.content.hooks as Record<string, unknown[]>;
 
     for (const [, entries] of Object.entries(hooks)) {
       const entry = (entries as Array<{ command: string }>)[0];
-      expect(entry.command).toMatch(/^CURSOR=1 /);
+      expect(entry.command).toContain("--platform cursor");
+      expect(entry.command).not.toMatch(/^CURSOR=1 /);
     }
   });
 

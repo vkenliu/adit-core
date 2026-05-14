@@ -35,7 +35,16 @@ describe("Adapter Registry", () => {
 
   it("detects platform from environment", () => {
     const platform = detectPlatform();
-    expect(["claude-code", "cursor", "copilot", "opencode", "codex", "gemini", "other"]).toContain(platform);
+    expect([
+      "claude-code",
+      "claude-vscode",
+      "cursor",
+      "copilot",
+      "opencode",
+      "codex",
+      "gemini",
+      "other",
+    ]).toContain(platform);
   });
 
   it("returns the OpenCode adapter (fully implemented)", () => {
@@ -230,6 +239,7 @@ describe("Claude Code Adapter", () => {
         hooks: Array<{ type: string; command: string; async?: boolean }>;
       }>;
       expect(entries[0].hooks[0].async).toBeUndefined();
+      expect(entries[0].hooks[0].command).toContain("--platform claude");
     }
   });
 });

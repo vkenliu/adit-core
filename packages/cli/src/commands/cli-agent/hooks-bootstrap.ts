@@ -304,6 +304,7 @@ export function installCodexHooks(opts: {
   fs.writeFileSync(hooksPath, JSON.stringify(existing, null, 2) + "\n");
   const installedConfigContent = enableCodexHooksFeature(readFile(configPath) ?? "");
   fs.writeFileSync(configPath, installedConfigContent);
+  const installedConfigMtimeMs = readFileMtimeMs(configPath);
 
   return {
     settingsPath: hooksPath,
@@ -356,6 +357,7 @@ export function installCodexHooks(opts: {
           configFileExisted,
           originalConfigContent,
           installedConfigContent,
+          installedConfigMtimeMs,
           hookConfigChangedByOthers,
         });
       }
@@ -393,6 +395,14 @@ function codexEntryHasMarker(entry: unknown, marker: string): boolean {
 function readFile(filePath: string): string | null {
   try {
     return fs.readFileSync(filePath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+function readFileMtimeMs(filePath: string): number | null {
+  try {
+    return fs.statSync(filePath).mtimeMs;
   } catch {
     return null;
   }
@@ -454,6 +464,18 @@ function buildCodexHookStates(input: {
   hooks: Record<string, unknown>;
   marker: string;
 }): CodexHookState[] {
+  return buildCodexHookStatesForEntries({
+    hooksPath: input.hooksPath,
+    hooks: input.hooks,
+    matchesEntry: (entry) => codexEntryHasMarker(entry, input.marker),
+  });
+}
+
+function buildCodexHookStatesForEntries(input: {
+  hooksPath: string;
+  hooks: Record<string, unknown>;
+  matchesEntry: (entry: unknown) => boolean;
+}): CodexHookState[] {
   const hooksPath = path.resolve(input.hooksPath);
   const definitions = [
     { eventName: "PostToolUse", keyLabel: "post_tool_use" },
@@ -469,7 +491,7 @@ function buildCodexHookStates(input: {
     const states: CodexHookState[] = [];
     for (let entryIndex = 0; entryIndex < entries.length; entryIndex++) {
       const entry = asObject(entries[entryIndex]);
-      if (!entry || !codexEntryHasMarker(entry, input.marker)) continue;
+      if (!entry || !input.matchesEntry(entry)) continue;
       const hookEntries = entry.hooks;
       if (!Array.isArray(hookEntries)) continue;
       for (let hookIndex = 0; hookIndex < hookEntries.length; hookIndex++) {
@@ -545,36 +567,41 @@ function appendCodexHookTrustBlock(
   text: string,
   marker: string,
   states: CodexHookState[],
+  blockName = "adit-cloud-codex",
 ): string {
   const cleaned = stripAditCodexHookTrustBlocks(text, {
+    blockName,
     marker,
     keys: states.map((state) => state.key),
     trustedHashes: states.map((state) => state.trustedHash),
   }).replace(/\s+$/u, "");
   const block = [
-    `# >>> adit-cloud-codex ${marker}`,
+    `# >>> ${blockName} ${marker}`,
     ...states.flatMap((state) => [
       `[hooks.state.${JSON.stringify(state.key)}]`,
       "enabled = true",
       `trusted_hash = ${JSON.stringify(state.trustedHash)}`,
       "",
     ]),
-    `# <<< adit-cloud-codex ${marker}`,
+    `# <<< ${blockName} ${marker}`,
   ].join("\n").replace(/\n+$/u, "");
   return `${cleaned ? `${cleaned}\n\n` : ""}${block}\n`;
 }
 
 function stripAditCodexHookTrustBlocks(
   text: string,
-  opts?: { marker?: string; keys?: string[]; trustedHashes?: string[] },
+  opts?: { blockName?: string; marker?: string; keys?: string[]; trustedHashes?: string[] },
 ): string {
   const lines = text.split(/\r?\n/u);
   const kept: string[] = [];
+  const blockName = opts?.blockName ?? "adit-cloud-codex";
+  const startPattern = new RegExp(`^\\s*# >>> ${escapeRegExp(blockName)}\\b`, "u");
+  const endPattern = new RegExp(`^\\s*# <<< ${escapeRegExp(blockName)}\\b`, "u");
   const keys = opts?.keys ?? [];
   const trustedHashes = opts?.trustedHashes ?? [];
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index] ?? "";
-    if (!/^\s*# >>> adit-cloud-codex\b/u.test(line)) {
+    if (!startPattern.test(line)) {
       const stateKey = parseHookStateTableKey(line);
       if (stateKey !== null) {
         const block = [line];
@@ -596,7 +623,7 @@ function stripAditCodexHookTrustBlocks(
         kept.push(...block);
         continue;
       }
-      if (opts?.marker && /^\s*# <<< adit-cloud-codex\b/u.test(line) && line.includes(opts.marker)) {
+      if (opts?.marker && endPattern.test(line) && line.includes(opts.marker)) {
         continue;
       }
       kept.push(line);
@@ -608,7 +635,7 @@ function stripAditCodexHookTrustBlocks(
       index++;
       const blockLine = lines[index] ?? "";
       block.push(blockLine);
-      if (/^\s*# <<< adit-cloud-codex\b/u.test(blockLine)) break;
+      if (endPattern.test(blockLine)) break;
     }
 
     const blockText = block.join("\n");
@@ -672,14 +699,22 @@ function cleanupCodexConfig(opts: {
   configFileExisted: boolean;
   originalConfigContent: string | null;
   installedConfigContent: string;
+  installedConfigMtimeMs: number | null;
   hookConfigChangedByOthers: boolean;
 }): void {
-  if (opts.hookConfigChangedByOthers) {
-    return;
-  }
-
   const current = readFile(opts.configPath);
   if (current === null || current !== opts.installedConfigContent) {
+    return;
+  }
+  const currentMtimeMs = readFileMtimeMs(opts.configPath);
+  if (
+    opts.installedConfigMtimeMs !== null &&
+    currentMtimeMs !== null &&
+    currentMtimeMs !== opts.installedConfigMtimeMs
+  ) {
+    return;
+  }
+  if (opts.hookConfigChangedByOthers) {
     return;
   }
 
