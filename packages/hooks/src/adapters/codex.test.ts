@@ -74,9 +74,16 @@ describe("Codex CLI Hook Chaining", () => {
     expect(stopEntries[0].hooks[0].command).toContain("adit-hook");
 
     const projectConfig = readFileSync(join(projectRoot, ".codex", "config.toml"), "utf-8");
+    const userConfig = readFileSync(join(codexHome, "config.toml"), "utf-8");
     expect(projectConfig).toContain("[features]");
     expect(projectConfig).toContain("hooks = true");
-    expect(existsSync(join(codexHome, "config.toml"))).toBe(false);
+    expect(userConfig).toContain("# >>> adit-codex-hooks project=");
+    expect(userConfig).toContain(".codex/hooks.json:session_start:0:0");
+    expect(userConfig).toContain(".codex/hooks.json:user_prompt_submit:0:0");
+    expect(userConfig).toContain(".codex/hooks.json:stop:0:0");
+    expect(userConfig).toContain(".codex/hooks.json:post_tool_use:0:0");
+    expect(userConfig).toContain("enabled = true");
+    expect(userConfig).toContain("trusted_hash = \"sha256:");
   });
 
   it("preserves other tools' hooks when installing ADIT hooks", async () => {
@@ -111,6 +118,11 @@ describe("Codex CLI Hook Chaining", () => {
     expect(stopEntries).toHaveLength(2);
     expect(stopEntries[0].hooks[0].command).toContain("my-formatter");
     expect(stopEntries[1].hooks[0].command).toContain("adit-hook");
+
+    const userConfig = readFileSync(join(codexHome, "config.toml"), "utf-8");
+    expect(userConfig).toContain(".codex/hooks.json:session_start:1:0");
+    expect(userConfig).toContain(".codex/hooks.json:stop:1:0");
+    expect(userConfig).not.toContain(".codex/hooks.json:stop:0:0");
   });
 
   it("replaces stale ADIT hooks on reinstall (no duplicates)", async () => {
@@ -256,6 +268,8 @@ describe("Codex CLI Hook Chaining", () => {
     const sessionEntries = hooks.SessionStart as Array<{ hooks: Array<{ command: string }> }>;
     expect(sessionEntries).toHaveLength(1);
     expect(sessionEntries[0].hooks[0].command).toContain("my-formatter");
+
+    expect(readFileSync(join(codexHome, "config.toml"), "utf-8")).not.toContain("adit-codex-hooks");
   });
 
   it("uninstallHooks cleans up empty event arrays and hooks object", async () => {
@@ -499,13 +513,29 @@ describe("Codex CLI Hook Chaining", () => {
       const result = await codexAdapter.validateInstallation(projectRoot);
 
       expect(result.valid).toBe(true);
-      expect(result.checks.length).toBe(3);
+      expect(result.checks.length).toBe(4);
       expect(result.checks[0].name).toBe(".codex directory");
       expect(result.checks[0].ok).toBe(true);
       expect(result.checks[1].name).toBe("Hook configuration");
       expect(result.checks[1].ok).toBe(true);
       expect(result.checks[2].name).toBe("Codex hooks feature");
       expect(result.checks[2].ok).toBe(true);
+      expect(result.checks[3].name).toBe("Codex hook trust");
+      expect(result.checks[3].ok).toBe(true);
+    });
+
+    it("detects ADIT hooks that still need Codex review", async () => {
+      await codexAdapter.installHooks(projectRoot, "npx adit-hook");
+      writeFileSync(join(codexHome, "config.toml"), "");
+
+      const result = await codexAdapter.validateInstallation(projectRoot);
+
+      expect(result.valid).toBe(false);
+      expect(result.checks[1].ok).toBe(true);
+      expect(result.checks[2].ok).toBe(true);
+      expect(result.checks[3].name).toBe("Codex hook trust");
+      expect(result.checks[3].ok).toBe(false);
+      expect(result.checks[3].detail).toContain("4 hook(s) need review");
     });
 
     it("detects hooks that are configured but not enabled for Codex", async () => {

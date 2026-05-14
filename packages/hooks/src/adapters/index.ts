@@ -18,6 +18,20 @@ export { opencodeAdapter } from "./opencode.js";
 export { createStubAdapter, copilotAdapter, otherAdapter } from "./stub.js";
 export { cursorAdapter } from "./cursor.js";
 export { codexAdapter } from "./codex.js";
+export {
+  ADIT_CLOUD_CODEX_HOOK_TRUST_BLOCK,
+  ADIT_CODEX_HOOK_TRUST_BLOCK,
+  appendCodexHookTrustBlock,
+  buildCodexHookStatesForEntries,
+  codexHookTrustMarkerForPath,
+  findUntrustedCodexHookStates,
+  installCodexHookTrustConfig,
+  removeCodexHookTrustConfig,
+  resolveCodexHookTrustConfigPath,
+  stripCodexHookTrustBlocks,
+  upsertCodexHookTrustConfig,
+  type CodexHookState,
+} from "./codex-trust.js";
 export { geminiAdapter } from "./gemini.js";
 export { getAdapter, listAdapters, registerAdapter, detectPlatform, detectPlatformFromPayload, detectPlatforms } from "./registry.js";
 
