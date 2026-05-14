@@ -71,6 +71,12 @@ const CLAUDE_FALLBACK_SLASH_COMMANDS = new Set([
   "memory",
 ]);
 
+export const CLAUDE_CLOUD_RELAY_ADIT_ENV: Readonly<Record<string, string>> = {
+  ADIT_CLOUD_AUTO_SYNC: "false",
+  ADIT_PROJECT_LINK_AUTO_SYNC: "false",
+  ADIT_TRANSCRIPT_UPLOAD: "false",
+};
+
 export type ClaudeTodoStatus = "pending" | "in_progress" | "completed";
 export type ClaudeTodoPriority = "high" | "medium" | "low";
 
@@ -1527,13 +1533,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
   }
 
   private buildEnv(): NodeJS.ProcessEnv {
-    return {
-      ...process.env,
-      TERM: process.env.TERM || "xterm-256color",
-      COLORTERM: process.env.COLORTERM || "truecolor",
-      FORCE_COLOR: process.env.FORCE_COLOR || "3",
-      DISABLE_AUTOUPDATER: "1",
-    };
+    return buildClaudeCloudRelayEnv();
   }
 
   private refreshActiveModel(opts: { sessionId?: string | null } = {}): string | null {
@@ -1583,6 +1583,19 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       });
     }
   }
+}
+
+export function buildClaudeCloudRelayEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return {
+    ...baseEnv,
+    TERM: baseEnv.TERM || "xterm-256color",
+    COLORTERM: baseEnv.COLORTERM || "truecolor",
+    FORCE_COLOR: baseEnv.FORCE_COLOR || "3",
+    DISABLE_AUTOUPDATER: "1",
+    // Cloud Coding persists live conversation state through the relay websocket.
+    // Inherited ADIT hooks should keep their local timeline data until normal sync.
+    ...CLAUDE_CLOUD_RELAY_ADIT_ENV,
+  };
 }
 
 function toUserMessage(message: string, sessionId?: string): SDKUserMessage {
