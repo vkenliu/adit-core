@@ -107,6 +107,92 @@ describe("CodexTranscriptSync", () => {
     }
   });
 
+  it("uses the turn context model for local Codex transcript events", () => {
+    const dir = tempDir();
+    try {
+      const transcriptPath = join(dir, "019e0d36-9fd9-7c40-add5-01d6d8bc49d3.jsonl");
+      const sync = new CodexTranscriptSync();
+      const sessionId = "019e0d36-9fd9-7c40-add5-01d6d8bc49d3";
+
+      sync.noteHook({
+        eventType: "SessionStart",
+        body: { session_id: sessionId, transcript_path: transcriptPath },
+      });
+      sync.noteHook({
+        eventType: "UserPromptSubmit",
+        body: { session_id: sessionId, transcript_path: transcriptPath, prompt: "date" },
+      });
+
+      const timestamp = new Date(Date.now() + 50).toISOString();
+      const lines = [
+        {
+          timestamp,
+          type: "turn_context",
+          payload: {
+            model: "gpt-5.5",
+          },
+        },
+        {
+          timestamp,
+          type: "response_item",
+          payload: {
+            type: "reasoning",
+            summary: "Checking the current date.",
+          },
+        },
+        {
+          timestamp,
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "Today is Thursday." }],
+          },
+        },
+      ];
+      writeFileSync(transcriptPath, lines.map((line) => JSON.stringify(line)).join("\n"));
+
+      const events = sync.drainSession(sessionId);
+
+      expect(events.map((event) => event.type)).toEqual(["reasoning", "message"]);
+      expect(events[0]?.payload).toMatchObject({
+        sessionId,
+        modelId: "gpt-5.5",
+        text: "Checking the current date.",
+      });
+      expect(events[1]?.payload).toMatchObject({
+        role: "assistant",
+        sessionId,
+        modelId: "gpt-5.5",
+        text: "Today is Thursday.",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the hook model for stop fallback events", () => {
+    const sync = new CodexTranscriptSync();
+    const sessionId = "019e0d36-9fd9-7c40-add5-01d6d8bc49d3";
+
+    sync.noteHook({
+      eventType: "UserPromptSubmit",
+      body: { session_id: sessionId, activeModelId: "gpt-5.5" },
+    });
+
+    const events = sync.stopEvents(sessionId, {
+      last_assistant_message: "Fallback answer.",
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.payload).toMatchObject({
+      role: "assistant",
+      sessionId,
+      modelId: "gpt-5.5",
+      text: "Fallback answer.",
+    });
+  });
+
   it("emits todo snapshots from Codex update_plan transcript calls", () => {
     const dir = tempDir();
     try {

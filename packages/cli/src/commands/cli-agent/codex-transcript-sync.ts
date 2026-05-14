@@ -20,6 +20,7 @@ interface CodexSessionState {
   pendingTranscriptLine: string;
   seenKeys: Set<string>;
   lastAssistantMessageId?: string;
+  activeModelId?: string;
   seenAssistantStops: Set<string>;
   seenHookToolResults: Set<string>;
 }
@@ -34,6 +35,9 @@ export class CodexTranscriptSync {
     if (!sessionId) return null;
 
     const session = this.ensureSession(sessionId);
+    const modelId = readModelId(input.body);
+    if (modelId) session.activeModelId = modelId;
+
     const transcriptPath = readString(input.body.transcript_path);
     const isNewTranscript = Boolean(transcriptPath && transcriptPath !== session.transcriptPath);
     if (transcriptPath) {
@@ -88,7 +92,7 @@ export class CodexTranscriptSync {
         role: "assistant",
         sessionId,
         messageId: `codex-local-${sessionId}-${createdAt}`,
-        modelId: readString(body.model) ?? undefined,
+        modelId: readModelId(body) ?? session.activeModelId ?? undefined,
         text: truncateText(text),
         createdAt,
       },
@@ -105,6 +109,7 @@ export class CodexTranscriptSync {
     if (session.seenHookToolResults.has(key)) return [];
     session.seenHookToolResults.add(key);
     const createdAt = Date.now();
+    const modelId = readModelId(body) ?? session.activeModelId ?? undefined;
     const toolUseId = `codex-local-tool-${hashText(key)}`;
     const messageId = session.lastAssistantMessageId ?? `codex-local-tools-${sessionId}`;
     const events: CliAgentRelayEvent[] = [{
@@ -116,6 +121,7 @@ export class CodexTranscriptSync {
         toolName,
         input: toolInput,
         output: safeJson(toolResponse),
+        modelId,
         status: "completed",
         createdAt,
       },
@@ -239,9 +245,16 @@ export class CodexTranscriptSync {
     obj: Record<string, unknown>,
     timestamp: number,
   ): CliAgentRelayEvent[] {
-    if (readString(obj.type) !== "response_item") return [];
     const payload = asRecord(obj.payload);
     if (!payload) return [];
+
+    if (readString(obj.type) === "turn_context") {
+      const modelId = readModelId(payload);
+      if (modelId) session.activeModelId = modelId;
+      return [];
+    }
+
+    if (readString(obj.type) !== "response_item") return [];
 
     const payloadType = readString(payload.type);
     const events: CliAgentRelayEvent[] = [];
@@ -266,7 +279,7 @@ export class CodexTranscriptSync {
             role: "assistant",
             sessionId: session.id,
             messageId,
-            modelId: readString(payload.model) ?? undefined,
+            modelId: readModelId(payload) ?? session.activeModelId ?? undefined,
             text: truncateText(text),
             createdAt: timestamp,
           },
@@ -292,6 +305,7 @@ export class CodexTranscriptSync {
           payload: {
             sessionId: session.id,
             messageId,
+            modelId: readModelId(payload) ?? session.activeModelId ?? undefined,
             text: truncateText(text),
             createdAt: timestamp,
           },
@@ -321,6 +335,7 @@ export class CodexTranscriptSync {
             toolUseId,
             toolName,
             input,
+            modelId: readModelId(payload) ?? session.activeModelId ?? undefined,
             status: "running",
             createdAt: timestamp,
           },
@@ -372,6 +387,7 @@ export class CodexTranscriptSync {
             toolName: "tool",
             input: {},
             output,
+            modelId: readModelId(payload) ?? session.activeModelId ?? undefined,
             status: "completed",
             createdAt: timestamp,
           },
@@ -559,6 +575,12 @@ function readSessionId(body: Record<string, unknown>): string | null {
     readString(body.transcript_path)?.match(/([0-9a-f-]{8}-[0-9a-f-]{4}-[0-9a-f-]{4}-[0-9a-f-]{4}-[0-9a-f-]{12})\.jsonl$/i)?.[1] ??
     null
   );
+}
+
+function readModelId(value: Record<string, unknown>): string | null {
+  return readString(value.model) ??
+    readString(value.activeModelId) ??
+    readString(value.active_model_id);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
