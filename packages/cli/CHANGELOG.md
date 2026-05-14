@@ -1,5 +1,45 @@
 # @varveai/adit-cli
 
+## 0.4.2
+
+### Patch Changes
+
+- 代码重构
+  代码重构
+- Updated dependencies
+  - @varveai/adit-engine@0.4.2
+  - @varveai/adit-cloud@0.4.2
+  - @varveai/adit-hooks@0.4.2
+  - @varveai/adit-plans@0.4.2
+  - @varveai/adit-core@0.4.2
+
+## 0.4.1
+
+### Patch Changes
+
+- 代码重构
+- Updated dependencies
+  - @varveai/adit-engine@0.4.1
+  - @varveai/adit-cloud@0.4.1
+  - @varveai/adit-hooks@0.4.1
+  - @varveai/adit-plans@0.4.1
+  - @varveai/adit-core@0.4.1
+
+## 0.4.0
+
+### Minor Changes
+
+- 部分代码重构，添加新命令
+
+### Patch Changes
+
+- Updated dependencies
+  - @varveai/adit-engine@0.4.0
+  - @varveai/adit-cloud@0.4.0
+  - @varveai/adit-hooks@0.4.0
+  - @varveai/adit-plans@0.4.0
+  - @varveai/adit-core@0.4.0
+
 ## 0.3.7
 
 ### Patch Changes

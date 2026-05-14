@@ -3,7 +3,7 @@
  *
  * Mocks all external dependencies (DB, engine, cloud) to verify
  * that dispatchHook correctly routes each hook type, handles
- * cloud auto-sync with force flags, and maintains fail-open behavior.
+ * cloud auto-sync with threshold-based and force flags, and maintains fail-open behavior.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -145,7 +145,7 @@ describe("dispatchHook", () => {
     );
   });
 
-  it("force-syncs on stop so pending records flush when the agent goes idle", async () => {
+  it("does not force-sync on stop so threshold and time triggers control pushing", async () => {
     mockGetChangedFiles.mockResolvedValue([]);
 
     const input: NormalizedHookInput = {
@@ -159,7 +159,7 @@ describe("dispatchHook", () => {
     expect(mockTriggerAutoSync).toHaveBeenCalledWith(
       expect.anything(),
       "proj-001",
-      { force: true },
+      undefined,
     );
   });
 

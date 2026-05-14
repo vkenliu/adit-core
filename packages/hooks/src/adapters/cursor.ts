@@ -16,6 +16,7 @@ import type {
   ValidationResult,
   AditHookType,
 } from "./types.js";
+import { buildAditHookCommand, isAditHookCommand } from "./command.js";
 
 /**
  * Read the tail of a file (last N bytes) and split into lines.
@@ -120,11 +121,6 @@ const PLATFORM_TO_ADIT: Record<string, AditHookType> = Object.fromEntries(
   HOOK_MAPPINGS.map((m) => [m.platformEvent, m.aditHandler]),
 ) as Record<string, AditHookType>;
 
-/** Check if a command string is an ADIT hook */
-function isAditHookCommand(command: string): boolean {
-  return command.includes("adit-hook") || command.includes("hooks/dist/index.js");
-}
-
 export const cursorAdapter: PlatformAdapter = {
   platform: "cursor" as Platform,
   displayName: "Cursor",
@@ -178,19 +174,23 @@ export const cursorAdapter: PlatformAdapter = {
   generateHookConfig(aditBinaryPath: string): PlatformHookConfig {
     // Cursor uses flat format: { command, type, timeout }
     // Timeout is in SECONDS (not milliseconds like Claude Code)
-    const makeHookEntry = (command: string) => [
-      { command: `CURSOR=1 ${command}`, type: "command", timeout: 10 },
+    const makeHookEntry = (hookType: AditHookType) => [
+      {
+        command: buildAditHookCommand(aditBinaryPath, "cursor", hookType),
+        type: "command",
+        timeout: 10,
+      },
     ];
 
     return {
       configPath: ".cursor/hooks.json",
       content: {
         hooks: {
-          beforeSubmitPrompt: makeHookEntry(`${aditBinaryPath} prompt-submit`),
-          stop: makeHookEntry(`${aditBinaryPath} stop`),
-          sessionStart: makeHookEntry(`${aditBinaryPath} session-start`),
-          sessionEnd: makeHookEntry(`${aditBinaryPath} session-end`),
-          afterAgentResponse: makeHookEntry(`${aditBinaryPath} notification`),
+          beforeSubmitPrompt: makeHookEntry("prompt-submit"),
+          stop: makeHookEntry("stop"),
+          sessionStart: makeHookEntry("session-start"),
+          sessionEnd: makeHookEntry("session-end"),
+          afterAgentResponse: makeHookEntry("notification"),
         },
       },
     };

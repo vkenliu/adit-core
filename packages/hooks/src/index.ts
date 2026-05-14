@@ -9,8 +9,10 @@
  */
 
 import { appendFileSync } from "node:fs";
+import type { Platform } from "@varveai/adit-core";
 import { readStdin } from "./common/context.js";
 import { detectPlatform, detectPlatformFromPayload, getAdapter } from "./adapters/index.js";
+import { parseHookArgs, type HookPlatformArg } from "./adapters/command.js";
 import { dispatchHook } from "./handlers/unified.js";
 
 // Hard safety net: kill the process after 10 seconds no matter what.
@@ -18,13 +20,13 @@ import { dispatchHook } from "./handlers/unified.js";
 // readStdin, database, git, or network operations hang.
 setTimeout(() => process.exit(0), 10_000).unref();
 
-const command = process.argv[2];
+const hookArgs = parseHookArgs(process.argv.slice(2));
 
 async function main(): Promise<void> {
-  if (!command) return;
+  if (!hookArgs.hookType) return;
 
   const raw = await readStdin();
-  let platform = detectPlatform();
+  let platform = resolvePlatformArg(hookArgs.platform) ?? detectPlatform();
   // Fallback: detect platform from the raw payload when env vars are absent.
   // Cursor (and possibly other tools) may not set env vars in hook child processes.
   if (platform === "other") {
@@ -45,14 +47,14 @@ async function main(): Promise<void> {
         GEMINI_PROJECT_DIR: process.env.GEMINI_PROJECT_DIR,
       },
       detectedPlatform: platform,
-      command,
+      command: hookArgs.hookType,
       raw,
     };
     appendFileSync("/tmp/adit-hook-debug.jsonl", JSON.stringify(debugEntry) + "\n");
   } catch { /* best-effort */ }
 
   const adapter = getAdapter(platform);
-  const input = adapter.parseInput(raw, command);
+  const input = adapter.parseInput(raw, hookArgs.hookType);
 
   // Debug: log parsed input to see what the adapter extracted
   try {
@@ -69,6 +71,17 @@ async function main(): Promise<void> {
   } catch { /* best-effort */ }
 
   await dispatchHook(input);
+}
+
+function resolvePlatformArg(platform: HookPlatformArg | null): Platform | null {
+  if (platform === null) return null;
+  if (platform === "claude") {
+    if (process.env.ELECTRON_RUN_AS_NODE && process.env.VSCODE_IPC_HOOK) {
+      return "claude-vscode";
+    }
+    return "claude-code";
+  }
+  return platform;
 }
 
 // Fail-open: catch everything, always exit 0.

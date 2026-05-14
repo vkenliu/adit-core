@@ -66,11 +66,15 @@ export function registerAdapter(adapter: PlatformAdapter): void {
  * Falls back to "other" when no platform is detected.
  */
 export function detectPlatform(): Platform {
+  // Explicit platform args are handled by the hook dispatcher before this env
+  // fallback. Env vars stay here for compatibility with previously installed
+  // hooks and platforms that inject their own environment clues.
+  //
   // Hook-explicit platform env vars are checked BEFORE inherited ones.
   // When running Gemini/Codex/Cursor inside another tool's terminal
   // (e.g., Gemini inside Claude Code), the parent's env vars (CLAUDE_CODE)
-  // are inherited by the child. The hook command prefix explicitly sets the
-  // correct platform var (GEMINI=1, CODEX=1, CURSOR=1), so those must win.
+  // are inherited by the child. Old ADIT hook command prefixes explicitly set
+  // the correct platform var, so those must win.
 
   // Cursor detection
   if (process.env.CURSOR_SESSION_ID || process.env.CURSOR || process.env.CURSOR_PROJECT_DIR) {
@@ -88,7 +92,7 @@ export function detectPlatform(): Platform {
   }
 
   // Claude Code (CLI or VS Code extension).
-  // ADIT's hook command prefix sets CLAUDE_CODE=1 for both platforms.
+  // Old ADIT hook command prefixes set CLAUDE_CODE=1 for both platforms.
   // The VS Code extension host additionally sets ELECTRON_RUN_AS_NODE and
   // VSCODE_IPC_HOOK — these are NOT inherited by terminal child processes,
   // so running CLI from VS Code's terminal won't trigger false detection.

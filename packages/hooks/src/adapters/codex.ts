@@ -12,10 +12,8 @@
  * - PostToolUse uses matcher "Bash"
  */
 
-import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join } from "node:path";
 import type { Platform } from "@varveai/adit-core";
 import type {
   PlatformAdapter,
@@ -25,6 +23,7 @@ import type {
   ValidationResult,
   AditHookType,
 } from "./types.js";
+import { buildAditHookCommand, isAditHookCommand } from "./command.js";
 
 /** Timeout for Codex hooks — in SECONDS (not ms like Claude Code) */
 const HOOK_TIMEOUT = 30;
@@ -36,22 +35,10 @@ const HOOK_MAPPINGS: HookMapping[] = [
   { platformEvent: "PostToolUse", aditHandler: "notification", matcher: "Bash" },
 ];
 
-const CODEX_HOOK_KEY_LABELS: Record<string, string> = {
-  SessionStart: "session_start",
-  UserPromptSubmit: "user_prompt_submit",
-  Stop: "stop",
-  PostToolUse: "post_tool_use",
-};
-
 /** Map Codex CLI platform events to ADIT hook types (derived from HOOK_MAPPINGS) */
 const PLATFORM_TO_ADIT: Record<string, AditHookType> = Object.fromEntries(
   HOOK_MAPPINGS.map((m) => [m.platformEvent, m.aditHandler]),
 ) as Record<string, AditHookType>;
-
-/** Check if a command string is an ADIT hook (matches both npx and resolved-path formats) */
-function isAditHookCommand(command: string): boolean {
-  return command.includes("adit-hook") || command.includes("hooks/dist/index.js");
-}
 
 export const codexAdapter: PlatformAdapter = {
   platform: "codex" as Platform,
@@ -89,21 +76,34 @@ export const codexAdapter: PlatformAdapter = {
   },
 
   generateHookConfig(aditBinaryPath: string): PlatformHookConfig {
-    const makeHookEntry = (command: string) => [
-      { hooks: [{ type: "command", command: `CODEX=1 ${command}`, timeout: HOOK_TIMEOUT }] },
+    const makeHookEntry = (hookType: AditHookType) => [
+      {
+        hooks: [{
+          type: "command",
+          command: buildAditHookCommand(aditBinaryPath, "codex", hookType),
+          timeout: HOOK_TIMEOUT,
+        }],
+      },
     ];
-    const makeMatcherEntry = (matcher: string, command: string) => [
-      { matcher, hooks: [{ type: "command", command: `CODEX=1 ${command}`, timeout: HOOK_TIMEOUT }] },
+    const makeMatcherEntry = (matcher: string, hookType: AditHookType) => [
+      {
+        matcher,
+        hooks: [{
+          type: "command",
+          command: buildAditHookCommand(aditBinaryPath, "codex", hookType),
+          timeout: HOOK_TIMEOUT,
+        }],
+      },
     ];
 
     return {
       configPath: ".codex/hooks.json",
       content: {
         hooks: {
-          SessionStart: makeMatcherEntry("startup|resume", `${aditBinaryPath} session-start`),
-          UserPromptSubmit: makeHookEntry(`${aditBinaryPath} prompt-submit`),
-          Stop: makeHookEntry(`${aditBinaryPath} stop`),
-          PostToolUse: makeMatcherEntry("Bash", `${aditBinaryPath} notification`),
+          SessionStart: makeMatcherEntry("startup|resume", "session-start"),
+          UserPromptSubmit: makeHookEntry("prompt-submit"),
+          Stop: makeHookEntry("stop"),
+          PostToolUse: makeMatcherEntry("Bash", "notification"),
         },
       },
     };
@@ -177,31 +177,6 @@ export const codexAdapter: PlatformAdapter = {
       detail: featureEnabled ? `Enabled in ${configPath}` : "Missing [features] hooks = true",
     });
 
-    let trustOk = false;
-    let trustDetail = "No trusted ADIT hook commands found";
-    if (existsSync(hooksPath)) {
-      try {
-        const hooksConfig = JSON.parse(readFileSync(hooksPath, "utf-8"));
-        const states = buildCodexHookStates(hooksPath, hooksConfig.hooks as Record<string, unknown[]>);
-        const userConfigPath = getCodexUserConfigPath();
-        const userConfig = readTextFile(userConfigPath);
-        const missingStates = userConfig === null
-          ? states.map((state) => state.key)
-          : states.filter((state) => !hasTrustedHookState(userConfig, state)).map((state) => state.key);
-        trustOk = states.length > 0 && missingStates.length === 0;
-        trustDetail = trustOk
-          ? `Trusted in ${userConfigPath}`
-          : `Missing trusted hook state${missingStates.length > 1 ? "s" : ""} in ${userConfigPath}`;
-      } catch {
-        trustDetail = "Failed to validate Codex trusted hook state";
-      }
-    }
-    checks.push({
-      name: "Codex hook trust",
-      ok: trustOk,
-      detail: trustDetail,
-    });
-
     return {
       valid: checks.every((c) => c.ok),
       checks,
@@ -258,7 +233,6 @@ export const codexAdapter: PlatformAdapter = {
 
     const configPath = join(codexDir, "config.toml");
     writeFileSync(configPath, enableCodexHooksFeature(readTextFile(configPath) ?? ""));
-    installCodexHookTrustConfig(hooksPath, mergedHooks);
   },
 
   getResumeCommand(_projectRoot: string): string | null {
@@ -300,17 +274,11 @@ export const codexAdapter: PlatformAdapter = {
       }
 
       writeFileSync(hooksPath, JSON.stringify(hooksConfig, null, 2) + "\n");
-      uninstallCodexHookTrustConfig(hooksPath);
     } catch {
       // Ignore parse errors
     }
   },
 };
-
-interface CodexHookState {
-  key: string;
-  trustedHash: string;
-}
 
 function readTextFile(path: string): string | null {
   try {
@@ -371,186 +339,6 @@ function hasTomlBooleanFeature(text: string, key: string): boolean {
     }
   }
   return false;
-}
-
-function buildCodexHookStates(hooksPath: string, hooks: Record<string, unknown[]> | undefined): CodexHookState[] {
-  if (!hooks || typeof hooks !== "object") return [];
-  const absoluteHooksPath = resolve(hooksPath);
-  const states: CodexHookState[] = [];
-
-  for (const mapping of HOOK_MAPPINGS) {
-    const entries = hooks[mapping.platformEvent];
-    if (!Array.isArray(entries)) continue;
-    const keyLabel = CODEX_HOOK_KEY_LABELS[mapping.platformEvent];
-    if (!keyLabel) continue;
-
-    for (let entryIndex = 0; entryIndex < entries.length; entryIndex++) {
-      const entry = entries[entryIndex];
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
-      const entryRecord = entry as { matcher?: unknown; hooks?: unknown };
-      if (!Array.isArray(entryRecord.hooks)) continue;
-
-      for (let hookIndex = 0; hookIndex < entryRecord.hooks.length; hookIndex++) {
-        const hook = entryRecord.hooks[hookIndex];
-        if (!hook || typeof hook !== "object" || Array.isArray(hook)) continue;
-        const hookRecord = hook as { command?: unknown; timeout?: unknown };
-        if (typeof hookRecord.command !== "string" || !isAditHookCommand(hookRecord.command)) continue;
-        const timeout = typeof hookRecord.timeout === "number" ? hookRecord.timeout : HOOK_TIMEOUT;
-        const matcher = typeof entryRecord.matcher === "string" ? entryRecord.matcher : undefined;
-        states.push({
-          key: `${absoluteHooksPath}:${keyLabel}:${entryIndex}:${hookIndex}`,
-          trustedHash: codexHookTrustedHash({
-            eventName: keyLabel,
-            matcher,
-            command: hookRecord.command,
-            timeout,
-          }),
-        });
-      }
-    }
-  }
-
-  return states;
-}
-
-function getCodexUserConfigPath(): string {
-  const codexHome = process.env.CODEX_HOME ?? join(homedir(), ".codex");
-  return join(codexHome, "config.toml");
-}
-
-function installCodexHookTrustConfig(
-  hooksPath: string,
-  hooks: Record<string, unknown[]>,
-): void {
-  const states = buildCodexHookStates(hooksPath, hooks);
-  if (states.length === 0) return;
-
-  const configPath = getCodexUserConfigPath();
-  try {
-    mkdirSync(dirname(configPath), { recursive: true });
-    const current = readTextFile(configPath) ?? "";
-    writeFileSync(configPath, appendCodexHookTrustBlock(current, codexTrustMarker(hooksPath), states));
-  } catch {
-    // Fail-open: hooks can still prompt for trust if the user config cannot be updated.
-  }
-}
-
-function uninstallCodexHookTrustConfig(hooksPath: string): void {
-  const configPath = getCodexUserConfigPath();
-  try {
-    const current = readTextFile(configPath);
-    if (current === null) return;
-    writeFileSync(
-      configPath,
-      `${stripAditCodexHookTrustBlocks(current, { marker: codexTrustMarker(hooksPath) }).replace(/\s+$/u, "")}\n`,
-    );
-  } catch {
-    // Fail-open.
-  }
-}
-
-function appendCodexHookTrustBlock(
-  text: string,
-  marker: string,
-  states: CodexHookState[],
-): string {
-  const cleaned = stripAditCodexHookTrustBlocks(text, {
-    marker,
-    keys: states.map((state) => state.key),
-  }).replace(/\s+$/u, "");
-  const block = [
-    `# >>> adit-codex-hooks ${marker}`,
-    ...states.flatMap((state) => [
-      `[hooks.state.${JSON.stringify(state.key)}]`,
-      "enabled = true",
-      `trusted_hash = ${JSON.stringify(state.trustedHash)}`,
-      "",
-    ]),
-    `# <<< adit-codex-hooks ${marker}`,
-  ].join("\n").replace(/\n+$/u, "");
-  return `${cleaned ? `${cleaned}\n\n` : ""}${block}\n`;
-}
-
-function stripAditCodexHookTrustBlocks(
-  text: string,
-  opts?: { marker?: string; keys?: string[] },
-): string {
-  const lines = text.split(/\r?\n/u);
-  const kept: string[] = [];
-  const keys = opts?.keys ?? [];
-  for (let index = 0; index < lines.length; index++) {
-    const line = lines[index] ?? "";
-    if (!/^\s*# >>> adit-codex-hooks\b/u.test(line)) {
-      kept.push(line);
-      continue;
-    }
-
-    const block = [line];
-    while (index + 1 < lines.length) {
-      index++;
-      const blockLine = lines[index] ?? "";
-      block.push(blockLine);
-      if (/^\s*# <<< adit-codex-hooks\b/u.test(blockLine)) break;
-    }
-
-    const blockText = block.join("\n");
-    const matchesMarker = opts?.marker ? block[0]?.includes(opts.marker) : false;
-    const matchesKey = keys.some((key) => blockText.includes(JSON.stringify(key)));
-    const stripBlock = matchesMarker || matchesKey || (!opts?.marker && keys.length === 0);
-    if (stripBlock) {
-      continue;
-    }
-    kept.push(...block);
-  }
-  return kept.join("\n");
-}
-
-function hasTrustedHookState(text: string, state: CodexHookState): boolean {
-  const escapedKey = escapeRegExp(JSON.stringify(state.key));
-  const blockPattern = new RegExp(
-    `\\[hooks\\.state\\.${escapedKey}\\]([\\s\\S]*?)(?=\\n\\s*\\[|$)`,
-    "u",
-  );
-  const match = text.match(blockPattern);
-  if (!match) return false;
-  const block = match[1] ?? "";
-  return /^\s*enabled\s*=\s*true\s*$/mu.test(block)
-    && new RegExp(`^\\s*trusted_hash\\s*=\\s*${escapeRegExp(JSON.stringify(state.trustedHash))}\\s*$`, "mu").test(block);
-}
-
-function codexHookTrustedHash(input: {
-  eventName: string;
-  matcher?: string;
-  command: string;
-  timeout: number;
-}): string {
-  const identity: Record<string, unknown> = {
-    event_name: input.eventName,
-    hooks: [{
-      async: false,
-      command: input.command,
-      timeout: input.timeout,
-      type: "command",
-    }],
-  };
-  if (input.matcher) identity.matcher = input.matcher;
-  const canonical = JSON.stringify(canonicalJson(identity));
-  return `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
-}
-
-function canonicalJson(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonicalJson);
-  if (!value || typeof value !== "object") return value;
-  const record = value as Record<string, unknown>;
-  return Object.fromEntries(
-    Object.keys(record)
-      .sort()
-      .map((key) => [key, canonicalJson(record[key])]),
-  );
-}
-
-function codexTrustMarker(hooksPath: string): string {
-  return createHash("sha256").update(resolve(hooksPath)).digest("hex").slice(0, 16);
 }
 
 function escapeRegExp(value: string): string {

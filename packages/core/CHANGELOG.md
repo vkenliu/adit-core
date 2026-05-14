@@ -1,5 +1,24 @@
 # @varveai/adit-core
 
+## 0.4.2
+
+### Patch Changes
+
+- 代码重构
+  代码重构
+
+## 0.4.1
+
+### Patch Changes
+
+- 代码重构
+
+## 0.4.0
+
+### Minor Changes
+
+- 部分代码重构，添加新命令
+
 ## 0.3.7
 
 ### Patch Changes
