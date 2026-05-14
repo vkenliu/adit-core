@@ -1,5 +1,11 @@
 import fs from "node:fs";
 import type { CliAgentRelayEvent } from "./types.js";
+import {
+  CODEX_UPDATE_PLAN_TOOL,
+  type CodexUpdatePlanSnapshot,
+  normalizeCodexUpdatePlanInput,
+  parseCodexToolInput,
+} from "./codex-plan-normalizer.js";
 
 interface NoteHookInput {
   eventType: string;
@@ -14,6 +20,7 @@ interface CodexSessionState {
   pendingTranscriptLine: string;
   seenKeys: Set<string>;
   lastAssistantMessageId?: string;
+  activeModelId?: string;
   seenAssistantStops: Set<string>;
   seenHookToolResults: Set<string>;
 }
@@ -28,6 +35,9 @@ export class CodexTranscriptSync {
     if (!sessionId) return null;
 
     const session = this.ensureSession(sessionId);
+    const modelId = readModelId(input.body);
+    if (modelId) session.activeModelId = modelId;
+
     const transcriptPath = readString(input.body.transcript_path);
     const isNewTranscript = Boolean(transcriptPath && transcriptPath !== session.transcriptPath);
     if (transcriptPath) {
@@ -82,7 +92,7 @@ export class CodexTranscriptSync {
         role: "assistant",
         sessionId,
         messageId: `codex-local-${sessionId}-${createdAt}`,
-        modelId: readString(body.model) ?? undefined,
+        modelId: readModelId(body) ?? session.activeModelId ?? undefined,
         text: truncateText(text),
         createdAt,
       },
@@ -92,26 +102,43 @@ export class CodexTranscriptSync {
   toolEvents(sessionId: string | null | undefined, body: Record<string, unknown>): CliAgentRelayEvent[] {
     if (!sessionId) return [];
     const toolName = readString(body.tool_name) ?? "tool";
-    const toolInput = asRecord(body.tool_input) ?? {};
+    const toolInput = parseCodexToolInput(body.tool_input);
     const toolResponse = body.tool_response;
     const key = `${toolName}:${safeJson(toolInput)}:${safeJson(toolResponse)}`;
     const session = this.ensureSession(sessionId);
     if (session.seenHookToolResults.has(key)) return [];
     session.seenHookToolResults.add(key);
     const createdAt = Date.now();
-    return [{
+    const modelId = readModelId(body) ?? session.activeModelId ?? undefined;
+    const toolUseId = `codex-local-tool-${hashText(key)}`;
+    const messageId = session.lastAssistantMessageId ?? `codex-local-tools-${sessionId}`;
+    const events: CliAgentRelayEvent[] = [{
       type: "tool",
       payload: {
         sessionId,
-        messageId: session.lastAssistantMessageId ?? `codex-local-tools-${sessionId}`,
-        toolUseId: `codex-local-tool-${hashText(key)}`,
+        messageId,
+        toolUseId,
         toolName,
         input: toolInput,
         output: safeJson(toolResponse),
+        modelId,
         status: "completed",
         createdAt,
       },
     }];
+    const updatePlan = toolName === CODEX_UPDATE_PLAN_TOOL
+      ? normalizeCodexUpdatePlanInput(toolInput)
+      : null;
+    if (updatePlan) {
+      events.push(updatePlanEvent({
+        sessionId,
+        messageId,
+        toolUseId,
+        updatePlan,
+        createdAt,
+      }));
+    }
+    return events;
   }
 
   private ensureSession(id: string): CodexSessionState {
@@ -218,9 +245,16 @@ export class CodexTranscriptSync {
     obj: Record<string, unknown>,
     timestamp: number,
   ): CliAgentRelayEvent[] {
-    if (readString(obj.type) !== "response_item") return [];
     const payload = asRecord(obj.payload);
     if (!payload) return [];
+
+    if (readString(obj.type) === "turn_context") {
+      const modelId = readModelId(payload);
+      if (modelId) session.activeModelId = modelId;
+      return [];
+    }
+
+    if (readString(obj.type) !== "response_item") return [];
 
     const payloadType = readString(payload.type);
     const events: CliAgentRelayEvent[] = [];
@@ -245,7 +279,7 @@ export class CodexTranscriptSync {
             role: "assistant",
             sessionId: session.id,
             messageId,
-            modelId: readString(payload.model) ?? undefined,
+            modelId: readModelId(payload) ?? session.activeModelId ?? undefined,
             text: truncateText(text),
             createdAt: timestamp,
           },
@@ -271,6 +305,7 @@ export class CodexTranscriptSync {
           payload: {
             sessionId: session.id,
             messageId,
+            modelId: readModelId(payload) ?? session.activeModelId ?? undefined,
             text: truncateText(text),
             createdAt: timestamp,
           },
@@ -283,7 +318,8 @@ export class CodexTranscriptSync {
       const toolUseId = readString(payload.call_id) ??
         makeToolUseId(session.id, obj, payload);
       const toolName = readString(payload.name) ?? "tool";
-      const input = parseToolInput(payload.arguments ?? payload.input);
+      const input = parseCodexToolInput(payload.arguments ?? payload.input);
+      const messageId = session.lastAssistantMessageId ?? `codex-local-tools-${session.id}`;
       this.pushIfNew(
         session,
         obj,
@@ -295,15 +331,36 @@ export class CodexTranscriptSync {
           type: "tool",
           payload: {
             sessionId: session.id,
-            messageId: session.lastAssistantMessageId ?? `codex-local-tools-${session.id}`,
+            messageId,
             toolUseId,
             toolName,
             input,
+            modelId: readModelId(payload) ?? session.activeModelId ?? undefined,
             status: "running",
             createdAt: timestamp,
           },
         },
       );
+      const updatePlan = toolName === CODEX_UPDATE_PLAN_TOOL
+        ? normalizeCodexUpdatePlanInput(input)
+        : null;
+      if (updatePlan) {
+        this.pushIfNew(
+          session,
+          obj,
+          "todos-updated",
+          1,
+          `${toolUseId}:${safeJson(updatePlan.todos)}:${updatePlan.explanation ?? ""}`,
+          events,
+          updatePlanEvent({
+            sessionId: session.id,
+            messageId,
+            toolUseId,
+            updatePlan,
+            createdAt: timestamp,
+          }),
+        );
+      }
       return events;
     }
 
@@ -330,6 +387,7 @@ export class CodexTranscriptSync {
             toolName: "tool",
             input: {},
             output,
+            modelId: readModelId(payload) ?? session.activeModelId ?? undefined,
             status: "completed",
             createdAt: timestamp,
           },
@@ -370,18 +428,27 @@ export class CodexRelayEventDeduper {
   private readonly messageAlias = new Map<string, string>();
   private readonly seenAssistantMessageIds = new Set<string>();
   private readonly seenUsageKeys = new Set<string>();
+  private readonly seenTodoSnapshotKeys = new Set<string>();
 
   filter(event: CliAgentRelayEvent): CliAgentRelayEvent | null {
     if (event.type === "message") {
       return this.filterMessage(event);
     }
 
-    if (event.type === "assistant-delta" || event.type === "reasoning" || event.type === "tool") {
+    if (
+      event.type === "assistant-delta" ||
+      event.type === "reasoning" ||
+      event.type === "tool"
+    ) {
       return this.rewriteMessageScopedEvent(event);
     }
 
     if (event.type === "usage") {
       return this.filterUsage(event);
+    }
+
+    if (event.type === "todos.updated") {
+      return this.filterTodoSnapshot(event);
     }
 
     return event;
@@ -474,6 +541,27 @@ export class CodexRelayEventDeduper {
     this.seenUsageKeys.add(key);
     return rewritten;
   }
+
+  private filterTodoSnapshot(event: CliAgentRelayEvent): CliAgentRelayEvent | null {
+    const rewritten = this.rewriteMessageScopedEvent(event);
+    if (!rewritten) return null;
+
+    const sessionId = readString(rewritten.payload.sessionId);
+    if (!sessionId) return rewritten;
+
+    const scopeId = readString(rewritten.payload.scopeId) ?? "main";
+    const turn = this.turnBySession.get(sessionId) ?? 0;
+    const key = [
+      sessionId,
+      turn,
+      scopeId,
+      safeJson(rewritten.payload.todos),
+      readString(rewritten.payload.explanation) ?? "",
+    ].join(":");
+    if (this.seenTodoSnapshotKeys.has(key)) return null;
+    this.seenTodoSnapshotKeys.add(key);
+    return rewritten;
+  }
 }
 
 function readString(value: unknown): string | null {
@@ -487,6 +575,12 @@ function readSessionId(body: Record<string, unknown>): string | null {
     readString(body.transcript_path)?.match(/([0-9a-f-]{8}-[0-9a-f-]{4}-[0-9a-f-]{4}-[0-9a-f-]{4}-[0-9a-f-]{12})\.jsonl$/i)?.[1] ??
     null
   );
+}
+
+function readModelId(value: Record<string, unknown>): string | null {
+  return readString(value.model) ??
+    readString(value.activeModelId) ??
+    readString(value.active_model_id);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -558,24 +652,30 @@ function makeToolUseId(
   return `codex-local-tool-${hashText(`${sessionId}:${String(obj.timestamp ?? "")}:${safeJson(payload)}`)}`;
 }
 
-function parseToolInput(value: unknown): Record<string, unknown> {
-  if (isRecord(value)) return value;
-  if (typeof value === "string") {
-    try {
-      const parsed = JSON.parse(value) as unknown;
-      if (isRecord(parsed)) return parsed;
-      return { value: parsed };
-    } catch {
-      return { value };
-    }
-  }
-  if (value === undefined) return {};
-  return { value };
-}
-
 function formatToolOutput(value: unknown): string {
   if (typeof value === "string") return truncateText(value);
   return safeJson(value);
+}
+
+function updatePlanEvent(input: {
+  sessionId: string;
+  messageId: string;
+  toolUseId: string;
+  updatePlan: CodexUpdatePlanSnapshot;
+  createdAt: number;
+}): CliAgentRelayEvent {
+  return {
+    type: "todos.updated",
+    payload: {
+      sessionId: input.sessionId,
+      messageId: input.messageId,
+      toolUseId: input.toolUseId,
+      scopeId: "main",
+      todos: input.updatePlan.todos,
+      ...(input.updatePlan.explanation ? { explanation: input.updatePlan.explanation } : {}),
+      createdAt: input.createdAt,
+    },
+  };
 }
 
 function safeJson(value: unknown): string {

@@ -63,12 +63,24 @@ interface ClaudeCodeProviderOptions {
 const RECLAIM_COMMAND = "/local";
 const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
 const EXIT_PLAN_MODE_TOOL = "ExitPlanMode";
+const TODO_WRITE_TOOL = "TodoWrite";
 const CLAUDE_FALLBACK_SLASH_COMMANDS = new Set([
   "compact",
   "rewind",
   "btw",
   "memory",
 ]);
+
+export type ClaudeTodoStatus = "pending" | "in_progress" | "completed";
+export type ClaudeTodoPriority = "high" | "medium" | "low";
+
+export interface ClaudeTodoItem {
+  id: string;
+  content: string;
+  status: ClaudeTodoStatus;
+  priority?: ClaudeTodoPriority;
+  activeForm?: string;
+}
 
 interface CliQuestionRequest {
   id: string;
@@ -1093,6 +1105,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     const content = message.message?.content;
     if (!Array.isArray(content)) return;
     const messageId = makeMessageId(message, sessionId);
+    const parentToolUseId = readString((message as { parent_tool_use_id?: unknown }).parent_tool_use_id);
     const modelId = typeof message.message?.model === "string"
       ? message.message.model
       : undefined;
@@ -1124,19 +1137,54 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
           createdAt: Date.now(),
         });
       } else if (part.type === "tool_use" || part.type === "server_tool_use") {
+        const createdAt = Date.now();
+        const toolUseId = typeof part.id === "string" ? part.id : undefined;
+        const toolName = typeof part.name === "string" ? part.name : "tool";
+        const input = part.input ?? {};
         this.pushEvent("tool", {
           sessionId,
           messageId,
           modelId,
           usage,
-          toolUseId: typeof part.id === "string" ? part.id : undefined,
-          toolName: typeof part.name === "string" ? part.name : "tool",
-          input: part.input ?? {},
+          toolUseId,
+          toolName,
+          input,
           status: "running",
-          createdAt: Date.now(),
+          createdAt,
         });
+        if (toolName === TODO_WRITE_TOOL) {
+          this.emitTodoWrite({
+            sessionId,
+            messageId,
+            toolUseId,
+            parentToolUseId,
+            input,
+            createdAt,
+          });
+        }
       }
     }
+  }
+
+  private emitTodoWrite(input: {
+    sessionId: string;
+    messageId: string;
+    toolUseId?: string;
+    parentToolUseId: string | null;
+    input: unknown;
+    createdAt: number;
+  }): void {
+    const todos = normalizeClaudeTodoWriteInput(input.input);
+    if (!todos) return;
+    this.pushEvent("todos.updated", {
+      sessionId: input.sessionId,
+      messageId: input.messageId,
+      toolUseId: input.toolUseId,
+      parentToolUseId: input.parentToolUseId,
+      scopeId: input.parentToolUseId ?? "main",
+      todos,
+      createdAt: input.createdAt,
+    });
   }
 
   private emitResultUsage(message: SDKMessage, fallbackSessionId: string): void {
@@ -1909,6 +1957,40 @@ function readSettingsModel(file: string): string | null {
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function readTodoStatus(value: unknown): ClaudeTodoStatus | null {
+  return value === "pending" || value === "in_progress" || value === "completed"
+    ? value
+    : null;
+}
+
+function readTodoPriority(value: unknown): ClaudeTodoPriority | null {
+  return value === "high" || value === "medium" || value === "low" ? value : null;
+}
+
+export function normalizeClaudeTodoWriteInput(input: unknown): ClaudeTodoItem[] | null {
+  const rawTodos = asRecord(input).todos;
+  if (!Array.isArray(rawTodos)) return null;
+  if (rawTodos.length === 0) return [];
+
+  const todos: ClaudeTodoItem[] = [];
+  rawTodos.forEach((item, index) => {
+    const todo = asRecord(item);
+    const content = readString(todo.content) ?? readString(todo.title) ?? readString(todo.task);
+    if (!content) return;
+    const priority = readTodoPriority(todo.priority);
+    const activeForm = readString(todo.activeForm);
+    todos.push({
+      id: readString(todo.id) ?? `todo-${index}`,
+      content,
+      status: readTodoStatus(todo.status) ?? "pending",
+      ...(priority ? { priority } : {}),
+      ...(activeForm ? { activeForm } : {}),
+    });
+  });
+
+  return todos.length > 0 ? todos : null;
 }
 
 function isUuid(value: string): boolean {

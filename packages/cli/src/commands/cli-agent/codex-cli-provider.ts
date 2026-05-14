@@ -13,6 +13,11 @@ import {
   CodexAppServerClient,
   type CodexJsonRpcMessage,
 } from "./codex-app-server-client.js";
+import {
+  CODEX_UPDATE_PLAN_TOOL,
+  normalizeCodexUpdatePlanInput,
+  parseCodexToolInput,
+} from "./codex-plan-normalizer.js";
 
 interface PendingPrompt {
   message: string;
@@ -49,6 +54,8 @@ interface CodexCliProviderOptions {
 export type CodexPromptMode = "build" | "plan";
 
 const RECLAIM_COMMAND = "/local";
+const CLEAR_TERMINAL_LINE = "\r\x1b[2K";
+const CLEAR_TO_END_OF_LINE = "\x1b[0K";
 const TERMINAL_RECLAIM_RESET = [
   "\x1b[?1004l", // Focus in/out reporting.
   "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l", // Mouse modes.
@@ -167,6 +174,8 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     const resumeId = this.activeSessionId ?? this.resumeSessionId;
     if (resumeId) {
       await this.resumeThread(resumeId);
+    } else {
+      await this.startThread("build");
     }
 
     this.suppressNextLocalExit = true;
@@ -180,8 +189,8 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     this.emitState();
     this.emitSlashCommands();
     restoreTerminalForCodexReclaim();
-    process.stderr.write(
-      `\n[adit cloud codex] Web has taken over Codex CLI. Type ${RECLAIM_COMMAND} here to reclaim local control.\n`,
+    writeCodexTerminalNotice(
+      `[adit cloud codex] Web has taken over Codex CLI. Type ${RECLAIM_COMMAND} here to reclaim local control.`,
     );
     this.attachReclaimInput();
   }
@@ -223,7 +232,11 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
 
     if (this.ownerValue === "web") {
       await this.ensureAppServer();
-      await this.resumeThread(sessionId);
+      if (this.loadedThreadIds.has(sessionId)) {
+        this.noteThread({ id: sessionId }, null);
+      } else {
+        await this.resumeThread(sessionId);
+      }
       this.finishWebPrompts(new Error("Codex session switched"));
       this.setBusy(false);
       this.setThinking(false);
@@ -858,15 +871,27 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       return;
     }
 
-    if (type === "mcpToolCall" || type === "dynamicToolCall" || type === "webSearch") {
-      const toolName = readString(item.tool) ?? readString(item.server) ?? type;
+    if (isCodexToolItemType(type)) {
+      const toolName = readString(item.tool) ??
+        readString(item.name) ??
+        readString(item.toolName) ??
+        readString(item.server) ??
+        type;
       const status = readString(item.status);
+      const messageId = this.lastAssistantMessageBySession.get(sessionId) ?? `codex-tools-${sessionId}`;
+      const input = item.arguments !== undefined
+        ? parseCodexToolInput(item.arguments)
+        : item.input !== undefined
+          ? parseCodexToolInput(item.input)
+          : item.toolInput !== undefined
+            ? parseCodexToolInput(item.toolInput)
+            : { query: item.query };
       this.pushEvent("tool", {
         sessionId,
-        messageId: this.lastAssistantMessageBySession.get(sessionId) ?? `codex-tools-${sessionId}`,
+        messageId,
         toolUseId: id,
         toolName,
-        input: asRecord(item.arguments) ?? { query: item.query },
+        input,
         output: item.result !== undefined ? safeJson(item.result) : undefined,
         error: item.error !== undefined ? safeJson(item.error) : undefined,
         status: opts.running || status === "inProgress" || status === "running"
@@ -874,7 +899,36 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
           : item.error ? "error" : "completed",
         createdAt,
       });
+      if (toolName === CODEX_UPDATE_PLAN_TOOL) {
+        this.emitUpdatePlan({
+          sessionId,
+          messageId,
+          toolUseId: id,
+          input,
+          createdAt,
+        });
+      }
     }
+  }
+
+  private emitUpdatePlan(input: {
+    sessionId: string;
+    messageId: string;
+    toolUseId: string;
+    input: unknown;
+    createdAt: number;
+  }): void {
+    const snapshot = normalizeCodexUpdatePlanInput(input.input);
+    if (!snapshot) return;
+    this.pushEvent("todos.updated", {
+      sessionId: input.sessionId,
+      messageId: input.messageId,
+      toolUseId: input.toolUseId,
+      scopeId: "main",
+      todos: snapshot.todos,
+      ...(snapshot.explanation ? { explanation: snapshot.explanation } : {}),
+      createdAt: input.createdAt,
+    });
   }
 
   private bindPendingSession(pendingSessionId: string, sessionId: string): void {
@@ -1022,11 +1076,21 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       return;
     }
     if (text.includes("\n") || text.includes("\r")) {
-      process.stderr.write(
+      writeCodexTerminalNotice(
         `[adit cloud codex] Web owns this session. Type ${RECLAIM_COMMAND} to reclaim.\n`,
       );
     }
   };
+}
+
+function writeCodexTerminalNotice(message: string): void {
+  process.stderr.write(formatCodexTerminalNotice(message));
+}
+
+export function formatCodexTerminalNotice(message: string, isTTY = Boolean(process.stderr.isTTY)): string {
+  const text = message.replace(/\r?\n$/u, "");
+  if (!isTTY) return `\n${text}\n`;
+  return `${CLEAR_TERMINAL_LINE}\r\n${CLEAR_TERMINAL_LINE}${text}${CLEAR_TO_END_OF_LINE}\r\n`;
 }
 
 function restoreTerminalForCodexReclaim(): void {
@@ -1239,6 +1303,16 @@ function approvalToolName(method: string, params: Record<string, unknown>): stri
     return "CodexPermissions";
   }
   return readString(params.toolName) ?? "Codex";
+}
+
+function isCodexToolItemType(type: string): boolean {
+  return type === "mcpToolCall" ||
+    type === "dynamicToolCall" ||
+    type === "webSearch" ||
+    type === "functionCall" ||
+    type === "function_call" ||
+    type === "customToolCall" ||
+    type === "custom_tool_call";
 }
 
 function buildApprovalResponse(

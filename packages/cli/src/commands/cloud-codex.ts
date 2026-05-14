@@ -23,8 +23,27 @@ interface CloudCodexOptions {
   arg?: string[];
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function createRelayLoopWake() {
+  let wakeCurrent: (() => void) | null = null;
+  return {
+    wake(): void {
+      const wake = wakeCurrent;
+      wakeCurrent = null;
+      wake?.();
+    },
+    wait(ms: number): Promise<void> {
+      return new Promise((resolve) => {
+        let timer: ReturnType<typeof setTimeout>;
+        const finish = () => {
+          if (wakeCurrent === finish) wakeCurrent = null;
+          clearTimeout(timer);
+          resolve();
+        };
+        timer = setTimeout(finish, ms);
+        wakeCurrent = finish;
+      });
+    },
+  };
 }
 
 function findExecutable(command: string): boolean {
@@ -165,8 +184,8 @@ function enqueueCommand(input: {
   queue: RelayCommand[];
   seen: Set<string>;
   command: RelayCommand;
-}): void {
-  if (input.seen.has(input.command.id)) return;
+}): boolean {
+  if (input.seen.has(input.command.id)) return false;
   input.seen.add(input.command.id);
   input.queue.push(input.command);
   if (input.seen.size > 500) {
@@ -175,6 +194,7 @@ function enqueueCommand(input: {
       if (!keep.has(id) && input.seen.size > 250) input.seen.delete(id);
     }
   }
+  return true;
 }
 
 async function drainCommandQueue(input: {
@@ -182,10 +202,12 @@ async function drainCommandQueue(input: {
   commands: RelayCommand[];
   enqueueEvent: (event: CliAgentRelayEvent) => void;
   ws: CliAgentRelayWebSocket | null;
-}): Promise<void> {
+}): Promise<boolean> {
+  let processed = false;
   while (input.commands.length > 0) {
     const command = input.commands.shift();
-    if (!command) return;
+    if (!command) return processed;
+    processed = true;
     try {
       await processCommand(input.provider, command);
       input.ws?.ack(command.id);
@@ -202,6 +224,7 @@ async function drainCommandQueue(input: {
       });
     }
   }
+  return processed;
 }
 
 export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void> {
@@ -257,9 +280,13 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
   const seenCommandIds = new Set<string>();
   const transcriptSync = new CodexTranscriptSync();
   const eventDeduper = new CodexRelayEventDeduper();
+  const relayLoopWake = createRelayLoopWake();
   const enqueueEvent = (event: CliAgentRelayEvent): void => {
     const next = eventDeduper.filter(event);
-    if (next) eventQueue.push(next);
+    if (next) {
+      eventQueue.push(next);
+      relayLoopWake.wake();
+    }
   };
   const enqueueEvents = (events: CliAgentRelayEvent[]): void => {
     for (const event of events) enqueueEvent(event);
@@ -299,11 +326,14 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
         console.log("Local Codex CLI owns the session until the Coding page takes over.");
         console.log("When Web owns the session, type /local in this terminal to reclaim it.");
       },
-      onCommand: (command) => enqueueCommand({
-        queue: commandQueue,
-        seen: seenCommandIds,
-        command,
-      }),
+      onCommand: (command) => {
+        const enqueued = enqueueCommand({
+          queue: commandQueue,
+          seen: seenCommandIds,
+          command,
+        });
+        if (enqueued) relayLoopWake.wake();
+      },
       onConnectionClosed: () => {
         // Server archived our panel; reconnect will get a fresh one.
       },
@@ -365,7 +395,7 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
     ws.connect();
 
     let stopping = false;
-    let lastLocalTranscriptDrainAt = 0;
+    let lastTranscriptDrainAt = 0;
     const cleanup = (signal: string) => {
       if (stopping) return;
       stopping = true;
@@ -392,25 +422,27 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
           ws.sendHeartbeat(provider.state);
           const state = provider.state;
           const now = Date.now();
-          if (
-            state.owner === "local" &&
-            state.activeSessionId &&
-            now - lastLocalTranscriptDrainAt > 1000
-          ) {
-            lastLocalTranscriptDrainAt = now;
+          if (state.activeSessionId && now - lastTranscriptDrainAt > 1000) {
+            lastTranscriptDrainAt = now;
             enqueueEvents(transcriptSync.drainSession(state.activeSessionId));
           }
-          if (eventQueue.length > 0) {
+          const flushEvents = () => {
+            if (eventQueue.length === 0) return;
             const batch = eventQueue.splice(0, 50);
             const sent = ws.sendEvents(batch);
             if (!sent) eventQueue.unshift(...batch);
-          }
-          await drainCommandQueue({
+          };
+          flushEvents();
+          const processedCommands = await drainCommandQueue({
             provider,
             commands: commandQueue,
             enqueueEvent,
             ws,
           });
+          if (processedCommands) {
+            ws.sendHeartbeat(provider.state);
+            flushEvents();
+          }
         } else {
           ws.connect();
         }
@@ -418,7 +450,10 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
         printCloudError("[adit cloud codex] relay loop", error);
       }
 
-      await sleep(1500);
+      const relayConnected = ws.isOpen && Boolean(ws.currentConnectionId);
+      if (commandQueue.length === 0 && (!relayConnected || eventQueue.length === 0)) {
+        await relayLoopWake.wait(1500);
+      }
     }
   } catch (error) {
     printCloudError("Failed to start Codex Coding relay", error);
