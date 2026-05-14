@@ -40,14 +40,14 @@ ADIT is built on three pillars:
 
 TypeScript pnpm monorepo with six packages:
 
-| Package | Description |
-|---------|-------------|
-| `@adit/core` | Types, SQLite database, config, sync primitives (ULID, vector clocks), content-aware secret redaction |
-| `@adit/engine` | Git operations, temp-index snapshots, change detection, timeline management, environment capture |
-| `@adit/hooks` | Hook handlers with platform adapter registry (Claude Code adapter implemented) |
-| `@adit/cli` | Commander.js CLI with interactive TUI (React/Ink) |
-| `@adit/cloud` | Cloud sync client — device-code auth, HTTP client with token refresh, incremental sync engine, transcript upload |
-| `@adit/plans` | SpecFlow-inspired plan artifact generator |
+| Package        | Description                                                                                                      |
+| -------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `@adit/core`   | Types, SQLite database, config, sync primitives (ULID, vector clocks), content-aware secret redaction            |
+| `@adit/engine` | Git operations, temp-index snapshots, change detection, timeline management, environment capture                 |
+| `@adit/hooks`  | Hook handlers with platform adapter registry (Claude Code adapter implemented)                                   |
+| `@adit/cli`    | Commander.js CLI with interactive TUI (React/Ink)                                                                |
+| `@adit/cloud`  | Cloud sync client — device-code auth, HTTP client with token refresh, incremental sync engine, transcript upload |
+| `@adit/plans`  | SpecFlow-inspired plan artifact generator                                                                        |
 
 ### Platform Adapters
 
@@ -136,72 +136,80 @@ adit cloud login --server <url>
 
 ### Core
 
-| Command | Description |
-|---------|-------------|
-| `adit init` | Initialize hooks + data directory (`--platform`, `--force` to reinstall) |
-| `adit status` | Styled status with session card, git state, sync info, and hook configuration (`--json`) |
-| `adit config` | Show current configuration (`--json`) |
+| Command       | Description                                                                                    |
+| ------------- | ---------------------------------------------------------------------------------------------- |
+| `adit init`   | Initialize hooks + data directory (`--platform`, `--force` to reinstall)                       |
+| `adit status` | Styled status with session card, git state, sync info, and hook configuration (`--json`)       |
+| `adit config` | Show current configuration (`--json`)                                                          |
 | `adit doctor` | Validate installation: SQLite integrity, hooks, stale sessions, disk usage (`--fix`, `--json`) |
 
 ### Timeline
 
-| Command | Description |
-|---------|-------------|
+| Command                   | Description                                                                                                                               |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `adit list` (alias: `ls`) | Show timeline entries with `--limit`, `--actor`, `--type`, `--sort` (ACTOR/TIME), `--checkpoints`, `--query <text>`, `--expand`, `--json` |
-| `adit show <id>` | Full event detail with prompt, CoT, and diff |
-| `adit search <query>` | Full-text search with `--actor`, `--type`, `--from`/`--to`, `--branch`, `--has-checkpoint`, `--json` |
-| `adit tui` | Interactive terminal UI with keyboard navigation |
+| `adit show <id>`          | Full event detail with prompt, CoT, and diff                                                                                              |
+| `adit search <query>`     | Full-text search with `--actor`, `--type`, `--from`/`--to`, `--branch`, `--has-checkpoint`, `--json`                                      |
+| `adit tui`                | Interactive terminal UI with keyboard navigation                                                                                          |
 
 ### Prompt
 
-| Command | Description |
-|---------|-------------|
+| Command            | Description                                     |
+| ------------------ | ----------------------------------------------- |
 | `adit prompt <id>` | Show prompt text with `--max-chars`, `--offset` |
 
 ### Snapshot (Git Checkpoints)
 
 All git checkpoint operations are grouped under `adit snapshot` to clearly separate them from read-only timeline commands:
 
-| Command | Description |
-|---------|-------------|
-| `adit snapshot revert [id]` | Restore working tree to checkpoint; interactive picker if no ID given (`--yes`, `--limit`) |
-| `adit snapshot undo` | Revert to parent of last checkpoint (`--yes`) |
-| `adit snapshot resume [branch]` | Resume session from latest checkpoint on a branch; supports squash-merged branches; prints continue commands (`--yes`) |
-| `adit snapshot diff <id>` | Show diff with `--max-lines`, `--offset-lines`, `--file` |
-| `adit snapshot env show <id>` | Show environment snapshot for an event |
-| `adit snapshot env latest` | Show most recent snapshot (`--json`) |
-| `adit snapshot env diff <id1> <id2>` | Compare two snapshots with categorized changes and severity (`--json`) |
-| `adit snapshot env history` | List snapshot history (`--limit`, `--json`) |
+| Command                              | Description                                                                                                            |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `adit snapshot revert [id]`          | Restore working tree to checkpoint; interactive picker if no ID given (`--yes`, `--limit`)                             |
+| `adit snapshot undo`                 | Revert to parent of last checkpoint (`--yes`)                                                                          |
+| `adit snapshot resume [branch]`      | Resume session from latest checkpoint on a branch; supports squash-merged branches; prints continue commands (`--yes`) |
+| `adit snapshot diff <id>`            | Show diff with `--max-lines`, `--offset-lines`, `--file`                                                               |
+| `adit snapshot env show <id>`        | Show environment snapshot for an event                                                                                 |
+| `adit snapshot env latest`           | Show most recent snapshot (`--json`)                                                                                   |
+| `adit snapshot env diff <id1> <id2>` | Compare two snapshots with categorized changes and severity (`--json`)                                                 |
+| `adit snapshot env history`          | List snapshot history (`--limit`, `--json`)                                                                            |
 
 ### Export
 
-| Command | Description |
-|---------|-------------|
-| `adit export event <id>` | Export a single event (`--format json`, `--output`) |
+| Command                    | Description                                                                                          |
+| -------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `adit export event <id>`   | Export a single event (`--format json`, `--output`)                                                  |
 | `adit export session [id]` | Export full session (`--format json\|jsonl\|markdown`, `--include-diffs`, `--include-env`, `--gzip`) |
 
 ### Cloud Sync
 
-| Command | Description |
-|---------|-------------|
-| `adit cloud login` | Authenticate via device code flow (`--server <url>`) |
-| `adit cloud logout` | Clear stored cloud credentials |
-| `adit cloud auth-token <token>` | Authenticate with a static JWT token (for CI/CD) |
-| `adit cloud sync` | Push unsynced records to cloud (`--json`) |
-| `adit cloud status` | Show cloud sync status with server reachability (`--json`) |
-| `adit cloud reset-credentials` | Force-clear all credentials and sync state (`--yes`) |
-| `adit cloud transcript enable` | Enable automatic transcript upload |
-| `adit cloud transcript disable` | Disable automatic transcript upload |
-| `adit cloud transcript status` | Show transcript upload status (`--json`) |
-| `adit cloud transcript upload` | Manually trigger transcript uploads (`--json`) |
-| `adit cloud transcript reset <id>` | Reset a failed transcript for re-upload (`--json`) |
+| Command                            | Description                                                |
+| ---------------------------------- | ---------------------------------------------------------- |
+| `adit cloud login`                 | Authenticate via device code flow (`--server <url>`)       |
+| `adit cloud logout`                | Clear stored cloud credentials                             |
+| `adit cloud auth-token <token>`    | Authenticate with a static JWT token (for CI/CD)           |
+| `adit cloud sync`                  | Push unsynced records to cloud (`--json`)                  |
+| `adit cloud status`                | Show cloud sync status with server reachability (`--json`) |
+| `adit cloud reset-credentials`     | Force-clear all credentials and sync state (`--yes`)       |
+| `adit cloud transcript enable`     | Enable automatic transcript upload                         |
+| `adit cloud transcript disable`    | Disable automatic transcript upload                        |
+| `adit cloud transcript status`     | Show transcript upload status (`--json`)                   |
+| `adit cloud transcript upload`     | Manually trigger transcript uploads (`--json`)             |
+| `adit cloud transcript reset <id>` | Reset a failed transcript for re-upload (`--json`)         |
+
+### Cloud Coding
+
+| Command                          | Description                                                           |
+| -------------------------------- | --------------------------------------------------------------------- |
+| `adit cloud claude [cliArgs...]` | Connect local Claude Code CLI to adit-cloud Coding (`--bin`, `--arg`) |
+| `adit cloud codex [cliArgs...]`  | Connect local Codex CLI to adit-cloud Coding (`--bin`, `--arg`)       |
 
 ### Project Link
 
-| Command | Description |
-|---------|-------------|
-| `adit cloud link` | Link project to adit-cloud — uploads git metadata and documents (`--force`, `--skip-docs`, `--skip-commits`, `--skip-qualify`, `--dry-run`, `--json`) |
-| `adit cloud intent` | List intents and tasks from connected project (`--id <id>`, `--state <state>`, `--json`) |
+| Command                                | Description                                                                                                                                           |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `adit cloud link`                      | Link project to adit-cloud — uploads git metadata and documents (`--force`, `--skip-docs`, `--skip-commits`, `--skip-qualify`, `--dry-run`, `--json`) |
+| `adit cloud intent`                    | List intents and tasks from connected project (`--id <id>`, `--state <state>`, `--json`)                                                              |
+| `adit cloud intent complete <id>`      | Complete all tasks for an intent, or one phase with `--phase <number>` (`--json`)                                                                     |
 
 Also available as `/adit link` and `/adit intent` slash commands in Claude Code and OpenCode.
 
@@ -209,25 +217,38 @@ Also available as `/adit link` and `/adit intent` slash commands in Claude Code 
 
 ### Plugins
 
-| Command | Description |
-|---------|-------------|
-| `adit plugin install [platform]` | Install hooks for a platform |
+| Command                            | Description                                                            |
+| ---------------------------------- | ---------------------------------------------------------------------- |
+| `adit plugin install [platform]`   | Install hooks for a platform                                           |
 | `adit plugin uninstall [platform]` | Remove hooks (`--all` for all platforms, `--clean` to remove data dir) |
-| `adit plugin list` | List available platform adapters |
-| `adit plugin validate [platform]` | Validate hook installation |
+| `adit plugin list`                 | List available platform adapters                                       |
+| `adit plugin validate [platform]`  | Validate hook installation                                             |
 
 ### Database Management
 
-| Command | Description |
-|---------|-------------|
+| Command                | Description                                                                     |
+| ---------------------- | ------------------------------------------------------------------------------- |
 | `adit db clear-events` | Delete all local events, sessions, diffs, and env snapshots (`--yes`, `--json`) |
 
 ### Performance
 
-| Command | Description |
-|---------|-------------|
+| Command           | Description                                                              |
+| ----------------- | ------------------------------------------------------------------------ |
 | `adit perf stats` | Show performance stats report (`--from`, `--to`, `--category`, `--json`) |
-| `adit perf clear` | Clear all performance logs (`--json`) |
+| `adit perf clear` | Clear all performance logs (`--json`)                                    |
+
+### Docs
+
+| Command                     | Description                                              |
+| --------------------------- | -------------------------------------------------------- |
+| `adit docs scaffold [type]` | Generate project document templates (`--output <path>`)  |
+| `adit docs validate [path]` | Validate project documents (`--threshold <n>`, `--json`) |
+
+### Maintenance
+
+| Command            | Description                                   |
+| ------------------ | --------------------------------------------- |
+| `adit self-update` | Update ADIT to the latest version (`--check`) |
 
 ## Interactive TUI
 
@@ -250,6 +271,7 @@ Architecture uses a platform adapter pattern — adding a new AI platform (Curso
 ## Data Directory
 
 ADIT stores its data in `.adit/` at the project root:
+
 - `adit.sqlite` — SQLite database (events, sessions, checkpoints, environment snapshots, sync state)
 - `plans/` — SpecFlow markdown artifacts
 
@@ -291,16 +313,16 @@ Files in hidden directories (any path segment starting with `.`) are always skip
 
 ### Environment Variables
 
-| Environment Variable | Description | Default |
-|----------------------|-------------|---------|
-| `ADIT_DATA_DIR` | Override `.adit/` data directory location | `<project>/.adit` |
-| `ADIT_CAPTURE_ENV` | Set to `false` to disable environment snapshots | `true` |
-| `ADIT_DEBUG` | Enable debug output for cloud sync errors | *(off)* |
-| `ADIT_CLOUD_URL` | Cloud server URL | *(from credentials)* |
-| `ADIT_CLOUD_ENABLED` | Set to `false` to disable all cloud features | `true` |
-| `ADIT_CLOUD_AUTO_SYNC` | Set to `false` to disable auto-sync | `true` |
-| `ADIT_AUTH_TOKEN` | Static JWT token for CI/CD auth (bypasses device-code login) | *(none)* |
-| `ADIT_TRANSCRIPT_UPLOAD` | Set to `false` to disable transcript upload | *(enabled)* |
+| Environment Variable     | Description                                                  | Default              |
+| ------------------------ | ------------------------------------------------------------ | -------------------- |
+| `ADIT_DATA_DIR`          | Override `.adit/` data directory location                    | `<project>/.adit`    |
+| `ADIT_CAPTURE_ENV`       | Set to `false` to disable environment snapshots              | `true`               |
+| `ADIT_DEBUG`             | Enable debug output for cloud sync errors                    | _(off)_              |
+| `ADIT_CLOUD_URL`         | Cloud server URL                                             | _(from credentials)_ |
+| `ADIT_CLOUD_ENABLED`     | Set to `false` to disable all cloud features                 | `true`               |
+| `ADIT_CLOUD_AUTO_SYNC`   | Set to `false` to disable auto-sync                          | `true`               |
+| `ADIT_AUTH_TOKEN`        | Static JWT token for CI/CD auth (bypasses device-code login) | _(none)_             |
+| `ADIT_TRANSCRIPT_UPLOAD` | Set to `false` to disable transcript upload                  | _(enabled)_          |
 
 ## Requirements
 

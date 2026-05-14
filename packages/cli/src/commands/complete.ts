@@ -1,5 +1,5 @@
 /**
- * CLI handler for `adit cloud intent <id> complete`.
+ * CLI handler for `adit cloud intent complete <id>`.
  *
  * Completes a phase or entire intent by marking all tasks as completed,
  * auto-checking phase checklists, and transitioning intent to "shipped"
@@ -14,22 +14,31 @@ import {
   bulkTaskUpdateCommand,
   type BulkTaskUpdateOptions,
 } from "@varveai/adit-cloud";
-import { CloudAuthError, CloudNetworkError, CloudApiError } from "@varveai/adit-cloud";
+import {
+  CloudAuthError,
+  CloudNetworkError,
+  CloudApiError,
+} from "@varveai/adit-cloud";
 
 /**
- * `adit cloud intent <intent-id> complete` — Complete a phase or entire intent.
+ * `adit cloud intent complete <intent-id>` — Complete a phase or entire intent.
  */
-export async function completeCliHandler(intentId: string, opts: {
-  phase?: number;
-  json?: boolean;
-}): Promise<void> {
+export async function completeCliHandler(
+  intentId: string,
+  opts: {
+    phase?: number;
+    json?: boolean;
+  },
+): Promise<void> {
   const config = loadConfig();
 
   // Prerequisite: credentials
   const credentials = loadCredentials();
   if (!credentials) {
     console.error("Not logged in to adit-cloud.");
-    console.error("Run 'adit cloud login' to authenticate, or 'adit cloud auth-token <token>' for token auth.");
+    console.error(
+      "Run 'adit cloud login' to authenticate, or 'adit cloud auth-token <token>' for token auth.",
+    );
     process.exitCode = 1;
     return;
   }
@@ -40,7 +49,8 @@ export async function completeCliHandler(intentId: string, opts: {
 
   // Resolve server URL and project ID
   const cloudConfig = loadCloudConfig();
-  const serverUrl = cloudConfig.serverUrl ?? credentials.serverUrl ?? "https://adit.cloud";
+  const serverUrl =
+    cloudConfig.serverUrl ?? credentials.serverUrl ?? "https://adit.cloud";
   const projectId = config.projectId;
 
   if (!projectId) {
@@ -55,12 +65,16 @@ export async function completeCliHandler(intentId: string, opts: {
     await client.get("/api/sync/health");
   } catch (error) {
     if (error instanceof CloudNetworkError) {
-      console.error(`Cannot reach adit-cloud at ${serverUrl}. Check your network connection.`);
+      console.error(
+        `Cannot reach adit-cloud at ${serverUrl}. Check your network connection.`,
+      );
     } else if (error instanceof CloudAuthError) {
       console.error(`Authentication failed: ${error.message}`);
       console.error("Run 'adit cloud login' to re-authenticate.");
     } else {
-      console.error(`Connection check failed: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(
+        `Connection check failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
     process.exitCode = 1;
     return;
@@ -100,30 +114,50 @@ export async function completeCliHandler(intentId: string, opts: {
     }
   } catch (error) {
     if (error instanceof CloudApiError && error.status === 404) {
-      console.error("Intent not found or access denied. Check the intent ID and your permissions.");
+      console.error(
+        "Intent not found or access denied. Check the intent ID and your permissions.",
+      );
     } else if (error instanceof CloudApiError) {
-      if (error.status === 302 ||
-          (typeof error.body === "string" && error.body.includes("/auth/signin"))) {
-        console.error("Authentication required. The server is redirecting to the login page.");
+      if (
+        error.status === 302 ||
+        (typeof error.body === "string" && error.body.includes("/auth/signin"))
+      ) {
+        console.error(
+          "Authentication required. The server is redirecting to the login page.",
+        );
         console.error("\nPlease try one of the following:");
-        console.error("1. Run 'adit cloud login' to authenticate with device code");
-        console.error("2. Set ADIT_AUTH_TOKEN environment variable with a valid token");
+        console.error(
+          "1. Run 'adit cloud login' to authenticate with device code",
+        );
+        console.error(
+          "2. Set ADIT_AUTH_TOKEN environment variable with a valid token",
+        );
         console.error("3. Check if your authentication has expired");
       } else {
         console.error(`Server error: ${error.status} — ${error.message}`);
         if (error.body) {
-          const bodyStr = typeof error.body === "string"
-            ? error.body
-            : JSON.stringify(error.body, null, 2);
+          const bodyStr =
+            typeof error.body === "string"
+              ? error.body
+              : JSON.stringify(error.body, null, 2);
           console.error(`  Response: ${bodyStr}`);
         }
       }
     } else if (error instanceof CloudNetworkError) {
-      if (error.message.includes("redirect") || error.message.includes("Too many redirects")) {
-        console.error("Authentication redirect detected. The server is redirecting requests.");
+      if (
+        error.message.includes("redirect") ||
+        error.message.includes("Too many redirects")
+      ) {
+        console.error(
+          "Authentication redirect detected. The server is redirecting requests.",
+        );
         console.error("\nPlease try one of the following:");
-        console.error("1. Run 'adit cloud login' to authenticate with device code");
-        console.error("2. Set ADIT_AUTH_TOKEN environment variable with a valid token");
+        console.error(
+          "1. Run 'adit cloud login' to authenticate with device code",
+        );
+        console.error(
+          "2. Set ADIT_AUTH_TOKEN environment variable with a valid token",
+        );
         console.error("3. Check if your authentication has expired");
       } else {
         console.error(`Network error: ${error.message}`);
@@ -132,7 +166,9 @@ export async function completeCliHandler(intentId: string, opts: {
       console.error(`Authentication failed: ${error.message}`);
       console.error("Run 'adit cloud login' to re-authenticate.");
     } else {
-      console.error(`Complete failed: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(
+        `Complete failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
     process.exitCode = 1;
   }
