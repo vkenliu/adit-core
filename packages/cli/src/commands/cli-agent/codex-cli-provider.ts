@@ -172,6 +172,8 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     const resumeId = this.activeSessionId ?? this.resumeSessionId;
     if (resumeId) {
       await this.resumeThread(resumeId);
+    } else {
+      await this.startThread("build");
     }
 
     this.suppressNextLocalExit = true;
@@ -228,7 +230,11 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
 
     if (this.ownerValue === "web") {
       await this.ensureAppServer();
-      await this.resumeThread(sessionId);
+      if (this.loadedThreadIds.has(sessionId)) {
+        this.noteThread({ id: sessionId }, null);
+      } else {
+        await this.resumeThread(sessionId);
+      }
       this.finishWebPrompts(new Error("Codex session switched"));
       this.setBusy(false);
       this.setThinking(false);
