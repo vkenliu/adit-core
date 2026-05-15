@@ -1,8 +1,11 @@
 import fs from "node:fs";
-import { homedir } from "node:os";
 import path from "node:path";
-import { createHash } from "node:crypto";
 import { connect } from "node:net";
+import {
+  ADIT_CLOUD_CODEX_HOOK_TRUST_BLOCK,
+  buildCodexHookStatesForEntries,
+  installCodexHookTrustConfig,
+} from "@varveai/adit-hooks/adapters";
 
 const EVENTS = [
   "SessionStart",
@@ -290,13 +293,14 @@ export function installCodexHooks(opts: {
     hooks: [{ type: "command", command, timeout: 30 }],
   }, opts.marker);
 
-  const hookStates = buildCodexHookStates({
+  const hookStates = buildCodexHookStatesForEntries({
     hooksPath,
     hooks,
-    marker: opts.marker,
+    matchesEntry: (entry) => codexEntryHasMarker(entry, opts.marker),
   });
   const userConfigCleanup = installCodexHookTrustConfig({
     codexHome: opts.codexHome,
+    blockName: ADIT_CLOUD_CODEX_HOOK_TRUST_BLOCK,
     marker: opts.marker,
     states: hookStates,
   });
@@ -452,233 +456,6 @@ function enableCodexHooksFeature(text: string): string {
     .join("\n")
     .replace(/\s+$/u, "");
   return enableTomlBooleanFeature(cleaned, "hooks");
-}
-
-interface CodexHookState {
-  key: string;
-  trustedHash: string;
-}
-
-function buildCodexHookStates(input: {
-  hooksPath: string;
-  hooks: Record<string, unknown>;
-  marker: string;
-}): CodexHookState[] {
-  return buildCodexHookStatesForEntries({
-    hooksPath: input.hooksPath,
-    hooks: input.hooks,
-    matchesEntry: (entry) => codexEntryHasMarker(entry, input.marker),
-  });
-}
-
-function buildCodexHookStatesForEntries(input: {
-  hooksPath: string;
-  hooks: Record<string, unknown>;
-  matchesEntry: (entry: unknown) => boolean;
-}): CodexHookState[] {
-  const hooksPath = path.resolve(input.hooksPath);
-  const definitions = [
-    { eventName: "PostToolUse", keyLabel: "post_tool_use" },
-    { eventName: "SessionStart", keyLabel: "session_start", matcher: "startup|resume" },
-    { eventName: "UserPromptSubmit", keyLabel: "user_prompt_submit" },
-    { eventName: "Stop", keyLabel: "stop" },
-  ];
-
-  return definitions.flatMap((definition) => {
-    const entries = input.hooks[definition.eventName];
-    if (!Array.isArray(entries)) return [];
-
-    const states: CodexHookState[] = [];
-    for (let entryIndex = 0; entryIndex < entries.length; entryIndex++) {
-      const entry = asObject(entries[entryIndex]);
-      if (!entry || !input.matchesEntry(entry)) continue;
-      const hookEntries = entry.hooks;
-      if (!Array.isArray(hookEntries)) continue;
-      for (let hookIndex = 0; hookIndex < hookEntries.length; hookIndex++) {
-        const hook = asObject(hookEntries[hookIndex]);
-        if (!hook || typeof hook.command !== "string") continue;
-        states.push({
-          key: `${hooksPath}:${definition.keyLabel}:${entryIndex}:${hookIndex}`,
-          trustedHash: codexHookTrustedHash({
-            eventName: definition.keyLabel,
-            matcher: typeof entry.matcher === "string" ? entry.matcher : definition.matcher,
-            command: hook.command,
-            timeout: typeof hook.timeout === "number" ? hook.timeout : 30,
-          }),
-        });
-      }
-    }
-    return states;
-  });
-}
-
-function installCodexHookTrustConfig(input: {
-  codexHome?: string;
-  marker: string;
-  states: CodexHookState[];
-}): () => void {
-  const codexHome = input.codexHome ?? process.env.CODEX_HOME ?? path.join(homedir(), ".codex");
-  const configPath = path.join(codexHome, "config.toml");
-  const dirExisted = fs.existsSync(codexHome);
-  const fileExisted = fs.existsSync(configPath);
-  const originalContent = fileExisted ? readFile(configPath) : null;
-
-  try {
-    fs.mkdirSync(codexHome, { recursive: true });
-    const current = readFile(configPath) ?? "";
-    fs.writeFileSync(
-      configPath,
-      appendCodexHookTrustBlock(current, input.marker, input.states),
-    );
-  } catch {
-    return () => {};
-  }
-
-  return () => {
-    try {
-      const current = readFile(configPath);
-      if (current === null) return;
-      const cleaned = stripAditCodexHookTrustBlocks(current, {
-        marker: input.marker,
-      }).replace(/\s+$/u, "");
-      if (!fileExisted && !cleaned) {
-        try {
-          fs.unlinkSync(configPath);
-        } catch {}
-        if (!dirExisted) {
-          try {
-            fs.rmdirSync(codexHome);
-          } catch {}
-        }
-        return;
-      }
-      fs.writeFileSync(configPath, `${cleaned}\n`);
-    } catch {
-      if (fileExisted && originalContent !== null) {
-        try {
-          fs.writeFileSync(configPath, originalContent);
-        } catch {}
-      }
-    }
-  };
-}
-
-function appendCodexHookTrustBlock(
-  text: string,
-  marker: string,
-  states: CodexHookState[],
-  blockName = "adit-cloud-codex",
-): string {
-  const cleaned = stripAditCodexHookTrustBlocks(text, {
-    blockName,
-    marker,
-    keys: states.map((state) => state.key),
-    trustedHashes: states.map((state) => state.trustedHash),
-  }).replace(/\s+$/u, "");
-  const block = [
-    `# >>> ${blockName} ${marker}`,
-    ...states.flatMap((state) => [
-      `[hooks.state.${JSON.stringify(state.key)}]`,
-      "enabled = true",
-      `trusted_hash = ${JSON.stringify(state.trustedHash)}`,
-      "",
-    ]),
-    `# <<< ${blockName} ${marker}`,
-  ].join("\n").replace(/\n+$/u, "");
-  return `${cleaned ? `${cleaned}\n\n` : ""}${block}\n`;
-}
-
-function stripAditCodexHookTrustBlocks(
-  text: string,
-  opts?: { blockName?: string; marker?: string; keys?: string[]; trustedHashes?: string[] },
-): string {
-  const lines = text.split(/\r?\n/u);
-  const kept: string[] = [];
-  const blockName = opts?.blockName ?? "adit-cloud-codex";
-  const startPattern = new RegExp(`^\\s*# >>> ${escapeRegExp(blockName)}\\b`, "u");
-  const endPattern = new RegExp(`^\\s*# <<< ${escapeRegExp(blockName)}\\b`, "u");
-  const keys = opts?.keys ?? [];
-  const trustedHashes = opts?.trustedHashes ?? [];
-  for (let index = 0; index < lines.length; index++) {
-    const line = lines[index] ?? "";
-    if (!startPattern.test(line)) {
-      const stateKey = parseHookStateTableKey(line);
-      if (stateKey !== null) {
-        const block = [line];
-        while (index + 1 < lines.length) {
-          index++;
-          const blockLine = lines[index] ?? "";
-          block.push(blockLine);
-          const nextLine = lines[index + 1] ?? "";
-          if (/^\s*\[[^\]]+\]\s*$/u.test(nextLine)) break;
-        }
-        const blockText = block.join("\n");
-        const matchesKey = keys.includes(stateKey);
-        const matchesTrustedHash = trustedHashes.some((hash) =>
-          blockText.includes(`trusted_hash = ${JSON.stringify(hash)}`),
-        );
-        if (matchesKey || matchesTrustedHash) {
-          continue;
-        }
-        kept.push(...block);
-        continue;
-      }
-      if (opts?.marker && endPattern.test(line) && line.includes(opts.marker)) {
-        continue;
-      }
-      kept.push(line);
-      continue;
-    }
-
-    const block = [line];
-    while (index + 1 < lines.length) {
-      index++;
-      const blockLine = lines[index] ?? "";
-      block.push(blockLine);
-      if (endPattern.test(blockLine)) break;
-    }
-
-    const blockText = block.join("\n");
-    const matchesMarker = opts?.marker ? block[0]?.includes(opts.marker) : false;
-    const matchesKey = keys.some((key) => blockText.includes(JSON.stringify(key)));
-    const stripBlock = matchesMarker || matchesKey || (!opts?.marker && keys.length === 0);
-    if (stripBlock) {
-      continue;
-    }
-    kept.push(...block);
-  }
-  return kept.join("\n");
-}
-
-function parseHookStateTableKey(line: string): string | null {
-  const match = line.match(/^\s*\[hooks\.state\.("(?:\\.|[^"\\])*")\]\s*$/u);
-  if (!match?.[1]) return null;
-  try {
-    const parsed = JSON.parse(match[1]);
-    return typeof parsed === "string" ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function codexHookTrustedHash(input: {
-  eventName: string;
-  matcher?: string;
-  command: string;
-  timeout: number;
-}): string {
-  const identity: Record<string, unknown> = {
-    event_name: input.eventName,
-    hooks: [{
-      async: false,
-      command: input.command,
-      timeout: input.timeout,
-      type: "command",
-    }],
-  };
-  if (input.matcher) identity.matcher = input.matcher;
-  const canonical = JSON.stringify(canonicalJson(identity));
-  return `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
 }
 
 function canonicalJson(value: unknown): unknown {

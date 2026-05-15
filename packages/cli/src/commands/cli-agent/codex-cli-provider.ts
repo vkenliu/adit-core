@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { getCurrentBranch } from "@varveai/adit-engine";
 import type {
   CliAgentProvider,
   CliAgentRelayEvent,
@@ -8,6 +9,8 @@ import type {
   CliQuestionResponse,
   CliSlashCommand,
   CliSlashCommandInfo,
+  CliAgentContextUsage,
+  CliAgentTokenUsage,
 } from "./types.js";
 import {
   CodexAppServerClient,
@@ -18,6 +21,7 @@ import {
   normalizeCodexUpdatePlanInput,
   parseCodexToolInput,
 } from "./codex-plan-normalizer.js";
+import { spawnCliProcess } from "./cli-process.js";
 
 interface PendingPrompt {
   message: string;
@@ -82,6 +86,11 @@ const CODEX_CLOUD_SLASH_COMMANDS: CliSlashCommandInfo[] = [
   { name: "new", description: "Start a new Codex thread" },
   { name: "clear", description: "Start a clean Codex thread" },
 ];
+const BRANCH_REFRESH_INTERVAL_MS = 5_000;
+const CODEX_MODEL_CONTEXT_WINDOWS: Array<[RegExp, number]> = [
+  [/^gpt-5\.5(?:$|[-_\s])/, 1_050_000],
+  [/^gpt-5(?:\.\d+)?(?:-codex(?:-max|-mini)?|-chat-latest)?(?:$|[-_\s])/, 400_000],
+];
 
 export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   readonly provider = "codex" as const;
@@ -94,6 +103,11 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   private resumeSessionId: string | null = null;
   private sdkSessionId: string | null = null;
   private activeModelId: string | null = null;
+  private currentBranch: string | null = null;
+  private branchRefreshAt = 0;
+  private branchRefreshPromise: Promise<void> | null = null;
+  private contextUsage: CliAgentContextUsage | null = null;
+  private lastTokenUsage: CliAgentTokenUsage | null = null;
   private promptQueue: PendingPrompt[] = [];
   private promptActive = false;
   private activeTurnId: string | null = null;
@@ -113,6 +127,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   }
 
   get state(): CliAgentState {
+    this.scheduleBranchRefresh();
     return {
       owner: this.ownerValue,
       busy: this.busyValue,
@@ -121,6 +136,9 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       resumeSessionId: this.resumeSessionId,
       sdkSessionId: this.sdkSessionId,
       activeModelId: this.activeModelId,
+      currentBranch: this.currentBranch,
+      contextUsage: this.contextUsage,
+      lastTokenUsage: this.lastTokenUsage,
     };
   }
 
@@ -129,8 +147,17 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   }
 
   noteModel(modelId: string | null | undefined): void {
-    if (!modelId || modelId === this.activeModelId) return;
+    if (!modelId) return;
+    if (modelId === this.activeModelId) {
+      const previous = this.contextUsage;
+      this.refreshContextUsage();
+      if (!isSameContextUsage(previous, this.contextUsage)) {
+        this.emitState();
+      }
+      return;
+    }
     this.activeModelId = modelId;
+    this.refreshContextUsage();
     this.emitState();
   }
 
@@ -266,6 +293,52 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
         reject,
       });
       void this.drainPromptQueue();
+    });
+  }
+
+  async steerPrompt(
+    prompt: string,
+    opts: { sessionId?: string | null; localMessageId?: string | null } = {},
+  ): Promise<void> {
+    if (this.ownerValue !== "web") {
+      throw Object.assign(new Error("Web has not taken over this Codex session"), {
+        statusCode: 409,
+      });
+    }
+    const trimmed = prompt.trim();
+    if (!trimmed) return;
+    const threadId = this.activeSessionId ?? this.resumeSessionId;
+    const turnId = this.activeTurnId;
+    if (!threadId || !turnId || (!this.busyValue && !this.thinkingValue)) {
+      throw Object.assign(new Error("Codex is not currently accepting steering input"), {
+        statusCode: 409,
+      });
+    }
+    if (opts.sessionId && !this.acceptsSteerSessionId(opts.sessionId, threadId)) {
+      throw Object.assign(new Error("Codex is running a different session"), {
+        statusCode: 409,
+      });
+    }
+
+    await this.ensureAppServer();
+    await this.appServer?.request("turn/steer", {
+      threadId,
+      expectedTurnId: turnId,
+      input: [
+        {
+          type: "text",
+          text: trimmed,
+          text_elements: [],
+        },
+      ],
+    });
+    this.pushEvent("message", {
+      role: "user",
+      sessionId: threadId,
+      ...(opts.localMessageId ? { messageId: opts.localMessageId } : {}),
+      text: trimmed,
+      inputKind: "steer",
+      createdAt: Date.now(),
     });
   }
 
@@ -423,6 +496,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     const threadId = this.activeSessionId ?? this.resumeSessionId;
     const turnId = this.activeTurnId;
     this.finishWebPrompts(new Error("Codex run aborted"));
+    this.rejectPendingRequests(new Error("Codex run aborted"));
     if (threadId && turnId) {
       try {
         await this.appServer?.request("turn/interrupt", { threadId, turnId });
@@ -431,7 +505,11 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     this.activeTurnId = null;
     this.setThinking(false);
     this.setBusy(false);
-    this.pushEvent("error", { message: "Codex run aborted." });
+    this.pushEvent("run.aborted", {
+      message: "Codex run aborted.",
+      sessionId: threadId,
+      createdAt: Date.now(),
+    });
   }
 
   stop(): void {
@@ -455,11 +533,10 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     this.finishWebPrompts(new Error("local mode active"));
     this.appServer?.stop();
     this.appServer = null;
-    const child = spawn(this.opts.bin, [...extraArgs, ...this.opts.args], {
+    const child = spawnCliProcess(this.opts.bin, [...extraArgs, ...this.opts.args], {
       cwd: this.opts.cwd,
       env: this.buildEnv(),
       stdio: "inherit",
-      windowsHide: true,
     });
     this.local = child;
     this.ownerValue = "local";
@@ -468,6 +545,12 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     child.on("error", (error) => {
       this.pushEvent("error", { message: error.message });
       process.stderr.write(`\n[adit cloud codex] failed to start Codex CLI: ${error.message}\n`);
+      if (this.local === child) {
+        this.local = null;
+        this.ownerValue = "stopped";
+        this.emitState();
+        this.emit("exit", { code: null, signal: null });
+      }
     });
     child.on("exit", (code, signal) => {
       this.setThinking(false);
@@ -694,7 +777,14 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
 
     if (method === "thread/tokenUsage/updated") {
       const sessionId = readString(params.threadId);
-      const usage = normalizeCodexUsage(asRecord(asRecord(params.tokenUsage)?.last));
+      const rawUsage = asRecord(asRecord(params.tokenUsage)?.last);
+      const usage = normalizeCodexUsage(rawUsage);
+      const tokenUsage = normalizeCodexTokenUsage(rawUsage);
+      if (tokenUsage && !isSameTokenUsage(this.lastTokenUsage, tokenUsage)) {
+        this.lastTokenUsage = tokenUsage;
+        this.refreshContextUsage();
+        this.emitState();
+      }
       if (sessionId && usage) {
         this.pushEvent("usage", {
           sessionId,
@@ -780,7 +870,10 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     this.sdkSessionId = threadId;
     this.loadedThreadIds.add(threadId);
     const modelId = readString(result?.model);
-    if (modelId) this.activeModelId = modelId;
+    if (modelId) {
+      this.activeModelId = modelId;
+      this.refreshContextUsage();
+    }
     this.emitState();
   }
 
@@ -967,6 +1060,18 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     this.pushEvent("question.rejected", { id: "all" });
   }
 
+  private acceptsSteerSessionId(sessionIdInput: string, threadId: string): boolean {
+    const sessionId = sessionIdInput.trim();
+    if (!sessionId) return true;
+    if (sessionId.startsWith("pending_")) return true;
+    return [
+      threadId,
+      this.activeSessionId,
+      this.resumeSessionId,
+      this.sdkSessionId,
+    ].some((id) => id === sessionId);
+  }
+
   private setBusy(value: boolean): void {
     if (this.busyValue === value) return;
     this.busyValue = value;
@@ -979,6 +1084,24 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     this.emitState();
   }
 
+  private scheduleBranchRefresh(force = false): void {
+    const now = Date.now();
+    if (this.branchRefreshPromise) return;
+    if (!force && now - this.branchRefreshAt < BRANCH_REFRESH_INTERVAL_MS) return;
+    this.branchRefreshAt = now;
+    this.branchRefreshPromise = getCurrentBranch(this.opts.cwd)
+      .then((branch) => {
+        const nextBranch = readString(branch);
+        if (this.currentBranch === nextBranch) return;
+        this.currentBranch = nextBranch;
+        this.emitState();
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        this.branchRefreshPromise = null;
+      });
+  }
+
   private emitState(): void {
     this.emit("state", this.state);
     this.pushEvent("state", {
@@ -989,8 +1112,21 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       resumeSessionId: this.resumeSessionId,
       sdkSessionId: this.sdkSessionId,
       activeModelId: this.activeModelId,
+      currentBranch: this.currentBranch,
+      contextUsage: this.contextUsage,
+      lastTokenUsage: this.lastTokenUsage,
       createdAt: Date.now(),
     });
+  }
+
+  private refreshContextUsage(): void {
+    const nextUsage = buildCodexContextUsage(this.lastTokenUsage, this.activeModelId);
+    if (!nextUsage) {
+      this.contextUsage = null;
+      return;
+    }
+    if (isSameContextUsage(this.contextUsage, nextUsage)) return;
+    this.contextUsage = nextUsage;
   }
 
   private pushEvent(type: string, payload: Record<string, unknown>): void {
@@ -1286,6 +1422,83 @@ function normalizeCodexUsage(value: Record<string, unknown> | null): Record<stri
     cache_read_input_tokens: readNumber(value.cachedInputTokens) ?? 0,
   };
   return Object.values(usage).some((item) => item > 0) ? usage : undefined;
+}
+
+function normalizeCodexTokenUsage(value: Record<string, unknown> | null): CliAgentTokenUsage | null {
+  if (!value) return null;
+  const usage: CliAgentTokenUsage = {
+    inputTokens: readNumber(value.inputTokens) ?? 0,
+    outputTokens: readNumber(value.outputTokens) ?? 0,
+    reasoningTokens: readNumber(value.reasoningOutputTokens) ?? 0,
+    cacheReadTokens: readNumber(value.cachedInputTokens) ?? 0,
+    cacheWriteTokens: readNumber(value.cacheCreationInputTokens) ?? 0,
+    updatedAt: Date.now(),
+    source: "codex-app-server",
+  };
+  return Object.values({
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    reasoningTokens: usage.reasoningTokens,
+    cacheReadTokens: usage.cacheReadTokens,
+    cacheWriteTokens: usage.cacheWriteTokens,
+  }).some((item) => item > 0)
+    ? usage
+    : null;
+}
+
+function buildCodexContextUsage(
+  usage: CliAgentTokenUsage | null,
+  modelId: string | null,
+): CliAgentContextUsage | null {
+  const maxTokens = getCodexModelContextWindow(modelId);
+  if (!usage || maxTokens === null) return null;
+  const outputTokens = Math.max(usage.outputTokens, usage.reasoningTokens);
+  const totalTokens = Math.max(0, Math.floor(usage.inputTokens + outputTokens));
+  return {
+    percentage: Math.max(0, Math.min(100, totalTokens / maxTokens * 100)),
+    totalTokens,
+    maxTokens,
+    modelId: modelId ?? undefined,
+    updatedAt: usage.updatedAt,
+    source: "codex-app-server",
+  };
+}
+
+function getCodexModelContextWindow(modelId: string | null): number | null {
+  if (!modelId) return null;
+  const normalized = modelId.trim().toLowerCase();
+  for (const [pattern, maxTokens] of CODEX_MODEL_CONTEXT_WINDOWS) {
+    if (pattern.test(normalized)) return maxTokens;
+  }
+  return null;
+}
+
+function isSameContextUsage(
+  current: CliAgentContextUsage | null,
+  next: CliAgentContextUsage | null,
+): boolean {
+  if (!current || !next) return current === next;
+  return Boolean(
+    current.percentage === next.percentage &&
+      current.totalTokens === next.totalTokens &&
+      current.maxTokens === next.maxTokens &&
+      current.modelId === next.modelId &&
+      current.source === next.source,
+  );
+}
+
+function isSameTokenUsage(
+  current: CliAgentTokenUsage | null,
+  next: CliAgentTokenUsage,
+): boolean {
+  return Boolean(
+    current &&
+      current.inputTokens === next.inputTokens &&
+      current.outputTokens === next.outputTokens &&
+      current.reasoningTokens === next.reasoningTokens &&
+      current.cacheReadTokens === next.cacheReadTokens &&
+      current.cacheWriteTokens === next.cacheWriteTokens,
+  );
 }
 
 function readNumber(value: unknown): number | null {

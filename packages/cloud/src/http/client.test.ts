@@ -80,6 +80,26 @@ describe("CloudClient token refresh", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("returns refreshed credentials for non-HTTP transports", async () => {
+    const credentials = makeCreds();
+    saveCredentials(credentials);
+
+    vi.mocked(fetch).mockResolvedValueOnce(jsonResponse({
+      accessToken: "new-access",
+      refreshToken: "new-refresh",
+      clientId: "client-1",
+      expiresIn: 3600,
+    }));
+
+    const client = new CloudClient("http://cloud.test", credentials);
+    const fresh = await client.getFreshCredentials();
+
+    expect(fresh.accessToken).toBe("new-access");
+    expect(fresh.refreshToken).toBe("new-refresh");
+    expect(loadCredentials()?.accessToken).toBe("new-access");
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+  });
+
   it("records auth failure when refresh response lacks expiry metadata", async () => {
     const credentials = makeCreds();
     saveCredentials(credentials);

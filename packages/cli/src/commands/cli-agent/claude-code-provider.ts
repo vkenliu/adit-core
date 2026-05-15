@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { homedir } from "node:os";
@@ -17,7 +17,9 @@ import {
   type SDKUserMessage,
   type SlashCommand,
 } from "@anthropic-ai/claude-agent-sdk";
+import { getCurrentBranch } from "@varveai/adit-engine";
 import type {
+  CliAgentContextUsage,
   CliAgentProvider,
   CliAgentRelayEvent,
   CliQuestionResponse,
@@ -27,6 +29,7 @@ import type {
   CliSlashCommandInfo,
   CliRewindResponse,
 } from "./types.js";
+import { spawnCliProcess, spawnClaudeCliProcess } from "./cli-process.js";
 
 interface PendingPrompt {
   message: string;
@@ -44,6 +47,15 @@ interface QueuedSdkPrompt {
   pendingSessionId: string | null;
   localMessageId: string | null;
   promptEvent: PendingPromptEvent;
+  resolve: () => void;
+  reject: (error: Error) => void;
+}
+
+interface ActiveClaudePromptInput {
+  generation: number;
+  displaySessionId: string | null;
+  acceptedSessionIds: Set<string>;
+  stream: PushableSdkPromptStream;
 }
 
 interface PendingPromptEvent {
@@ -70,6 +82,14 @@ const CLAUDE_FALLBACK_SLASH_COMMANDS = new Set([
   "btw",
   "memory",
 ]);
+const BRANCH_REFRESH_INTERVAL_MS = 5_000;
+const CONTEXT_USAGE_REFRESH_INTERVAL_MS = 10_000;
+
+export const CLAUDE_CLOUD_RELAY_ADIT_ENV: Readonly<Record<string, string>> = {
+  ADIT_CLOUD_AUTO_SYNC: "false",
+  ADIT_PROJECT_LINK_AUTO_SYNC: "false",
+  ADIT_TRANSCRIPT_UPLOAD: "false",
+};
 
 export type ClaudeTodoStatus = "pending" | "in_progress" | "completed";
 export type ClaudeTodoPriority = "high" | "medium" | "low";
@@ -119,8 +139,16 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
   private remoteSdkSessionId: string | null = null;
   private remoteSdkSessionIdsByActiveSession = new Map<string, Set<string>>();
   private activeModelId: string | null = null;
+  private currentBranch: string | null = null;
+  private branchRefreshAt = 0;
+  private branchRefreshPromise: Promise<void> | null = null;
+  private contextUsage: CliAgentContextUsage | null = null;
+  private contextUsageRefreshAt = 0;
+  private contextUsageRefreshPromise: Promise<void> | null = null;
   private promptQueue: PendingPrompt[] = [];
   private promptResolvers: Array<(value: QueuedSdkPrompt | null) => void> = [];
+  private startingPrompt: QueuedSdkPrompt | null = null;
+  private activePromptInput: ActiveClaudePromptInput | null = null;
   private activePromptEvent: PendingPromptEvent | null = null;
   private pendingPermissions = new Map<string, {
     request: CliPermissionRequest;
@@ -151,6 +179,8 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
   }
 
   get state(): CliAgentState {
+    this.scheduleBranchRefresh();
+    this.scheduleContextUsageRefresh();
     return {
       owner: this.ownerValue,
       busy: this.busyValue,
@@ -159,6 +189,9 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       resumeSessionId: this.resumeSessionId,
       sdkSessionId: this.sdkSessionId,
       activeModelId: this.activeModelId,
+      currentBranch: this.currentBranch,
+      contextUsage: this.contextUsage,
+      lastTokenUsage: null,
     };
   }
 
@@ -340,6 +373,59 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     });
   }
 
+  async steerPrompt(
+    prompt: string,
+    opts: { sessionId?: string | null; localMessageId?: string | null } = {},
+  ): Promise<void> {
+    if (this.ownerValue !== "web") {
+      throw Object.assign(new Error("Web has not taken over this Claude session"), {
+        statusCode: 409,
+      });
+    }
+    const trimmed = prompt.trim();
+    if (!trimmed) return;
+    const input = this.activePromptInput;
+    if (
+      !input ||
+      input.generation !== this.remoteLoopGeneration ||
+      !this.remoteQuery ||
+      (!this.busyValue && !this.thinkingValue)
+    ) {
+      throw Object.assign(new Error("Claude Code is not currently accepting steering input"), {
+        statusCode: 409,
+      });
+    }
+    if (opts.sessionId && !this.acceptsSteerSessionId(opts.sessionId, input)) {
+      throw Object.assign(new Error("Claude Code is running a different session"), {
+        statusCode: 409,
+      });
+    }
+
+    const sessionId =
+      (opts.sessionId && !opts.sessionId.startsWith("pending_") ? opts.sessionId : null) ??
+      this.activeSessionId ??
+      this.resumeSessionId ??
+      input.displaySessionId ??
+      this.sdkSessionId ??
+      this.remoteSdkSessionId ??
+      "pending";
+    const sdkSessionId = this.remoteSdkSessionId ??
+      this.sdkSessionId ??
+      Array.from(input.acceptedSessionIds).find(isUuid);
+    input.stream.push(toUserMessage(trimmed, sdkSessionId ?? undefined, {
+      priority: "now",
+      shouldQuery: true,
+    }));
+    this.pushEvent("message", {
+      role: "user",
+      sessionId,
+      ...(opts.localMessageId ? { messageId: opts.localMessageId } : {}),
+      text: trimmed,
+      inputKind: "steer",
+      createdAt: Date.now(),
+    });
+  }
+
   async handleSlashCommand(command: CliSlashCommand): Promise<void> {
     const name = command.name.trim().replace(/^\//, "");
     if (!name) return;
@@ -485,6 +571,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       options: {
         cwd: this.opts.cwd,
         pathToClaudeCodeExecutable: this.opts.bin,
+        spawnClaudeCodeProcess: spawnClaudeCliProcess,
         env: this.buildEnv(),
         settings: this.opts.hookSettingsPath,
         resume: sessionId,
@@ -599,7 +686,9 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
 
   async abort(): Promise<void> {
     if (this.ownerValue !== "web") return;
-    this.finishWebPrompts(new Error("Claude run aborted"));
+    const abortError = new Error("Claude run aborted");
+    this.finishWebPrompts(abortError);
+    this.rejectPendingRequests(abortError);
     this.remoteAbortController?.abort();
     try {
       await this.remoteQuery?.interrupt?.();
@@ -609,7 +698,11 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     this.remoteAbortController = null;
     this.setThinking(false);
     this.setBusy(false);
-    this.pushEvent("error", { message: "Claude run aborted." });
+    this.pushEvent("run.aborted", {
+      message: "Claude run aborted.",
+      sessionId: this.activeSessionId ?? this.resumeSessionId,
+      createdAt: Date.now(),
+    });
   }
 
   stop(): void {
@@ -651,11 +744,10 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       ...this.opts.args,
       ...(this.opts.hookSettingsPath ? ["--settings", this.opts.hookSettingsPath] : []),
     ];
-    const child = spawn(this.opts.bin, args, {
+    const child = spawnCliProcess(this.opts.bin, args, {
       cwd: this.opts.cwd,
       env: this.buildEnv(),
       stdio: "inherit",
-      windowsHide: true,
     });
     this.local = child;
     this.ownerValue = "local";
@@ -664,6 +756,12 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     child.on("error", (error) => {
       this.pushEvent("error", { message: error.message });
       process.stderr.write(`\n[adit cloud claude] failed to start Claude CLI: ${error.message}\n`);
+      if (this.local === child) {
+        this.local = null;
+        this.ownerValue = "stopped";
+        this.emitState();
+        this.emit("exit", { code: null, signal: null });
+      }
     });
     child.on("exit", (code, signal) => {
       this.setThinking(false);
@@ -692,6 +790,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       options: {
         cwd: this.opts.cwd,
         pathToClaudeCodeExecutable: this.opts.bin,
+        spawnClaudeCodeProcess: spawnClaudeCliProcess,
         env: this.buildEnv(),
         settings: this.opts.hookSettingsPath,
         permissionMode: "plan",
@@ -776,14 +875,36 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       });
       const abortController = new AbortController();
       this.remoteAbortController = abortController;
+      this.startingPrompt = first;
       this.activePromptEvent = first.promptEvent;
       const permissionMode: PermissionMode = first.mode === "plan" ? "plan" : "bypassPermissions";
       const explicitSessionId = !resumeId && canonicalSessionId && isUuid(canonicalSessionId)
         ? canonicalSessionId
         : undefined;
+      const promptInput = new PushableSdkPromptStream(
+        toUserMessage(first.message, pendingClaudeSessionId ?? undefined),
+      );
+      this.activePromptInput = {
+        generation,
+        displaySessionId: pendingSessionId ?? canonicalSessionId ?? resumeId,
+        acceptedSessionIds: new Set(
+          [
+            pendingSessionId,
+            pendingClaudeSessionId,
+            canonicalSessionId,
+            resumeId,
+            this.activeSessionId,
+            this.resumeSessionId,
+            this.sdkSessionId,
+            this.remoteSdkSessionId,
+          ].filter((id): id is string => Boolean(id)),
+        ),
+        stream: promptInput,
+      };
       const options: Options = {
         cwd: this.opts.cwd,
         pathToClaudeCodeExecutable: this.opts.bin,
+        spawnClaudeCodeProcess: spawnClaudeCliProcess,
         env: this.buildEnv(),
         resume: resumeId ?? undefined,
         sessionId: explicitSessionId,
@@ -808,15 +929,33 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
             }),
       };
 
-      this.remoteQuery = query({
-        prompt: this.createPromptStream(
-          toUserMessage(first.message, pendingClaudeSessionId ?? undefined),
-        ),
-        options,
-      });
-      this.setBusy(true);
-      this.setThinking(true);
-      this.emitState();
+      try {
+        this.remoteQuery = query({
+          prompt: promptInput,
+          options,
+        });
+        this.setBusy(true);
+        this.setThinking(true);
+        this.emitState();
+        this.scheduleContextUsageRefresh(true);
+        this.resolveStartingPrompt(first);
+      } catch (error) {
+        promptInput.fail(error instanceof Error ? error : new Error(String(error)));
+        if (this.activePromptInput?.stream === promptInput) {
+          this.activePromptInput = null;
+        }
+        this.rejectStartingPrompt(first, error instanceof Error ? error : new Error(String(error)));
+        if (!(error instanceof AbortError)) {
+          const messageText = error instanceof Error ? error.message : String(error);
+          this.pushEvent("error", { message: messageText });
+          process.stderr.write(`\n[adit cloud claude] SDK error: ${messageText}\n`);
+        }
+        this.setThinking(false);
+        this.setBusy(false);
+        this.remoteQuery = null;
+        this.remoteAbortController = null;
+        continue;
+      }
 
       let observedSdkSessionId: string | null = null;
       try {
@@ -825,6 +964,10 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
           const sdkSessionId = this.handleSdkMessage(message, canonicalSessionId ?? resumeId, {
             suppressActiveFallback: Boolean(pendingSessionId),
           });
+          this.scheduleContextUsageRefresh(message.type === "result");
+          if (message.type === "result") {
+            promptInput.close();
+          }
           const boundSessionId = sdkSessionId ?? pendingClaudeSessionId;
           if (pendingSessionId && boundSessionId) {
             this.bindPendingSession(pendingSessionId, boundSessionId);
@@ -838,6 +981,9 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
           }
         }
       } catch (error) {
+        if (this.startingPrompt === first) {
+          this.rejectStartingPrompt(first, error instanceof Error ? error : new Error(String(error)));
+        }
         if (!(error instanceof AbortError)) {
           const messageText = error instanceof Error ? error.message : String(error);
           this.pushEvent("error", { message: messageText });
@@ -850,18 +996,19 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
         if (this.activePromptEvent === first.promptEvent) {
           this.activePromptEvent = null;
         }
+        if (this.startingPrompt === first) {
+          this.rejectStartingPrompt(first, new Error("Claude run ended before it started"));
+        }
+        promptInput.close();
+        if (this.activePromptInput?.stream === promptInput) {
+          this.activePromptInput = null;
+        }
         this.setThinking(false);
         this.setBusy(false);
         this.remoteQuery = null;
         this.remoteAbortController = null;
       }
     }
-  }
-
-  private async *createPromptStream(
-    first: SDKUserMessage,
-  ): AsyncIterable<SDKUserMessage> {
-    yield first;
   }
 
   private async *createCapabilityProbeStream(
@@ -878,13 +1025,14 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     if (this.promptQueue.length > 0) {
       const item = this.promptQueue.shift();
       if (!item) return Promise.resolve(null);
-      item.resolve();
       return Promise.resolve({
         message: item.message,
         mode: item.mode,
         pendingSessionId: item.pendingSessionId,
         localMessageId: item.localMessageId,
         promptEvent: item.promptEvent,
+        resolve: item.resolve,
+        reject: item.reject,
       });
     }
     return new Promise((resolve) => {
@@ -897,19 +1045,26 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       const resolve = this.promptResolvers.shift();
       const item = this.promptQueue.shift();
       if (!resolve || !item) return;
-      item.resolve();
       resolve({
         message: item.message,
         mode: item.mode,
         pendingSessionId: item.pendingSessionId,
         localMessageId: item.localMessageId,
         promptEvent: item.promptEvent,
+        resolve: item.resolve,
+        reject: item.reject,
       });
     }
   }
 
   private finishWebPrompts(error: Error): void {
     this.activePromptEvent = null;
+    this.activePromptInput?.stream.close();
+    this.activePromptInput = null;
+    if (this.startingPrompt) {
+      this.startingPrompt.reject(error);
+      this.startingPrompt = null;
+    }
     for (const item of this.promptQueue.splice(0)) {
       item.reject(error);
     }
@@ -917,6 +1072,47 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       resolve(null);
     }
     this.pendingRewinds.clear();
+  }
+
+  private resolveStartingPrompt(prompt: QueuedSdkPrompt): void {
+    if (this.startingPrompt !== prompt) return;
+    this.startingPrompt = null;
+    prompt.resolve();
+  }
+
+  private rejectStartingPrompt(prompt: QueuedSdkPrompt, error: Error): void {
+    if (this.startingPrompt !== prompt) return;
+    this.startingPrompt = null;
+    prompt.reject(error);
+  }
+
+  private rejectPendingRequests(error: Error): void {
+    for (const pending of this.pendingPermissions.values()) {
+      pending.reject(error);
+    }
+    this.pendingPermissions.clear();
+    for (const pending of this.pendingQuestions.values()) {
+      pending.reject(error);
+    }
+    this.pendingQuestions.clear();
+    this.pushEvent("permission-resolved", { id: "all", approved: false });
+    this.pushEvent("question.rejected", { id: "all" });
+  }
+
+  private acceptsSteerSessionId(
+    sessionIdInput: string,
+    input: ActiveClaudePromptInput,
+  ): boolean {
+    const sessionId = sessionIdInput.trim();
+    if (!sessionId) return true;
+    if (sessionId.startsWith("pending_")) return true;
+    if (input.acceptedSessionIds.has(sessionId)) return true;
+    return [
+      this.activeSessionId,
+      this.resumeSessionId,
+      this.sdkSessionId,
+      this.remoteSdkSessionId,
+    ].some((id) => id === sessionId);
   }
 
   private handleSdkMessage(
@@ -965,8 +1161,6 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
 
     if (message.type === "result") {
       this.emitResultUsage(message, sessionId);
-      this.setThinking(false);
-      this.setBusy(false);
     }
     return sdkSessionId;
   }
@@ -1493,6 +1687,48 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     this.emitState();
   }
 
+  private scheduleBranchRefresh(force = false): void {
+    const now = Date.now();
+    if (this.branchRefreshPromise) return;
+    if (!force && now - this.branchRefreshAt < BRANCH_REFRESH_INTERVAL_MS) return;
+    this.branchRefreshAt = now;
+    this.branchRefreshPromise = getCurrentBranch(this.opts.cwd)
+      .then((branch) => {
+        const nextBranch = readString(branch);
+        if (this.currentBranch === nextBranch) return;
+        this.currentBranch = nextBranch;
+        this.emitState();
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        this.branchRefreshPromise = null;
+      });
+  }
+
+  private scheduleContextUsageRefresh(force = false): void {
+    if (this.ownerValue !== "web" || !this.remoteQuery) return;
+    const queryWithUsage = this.remoteQuery as Query & {
+      getContextUsage?: () => Promise<unknown>;
+    };
+    if (typeof queryWithUsage.getContextUsage !== "function") return;
+
+    const now = Date.now();
+    if (this.contextUsageRefreshPromise) return;
+    if (!force && now - this.contextUsageRefreshAt < CONTEXT_USAGE_REFRESH_INTERVAL_MS) return;
+    this.contextUsageRefreshAt = now;
+    this.contextUsageRefreshPromise = queryWithUsage.getContextUsage()
+      .then((rawUsage) => {
+        const usage = normalizeClaudeContextUsage(rawUsage, this.activeModelId);
+        if (!usage || isSameContextUsage(this.contextUsage, usage)) return;
+        this.contextUsage = usage;
+        this.emitState();
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        this.contextUsageRefreshPromise = null;
+      });
+  }
+
   private emitState(): void {
     this.emit("state", this.state);
     this.pushEvent("state", {
@@ -1503,6 +1739,9 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       resumeSessionId: this.resumeSessionId,
       sdkSessionId: this.sdkSessionId,
       activeModelId: this.activeModelId,
+      currentBranch: this.currentBranch,
+      contextUsage: this.contextUsage,
+      lastTokenUsage: null,
       createdAt: Date.now(),
     });
   }
@@ -1527,13 +1766,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
   }
 
   private buildEnv(): NodeJS.ProcessEnv {
-    return {
-      ...process.env,
-      TERM: process.env.TERM || "xterm-256color",
-      COLORTERM: process.env.COLORTERM || "truecolor",
-      FORCE_COLOR: process.env.FORCE_COLOR || "3",
-      DISABLE_AUTOUPDATER: "1",
-    };
+    return buildClaudeCloudRelayEnv();
   }
 
   private refreshActiveModel(opts: { sessionId?: string | null } = {}): string | null {
@@ -1585,11 +1818,94 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
   }
 }
 
-function toUserMessage(message: string, sessionId?: string): SDKUserMessage {
+export function buildClaudeCloudRelayEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return {
+    ...baseEnv,
+    TERM: baseEnv.TERM || "xterm-256color",
+    COLORTERM: baseEnv.COLORTERM || "truecolor",
+    FORCE_COLOR: baseEnv.FORCE_COLOR || "3",
+    DISABLE_AUTOUPDATER: "1",
+    // Cloud Coding persists live conversation state through the relay websocket.
+    // Inherited ADIT hooks should keep their local timeline data until normal sync.
+    ...CLAUDE_CLOUD_RELAY_ADIT_ENV,
+  };
+}
+
+class PushableSdkPromptStream implements AsyncIterable<SDKUserMessage> {
+  private readonly queue: SDKUserMessage[];
+  private waiter: {
+    resolve: (result: IteratorResult<SDKUserMessage>) => void;
+    reject: (error: Error) => void;
+  } | null = null;
+  private closed = false;
+  private error: Error | null = null;
+
+  constructor(first: SDKUserMessage) {
+    this.queue = [first];
+  }
+
+  push(message: SDKUserMessage): void {
+    if (this.error) throw this.error;
+    if (this.closed) throw new Error("Claude prompt stream is closed");
+    const waiter = this.waiter;
+    if (waiter) {
+      this.waiter = null;
+      waiter.resolve({ value: message, done: false });
+      return;
+    }
+    this.queue.push(message);
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    const waiter = this.waiter;
+    if (waiter) {
+      this.waiter = null;
+      waiter.resolve({ value: undefined as never, done: true });
+    }
+  }
+
+  fail(error: Error): void {
+    if (this.error) return;
+    this.error = error;
+    const waiter = this.waiter;
+    if (waiter) {
+      this.waiter = null;
+      waiter.reject(error);
+    }
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<SDKUserMessage> {
+    return {
+      next: () => this.next(),
+    };
+  }
+
+  private next(): Promise<IteratorResult<SDKUserMessage>> {
+    const nextMessage = this.queue.shift();
+    if (nextMessage) return Promise.resolve({ value: nextMessage, done: false });
+    if (this.error) return Promise.reject(this.error);
+    if (this.closed) {
+      return Promise.resolve({ value: undefined as never, done: true });
+    }
+    return new Promise((resolve, reject) => {
+      this.waiter = { resolve, reject };
+    });
+  }
+}
+
+function toUserMessage(
+  message: string,
+  sessionId?: string,
+  opts: { priority?: SDKUserMessage["priority"]; shouldQuery?: boolean } = {},
+): SDKUserMessage {
   return {
     type: "user",
     ...(sessionId ? { session_id: sessionId } : {}),
     parent_tool_use_id: null,
+    ...(opts.priority ? { priority: opts.priority } : {}),
+    ...(typeof opts.shouldQuery === "boolean" ? { shouldQuery: opts.shouldQuery } : {}),
     message: {
       role: "user",
       content: message,
@@ -1760,6 +2076,38 @@ function normalizeClaudeUsage(value: unknown): Record<string, number> | undefine
     }
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeClaudeContextUsage(
+  value: unknown,
+  fallbackModelId: string | null,
+): CliAgentContextUsage | null {
+  const usage = asRecord(value);
+  const totalTokens = readNumber(usage.totalTokens);
+  const maxTokens = readNumber(usage.maxTokens);
+  if (totalTokens === null || maxTokens === null || maxTokens <= 0) return null;
+  const rawPercentage = readNumber(usage.percentage) ?? totalTokens / maxTokens * 100;
+  return {
+    percentage: Math.max(0, Math.min(100, rawPercentage)),
+    totalTokens: Math.max(0, Math.floor(totalTokens)),
+    maxTokens: Math.floor(maxTokens),
+    modelId: readString(usage.model) ?? fallbackModelId,
+    updatedAt: Date.now(),
+    source: "claude-sdk",
+  };
+}
+
+function isSameContextUsage(
+  current: CliAgentContextUsage | null,
+  next: CliAgentContextUsage,
+): boolean {
+  return Boolean(
+    current &&
+      current.percentage === next.percentage &&
+      current.totalTokens === next.totalTokens &&
+      current.maxTokens === next.maxTokens &&
+      current.modelId === next.modelId,
+  );
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -1957,6 +2305,10 @@ function readSettingsModel(file: string): string | null {
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function readNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function readTodoStatus(value: unknown): ClaudeTodoStatus | null {

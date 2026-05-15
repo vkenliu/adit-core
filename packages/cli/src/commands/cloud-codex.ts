@@ -1,5 +1,4 @@
 import { basename } from "node:path";
-import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { loadConfig, findGitRoot } from "@varveai/adit-core";
 import {
@@ -12,6 +11,7 @@ import {
   loadCredentials,
 } from "@varveai/adit-cloud";
 import { CodexCliProvider } from "./cli-agent/codex-cli-provider.js";
+import { resolveExecutable, spawnCliSync } from "./cli-agent/cli-process.js";
 import { CodexRelayEventDeduper, CodexTranscriptSync } from "./cli-agent/codex-transcript-sync.js";
 import { installCodexHooks, type InstalledHooks } from "./cli-agent/hooks-bootstrap.js";
 import { startCliAgentHookServer, type HookServer } from "./cli-agent/hook-server.js";
@@ -46,16 +46,8 @@ function createRelayLoopWake() {
   };
 }
 
-function findExecutable(command: string): boolean {
-  const checker = process.platform === "win32" ? "where" : "which";
-  const result = spawnSync(checker, [command], {
-    stdio: "ignore",
-  });
-  return result.status === 0;
-}
-
 function checkCodexAppServer(command: string): boolean {
-  const result = spawnSync(command, ["app-server", "--help"], {
+  const result = spawnCliSync(command, ["app-server", "--help"], {
     stdio: "ignore",
   });
   return result.status === 0;
@@ -137,6 +129,16 @@ async function processCommand(
       await provider.switchSession(sessionId);
     }
     await provider.sendPrompt(text, { mode, pendingSessionId, localMessageId });
+    return;
+  }
+
+  if (command.type === "steer") {
+    const text = readString(command.payload.text);
+    if (!text) return;
+    await provider.steerPrompt(text, {
+      sessionId: readString(command.payload.sessionId),
+      localMessageId: readString(command.payload.localMessageId),
+    });
     return;
   }
 
@@ -244,13 +246,14 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
   }
 
   const codexBin = opts?.bin ?? "codex";
-  if (!findExecutable(codexBin)) {
+  const codexExecutable = resolveExecutable(codexBin);
+  if (!codexExecutable) {
     console.error(`Codex CLI not found: ${codexBin}`);
     console.error("Install Codex CLI and make sure 'codex' is available on PATH.");
     process.exitCode = 1;
     return;
   }
-  if (!checkCodexAppServer(codexBin)) {
+  if (!checkCodexAppServer(codexExecutable)) {
     console.error(`Codex CLI does not expose 'app-server': ${codexBin}`);
     console.error("Upgrade Codex CLI to the latest version and try again.");
     process.exitCode = 1;
@@ -301,7 +304,7 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
     });
 
     provider = new CodexCliProvider({
-      bin: codexBin,
+      bin: codexExecutable,
       args: withHooksEnabled(opts?.arg ?? []),
       cwd: config.projectRoot,
       onEvent: enqueueEvent,
@@ -309,7 +312,7 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
 
     const ws = new CliAgentRelayWebSocket({
       serverUrl,
-      accessToken: client.getCredentials().accessToken,
+      accessToken: async () => (await client.getFreshCredentials()).accessToken,
       register: {
         provider: "codex",
         terminalId,

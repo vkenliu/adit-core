@@ -24,6 +24,15 @@ import type {
   AditHookType,
 } from "./types.js";
 import { buildAditHookCommand, isAditHookCommand } from "./command.js";
+import {
+  ADIT_CODEX_HOOK_TRUST_BLOCK,
+  buildCodexHookStatesForEntries,
+  codexHookTrustMarkerForPath,
+  findUntrustedCodexHookStates,
+  removeCodexHookTrustConfig,
+  resolveCodexHookTrustConfigPath,
+  upsertCodexHookTrustConfig,
+} from "./codex-trust.js";
 
 /** Timeout for Codex hooks — in SECONDS (not ms like Claude Code) */
 const HOOK_TIMEOUT = 30;
@@ -177,6 +186,26 @@ export const codexAdapter: PlatformAdapter = {
       detail: featureEnabled ? `Enabled in ${configPath}` : "Missing [features] hooks = true",
     });
 
+    const trustConfigPath = resolveCodexHookTrustConfigPath();
+    const trustConfig = readTextFile(trustConfigPath);
+    const hookStates = hooksFound
+      ? buildCodexHookStatesForEntries({
+        hooksPath,
+        hooks: readHooksForTrust(hooksPath),
+        matchesEntry: (entry) => entryContainsAditHook(entry),
+      })
+      : [];
+    const untrustedStates = findUntrustedCodexHookStates(trustConfig, hookStates);
+    checks.push({
+      name: "Codex hook trust",
+      ok: hooksFound && hookStates.length > 0 && untrustedStates.length === 0,
+      detail: !hooksFound
+        ? "No ADIT Codex hooks found to trust"
+        : untrustedStates.length === 0
+          ? `All ADIT hooks trusted in ${trustConfigPath}`
+          : `${untrustedStates.length} hook(s) need review in Codex. Run 'adit plugin install codex' or open /hooks.`,
+    });
+
     return {
       valid: checks.every((c) => c.ok),
       checks,
@@ -233,6 +262,17 @@ export const codexAdapter: PlatformAdapter = {
 
     const configPath = join(codexDir, "config.toml");
     writeFileSync(configPath, enableCodexHooksFeature(readTextFile(configPath) ?? ""));
+
+    const hookStates = buildCodexHookStatesForEntries({
+      hooksPath,
+      hooks: mergedHooks,
+      matchesEntry: (entry) => entryContainsAditHook(entry),
+    });
+    upsertCodexHookTrustConfig({
+      blockName: ADIT_CODEX_HOOK_TRUST_BLOCK,
+      marker: codexHookTrustMarkerForPath(hooksPath),
+      states: hookStates,
+    });
   },
 
   getResumeCommand(_projectRoot: string): string | null {
@@ -274,11 +314,37 @@ export const codexAdapter: PlatformAdapter = {
       }
 
       writeFileSync(hooksPath, JSON.stringify(hooksConfig, null, 2) + "\n");
+      removeCodexHookTrustConfig({
+        blockName: ADIT_CODEX_HOOK_TRUST_BLOCK,
+        marker: codexHookTrustMarkerForPath(hooksPath),
+      });
     } catch {
       // Ignore parse errors
     }
   },
 };
+
+function readHooksForTrust(hooksPath: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(readFileSync(hooksPath, "utf-8")) as unknown;
+    const hooks = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>).hooks
+      : null;
+    return hooks && typeof hooks === "object" && !Array.isArray(hooks)
+      ? hooks as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function entryContainsAditHook(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+  const raw = entry as { command?: string; hooks?: Array<{ command?: string }> };
+  if (typeof raw.command === "string" && isAditHookCommand(raw.command)) return true;
+  return Array.isArray(raw.hooks) &&
+    raw.hooks.some((hook) => typeof hook.command === "string" && isAditHookCommand(hook.command));
+}
 
 function readTextFile(path: string): string | null {
   try {

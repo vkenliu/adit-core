@@ -138,6 +138,12 @@ export class CloudClient {
     return this.credentials;
   }
 
+  /** Refresh credentials if needed and return the current token set. */
+  async getFreshCredentials(): Promise<CloudCredentials> {
+    await this.ensureFreshToken();
+    return this.credentials;
+  }
+
   /** Check refresh-token health without rotating it. */
   async getRefreshTokenStatus(): Promise<RefreshTokenStatus> {
     if (this.credentials.authType === "token") {
