@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import { spawnCliProcess } from "./cli-process.js";
 
 export interface CodexJsonRpcMessage {
   id?: string | number;
@@ -48,11 +49,10 @@ export class CodexAppServerClient extends EventEmitter {
   async start(): Promise<void> {
     if (this.child) return;
     this.stopped = false;
-    const child = spawn(this.opts.bin, ["app-server", "--listen", "stdio://"], {
+    const child = spawnCliProcess(this.opts.bin, ["app-server", "--listen", "stdio://"], {
       cwd: this.opts.cwd,
       env: this.opts.env,
       stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
     });
     this.child = child;
 

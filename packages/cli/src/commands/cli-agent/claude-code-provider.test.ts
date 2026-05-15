@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => {
   return {
     AbortError: MockAbortError,
     spawn: vi.fn(),
+    spawnSync: vi.fn(),
     query: vi.fn(),
     remoteInterrupt: vi.fn(),
     remoteClose: vi.fn(),
@@ -14,6 +15,7 @@ const mocks = vi.hoisted(() => {
 
 vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => mocks.spawn(...args),
+  spawnSync: (...args: unknown[]) => mocks.spawnSync(...args),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({

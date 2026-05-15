@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { getCurrentBranch } from "@varveai/adit-engine";
 import type {
   CliAgentProvider,
@@ -21,6 +21,7 @@ import {
   normalizeCodexUpdatePlanInput,
   parseCodexToolInput,
 } from "./codex-plan-normalizer.js";
+import { spawnCliProcess } from "./cli-process.js";
 
 interface PendingPrompt {
   message: string;
@@ -532,11 +533,10 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     this.finishWebPrompts(new Error("local mode active"));
     this.appServer?.stop();
     this.appServer = null;
-    const child = spawn(this.opts.bin, [...extraArgs, ...this.opts.args], {
+    const child = spawnCliProcess(this.opts.bin, [...extraArgs, ...this.opts.args], {
       cwd: this.opts.cwd,
       env: this.buildEnv(),
       stdio: "inherit",
-      windowsHide: true,
     });
     this.local = child;
     this.ownerValue = "local";
@@ -545,6 +545,12 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     child.on("error", (error) => {
       this.pushEvent("error", { message: error.message });
       process.stderr.write(`\n[adit cloud codex] failed to start Codex CLI: ${error.message}\n`);
+      if (this.local === child) {
+        this.local = null;
+        this.ownerValue = "stopped";
+        this.emitState();
+        this.emit("exit", { code: null, signal: null });
+      }
     });
     child.on("exit", (code, signal) => {
       this.setThinking(false);

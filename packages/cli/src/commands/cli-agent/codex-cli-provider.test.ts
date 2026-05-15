@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   spawn: vi.fn(),
+  spawnSync: vi.fn(),
   appStart: vi.fn(),
   appRequest: vi.fn(),
   appStop: vi.fn(),
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => mocks.spawn(...args),
+  spawnSync: (...args: unknown[]) => mocks.spawnSync(...args),
 }));
 
 vi.mock("./codex-app-server-client.js", () => ({

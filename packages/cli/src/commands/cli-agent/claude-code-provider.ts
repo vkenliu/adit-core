@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { homedir } from "node:os";
@@ -29,6 +29,7 @@ import type {
   CliSlashCommandInfo,
   CliRewindResponse,
 } from "./types.js";
+import { spawnCliProcess, spawnClaudeCliProcess } from "./cli-process.js";
 
 interface PendingPrompt {
   message: string;
@@ -570,6 +571,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       options: {
         cwd: this.opts.cwd,
         pathToClaudeCodeExecutable: this.opts.bin,
+        spawnClaudeCodeProcess: spawnClaudeCliProcess,
         env: this.buildEnv(),
         settings: this.opts.hookSettingsPath,
         resume: sessionId,
@@ -742,11 +744,10 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       ...this.opts.args,
       ...(this.opts.hookSettingsPath ? ["--settings", this.opts.hookSettingsPath] : []),
     ];
-    const child = spawn(this.opts.bin, args, {
+    const child = spawnCliProcess(this.opts.bin, args, {
       cwd: this.opts.cwd,
       env: this.buildEnv(),
       stdio: "inherit",
-      windowsHide: true,
     });
     this.local = child;
     this.ownerValue = "local";
@@ -755,6 +756,12 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     child.on("error", (error) => {
       this.pushEvent("error", { message: error.message });
       process.stderr.write(`\n[adit cloud claude] failed to start Claude CLI: ${error.message}\n`);
+      if (this.local === child) {
+        this.local = null;
+        this.ownerValue = "stopped";
+        this.emitState();
+        this.emit("exit", { code: null, signal: null });
+      }
     });
     child.on("exit", (code, signal) => {
       this.setThinking(false);
@@ -783,6 +790,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       options: {
         cwd: this.opts.cwd,
         pathToClaudeCodeExecutable: this.opts.bin,
+        spawnClaudeCodeProcess: spawnClaudeCliProcess,
         env: this.buildEnv(),
         settings: this.opts.hookSettingsPath,
         permissionMode: "plan",
@@ -896,6 +904,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       const options: Options = {
         cwd: this.opts.cwd,
         pathToClaudeCodeExecutable: this.opts.bin,
+        spawnClaudeCodeProcess: spawnClaudeCliProcess,
         env: this.buildEnv(),
         resume: resumeId ?? undefined,
         sessionId: explicitSessionId,

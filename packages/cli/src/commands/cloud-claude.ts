@@ -1,5 +1,4 @@
 import { basename, join } from "node:path";
-import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { loadConfig, findGitRoot } from "@varveai/adit-core";
 import {
@@ -12,6 +11,7 @@ import {
   loadCredentials,
 } from "@varveai/adit-cloud";
 import { ClaudeCodeProvider } from "./cli-agent/claude-code-provider.js";
+import { resolveExecutable } from "./cli-agent/cli-process.js";
 import { ClaudeTranscriptSync } from "./cli-agent/claude-transcript-sync.js";
 import {
   cleanupStaleClaudeCloudSettings,
@@ -29,14 +29,6 @@ interface CloudClaudeOptions {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function findExecutable(command: string): boolean {
-  const checker = process.platform === "win32" ? "where" : "which";
-  const result = spawnSync(checker, [command], {
-    stdio: "ignore",
-  });
-  return result.status === 0;
 }
 
 function readString(value: unknown): string | null {
@@ -236,7 +228,8 @@ export async function cloudClaudeCommand(opts?: CloudClaudeOptions): Promise<voi
   }
 
   const claudeBin = opts?.bin ?? "claude";
-  if (!findExecutable(claudeBin)) {
+  const claudeExecutable = resolveExecutable(claudeBin);
+  if (!claudeExecutable) {
     console.error(`Claude Code CLI not found: ${claudeBin}`);
     console.error("Install Claude Code and make sure 'claude' is available on PATH.");
     process.exitCode = 1;
@@ -282,7 +275,7 @@ export async function cloudClaudeCommand(opts?: CloudClaudeOptions): Promise<voi
     });
 
     provider = new ClaudeCodeProvider({
-      bin: claudeBin,
+      bin: claudeExecutable,
       args: opts?.arg ?? [],
       cwd: config.projectRoot,
       hookSettingsPath: installedHooks.settingsPath,
