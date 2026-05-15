@@ -114,6 +114,7 @@ export class SyncEngine {
       let syncVersion = serverStatus.syncVersion;
 
       const projectEntry = serverStatus.projectCursors?.[this.projectId];
+      const isNewProject = projectEntry === undefined && serverStatus.projectCursors !== undefined;
       if (projectEntry !== undefined) {
         // Server has a per-project cursor — use it directly.
         cursor = projectEntry.lastSyncedEventId;
@@ -123,7 +124,7 @@ export class SyncEngine {
             `[adit-cloud] sync: using per-project cursor for ${this.projectId}: ${cursor ?? "null"}\n`,
           );
         }
-      } else if (serverStatus.projectCursors !== undefined) {
+      } else if (isNewProject) {
         // Server supports per-project cursors but has no entry for this
         // project — it has never seen events for it. Send everything.
         cursor = null;
@@ -192,7 +193,7 @@ export class SyncEngine {
             clientId: this.cloudClientId,
             syncVersion,
             batch,
-            ...(this.projectName ? { projectName: this.projectName } : {}),
+            ...(isNewProject && this.projectName ? { projectName: this.projectName } : {}),
           },
         );
 
@@ -250,7 +251,6 @@ export class SyncEngine {
   /** Get sync status from server, scoped to this project. */
   async getRemoteStatus(): Promise<StatusResponse> {
     const params = new URLSearchParams({ projectId: this.projectId });
-    if (this.projectName) params.set("projectName", this.projectName);
     return this.client.get<StatusResponse>(`/api/sync/status?${params.toString()}`);
   }
 
