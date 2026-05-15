@@ -2,6 +2,25 @@ export type CliAgentProviderName = "claude-code" | "codex";
 
 export type CliAgentOwner = "local" | "web" | "stopped";
 
+export interface CliAgentContextUsage {
+  percentage: number;
+  totalTokens: number;
+  maxTokens: number;
+  modelId?: string | null;
+  updatedAt: number;
+  source: "claude-sdk" | "codex-app-server";
+}
+
+export interface CliAgentTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  updatedAt: number;
+  source: "codex-app-server";
+}
+
 export interface CliAgentState {
   owner: CliAgentOwner;
   busy: boolean;
@@ -10,6 +29,9 @@ export interface CliAgentState {
   resumeSessionId: string | null;
   sdkSessionId: string | null;
   activeModelId: string | null;
+  currentBranch: string | null;
+  contextUsage: CliAgentContextUsage | null;
+  lastTokenUsage: CliAgentTokenUsage | null;
 }
 
 export interface CliPermissionRequest {
@@ -59,6 +81,10 @@ export interface CliAgentProvider {
     pendingSessionId?: string | null;
     localMessageId?: string | null;
   }): Promise<void>;
+  steerPrompt?(prompt: string, opts?: {
+    sessionId?: string | null;
+    localMessageId?: string | null;
+  }): Promise<void>;
   handleSlashCommand(command: CliSlashCommand): Promise<void>;
   answerRewind?(response: CliRewindResponse): Promise<void>;
   answerPermission(
@@ -78,7 +104,16 @@ export interface CliAgentRelayEvent {
 
 export interface RelayCommand {
   id: string;
-  type: "prompt" | "abort" | "permission" | "question" | "takeover" | "switch-session" | "slash-command" | "rewind";
+  type:
+    | "prompt"
+    | "steer"
+    | "abort"
+    | "permission"
+    | "question"
+    | "takeover"
+    | "switch-session"
+    | "slash-command"
+    | "rewind";
   payload: Record<string, unknown>;
   createdAt: number;
 }
@@ -91,4 +126,7 @@ export interface CliAgentConnectionState {
   resumeSessionId: string | null;
   sdkSessionId: string | null;
   activeModelId: string | null;
+  currentBranch: string | null;
+  contextUsage: CliAgentContextUsage | null;
+  lastTokenUsage: CliAgentTokenUsage | null;
 }

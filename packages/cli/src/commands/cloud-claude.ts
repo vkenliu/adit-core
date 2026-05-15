@@ -113,6 +113,16 @@ async function processCommand(
     return;
   }
 
+  if (command.type === "steer") {
+    const text = readString(command.payload.text);
+    if (!text) return;
+    await provider.steerPrompt(text, {
+      sessionId: readString(command.payload.sessionId),
+      localMessageId: readString(command.payload.localMessageId),
+    });
+    return;
+  }
+
   if (command.type === "slash-command") {
     const name = readString(command.payload.command) ?? readString(command.payload.name);
     if (!name) return;

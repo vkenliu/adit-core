@@ -35,6 +35,7 @@ export interface RelayWsClientOptions {
 }
 
 const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
+const CONNECT_TIMEOUT_MS = 15_000;
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -47,6 +48,7 @@ function asCommand(value: unknown): RelayCommand | null {
   const type = command.type;
   if (
     type !== "prompt" &&
+    type !== "steer" &&
     type !== "abort" &&
     type !== "permission" &&
     type !== "question" &&
@@ -91,6 +93,7 @@ export class CliAgentRelayWebSocket {
   private statusValue: RelayWsStatus = "closed";
   private reconnectAttempt = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private connectTimer: NodeJS.Timeout | null = null;
   private intentionalClose = false;
   private connectionId: string | null = null;
 
@@ -128,8 +131,14 @@ export class CliAgentRelayWebSocket {
       },
     });
     this.socket = socket;
+    this.connectTimer = setTimeout(() => {
+      if (this.socket === socket && socket.readyState === WebSocket.CONNECTING) {
+        socket.terminate();
+      }
+    }, CONNECT_TIMEOUT_MS);
 
     socket.on("open", () => {
+      this.clearConnectTimer();
       this.setStatus("open");
       this.send({
         type: "hello",
@@ -147,6 +156,7 @@ export class CliAgentRelayWebSocket {
     });
 
     socket.on("close", () => {
+      this.clearConnectTimer();
       if (this.socket === socket) this.socket = null;
       const hadConnection = this.connectionId !== null;
       this.connectionId = null;
@@ -162,6 +172,7 @@ export class CliAgentRelayWebSocket {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    this.clearConnectTimer();
     const socket = this.socket;
     this.socket = null;
     this.connectionId = null;
@@ -203,6 +214,12 @@ export class CliAgentRelayWebSocket {
     if (this.statusValue === status) return;
     this.statusValue = status;
     this.opts.onStatus?.(status);
+  }
+
+  private clearConnectTimer(): void {
+    if (!this.connectTimer) return;
+    clearTimeout(this.connectTimer);
+    this.connectTimer = null;
   }
 
   private scheduleReconnect(): void {

@@ -6,6 +6,9 @@ const mocks = vi.hoisted(() => ({
   appStart: vi.fn(),
   appRequest: vi.fn(),
   appStop: vi.fn(),
+  appServerOptions: null as null | {
+    onNotification?: (message: unknown) => void;
+  },
 }));
 
 vi.mock("node:child_process", () => ({
@@ -14,6 +17,10 @@ vi.mock("node:child_process", () => ({
 
 vi.mock("./codex-app-server-client.js", () => ({
   CodexAppServerClient: class {
+    constructor(options: unknown) {
+      mocks.appServerOptions = options as typeof mocks.appServerOptions;
+    }
+
     get isRunning() {
       return true;
     }
@@ -30,6 +37,10 @@ vi.mock("./codex-app-server-client.js", () => ({
       return mocks.appStop();
     }
   },
+}));
+
+vi.mock("@varveai/adit-engine", () => ({
+  getCurrentBranch: vi.fn(async () => "main"),
 }));
 
 import {
@@ -55,8 +66,13 @@ function mockChildProcess() {
   return child;
 }
 
+function tick(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.appServerOptions = null;
   mocks.spawn.mockImplementation(() => mockChildProcess());
   mocks.appStart.mockResolvedValue(undefined);
   mocks.appRequest.mockImplementation(async (method: string, params: unknown) => {
@@ -71,6 +87,9 @@ beforeEach(() => {
         model: "gpt-test",
         thread: { id: (params as { threadId?: string }).threadId },
       };
+    }
+    if (method === "turn/start") {
+      return { turn: { id: "turn-1" } };
     }
     return {};
   });
@@ -154,6 +173,27 @@ describe("Codex prompt modes", () => {
 });
 
 describe("CodexCliProvider takeover", () => {
+  it("rejects Web takeover after the local Codex CLI exits", async () => {
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+    });
+    const child = mocks.spawn.mock.results[0]?.value as EventEmitter;
+
+    child.emit("exit", 0, null);
+
+    expect(provider.state.owner).toBe("stopped");
+
+    await expect(provider.takeover()).rejects.toMatchObject({
+      message: "local Codex owner is not available",
+      statusCode: 409,
+    });
+    expect(mocks.appRequest).not.toHaveBeenCalled();
+
+    provider.stop();
+  });
+
   it("starts a real empty thread when Web takes over without an active session", async () => {
     const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
     const provider = new CodexCliProvider({
@@ -184,6 +224,80 @@ describe("CodexCliProvider takeover", () => {
       event.type === "state" &&
       event.payload.activeSessionId === "019e2110-d96f-7e40-882e-b524fa9148e4"
     )).toBe(true);
+
+    provider.stop();
+  });
+
+  it("reports current branch and latest token usage while Web controls Codex", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    await provider.takeover();
+    provider.noteModel("gpt-5.5");
+    mocks.appServerOptions?.onNotification?.({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "019e2110-d96f-7e40-882e-b524fa9148e4",
+        tokenUsage: {
+          last: {
+            inputTokens: 1200,
+            outputTokens: 300,
+            reasoningOutputTokens: 50,
+            cachedInputTokens: 200,
+            cacheCreationInputTokens: 10,
+          },
+        },
+      },
+    });
+    await tick();
+
+    expect(provider.state.currentBranch).toBe("main");
+    expect(provider.state.lastTokenUsage).toEqual(expect.objectContaining({
+      inputTokens: 1200,
+      outputTokens: 300,
+      reasoningTokens: 50,
+      cacheReadTokens: 200,
+      cacheWriteTokens: 10,
+      source: "codex-app-server",
+    }));
+    expect(provider.state.contextUsage).toEqual(expect.objectContaining({
+      totalTokens: 1500,
+      maxTokens: 1_050_000,
+      modelId: "gpt-5.5",
+      source: "codex-app-server",
+    }));
+    expect(provider.state.contextUsage?.percentage).toBeCloseTo(1500 / 1_050_000 * 100);
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "state",
+      payload: expect.objectContaining({
+        currentBranch: "main",
+        contextUsage: expect.objectContaining({
+          totalTokens: 1500,
+          maxTokens: 1_050_000,
+          modelId: "gpt-5.5",
+        }),
+        lastTokenUsage: expect.objectContaining({
+          inputTokens: 1200,
+          outputTokens: 300,
+          reasoningTokens: 50,
+          cacheReadTokens: 200,
+          cacheWriteTokens: 10,
+        }),
+      }),
+    }));
+
+    (provider as unknown as { contextUsage: null }).contextUsage = null;
+    provider.noteModel("gpt-5.5");
+    expect(provider.state.contextUsage).toEqual(expect.objectContaining({
+      totalTokens: 1500,
+      maxTokens: 1_050_000,
+      modelId: "gpt-5.5",
+    }));
 
     provider.stop();
   });
@@ -243,6 +357,96 @@ describe("CodexCliProvider takeover", () => {
       }),
     );
     expect(provider.state.activeSessionId).toBe("019e2110-d96f-7e40-882e-b524fa9148e4");
+
+    provider.stop();
+  });
+});
+
+describe("CodexCliProvider abort", () => {
+  it("interrupts the active turn and emits a non-error abort event", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    await provider.takeover();
+    await provider.sendPrompt("hello");
+    await provider.abort();
+
+    expect(mocks.appRequest).toHaveBeenCalledWith("turn/interrupt", {
+      threadId: "019e2110-d96f-7e40-882e-b524fa9148e4",
+      turnId: "turn-1",
+    });
+    expect(events.some((event) => event.type === "run.aborted")).toBe(true);
+    expect(events.some((event) =>
+      event.type === "error" &&
+      String(event.payload.message ?? "").includes("aborted")
+    )).toBe(false);
+
+    provider.stop();
+  });
+});
+
+describe("CodexCliProvider steerPrompt", () => {
+  it("sends steering input to the active turn without queuing a new prompt", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    await provider.takeover();
+    await provider.sendPrompt("hello");
+    mocks.appRequest.mockClear();
+
+    await provider.steerPrompt("focus on tests", {
+      sessionId: "019e2110-d96f-7e40-882e-b524fa9148e4",
+      localMessageId: "local-steer-1",
+    });
+
+    expect(mocks.appRequest).toHaveBeenCalledWith("turn/steer", {
+      threadId: "019e2110-d96f-7e40-882e-b524fa9148e4",
+      expectedTurnId: "turn-1",
+      input: [
+        {
+          type: "text",
+          text: "focus on tests",
+          text_elements: [],
+        },
+      ],
+    });
+    expect(mocks.appRequest).not.toHaveBeenCalledWith("turn/start", expect.anything());
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "message",
+      payload: expect.objectContaining({
+        role: "user",
+        sessionId: "019e2110-d96f-7e40-882e-b524fa9148e4",
+        messageId: "local-steer-1",
+        text: "focus on tests",
+        inputKind: "steer",
+      }),
+    }));
+
+    provider.stop();
+  });
+
+  it("rejects steering when no turn is active", async () => {
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+    });
+
+    await provider.takeover();
+
+    await expect(provider.steerPrompt("too early")).rejects.toThrow(
+      "Codex is not currently accepting steering input",
+    );
 
     provider.stop();
   });
