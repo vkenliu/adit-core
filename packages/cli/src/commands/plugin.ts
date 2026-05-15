@@ -19,6 +19,11 @@ import {
 } from "@varveai/adit-hooks/adapters";
 import type { Platform } from "@varveai/adit-core";
 
+export interface UninstallHooksResult {
+  uninstalled: string[];
+  errors: string[];
+}
+
 /**
  * Resolve the project root from config, preferring git root for
  * directory-based platform detection.
@@ -194,11 +199,11 @@ export async function pluginUninstallCommand(
   opts?: { json?: boolean; all?: boolean; clean?: boolean },
 ): Promise<void> {
   const config = loadConfig();
-  const projectRoot = resolveProjectRoot();
 
   // --all: uninstall every installed platform (legacy behavior preserved)
   if (opts?.all) {
-    await uninstallAll(config.projectRoot, config.dataDir, opts);
+    const result = await uninstallAll(config.projectRoot, config.dataDir, opts);
+    printUninstallResult(result, config.dataDir, result.dataRemoved, opts);
     return;
   }
 
@@ -211,68 +216,8 @@ export async function pluginUninstallCommand(
     return;
   }
 
-  // No arg, no --all: auto-detect and uninstall all detected/installed platforms
-  // First check which platforms are actually installed
-  const detectedPlatforms = detectPlatforms(projectRoot);
-  const allAdapters = listAdapters().filter((a) => a.hookMappings.length > 0);
-
-  // Combine: check detected platforms + any currently-installed platform
-  const toCheck = new Map<string, PlatformAdapter>();
-  for (const p of detectedPlatforms) {
-    const adapter = getAdapterSafe(p);
-    if (adapter && adapter.hookMappings.length > 0) {
-      toCheck.set(adapter.platform, adapter);
-    }
-  }
-  for (const adapter of allAdapters) {
-    if (!toCheck.has(adapter.platform)) {
-      try {
-        const result = await adapter.validateInstallation(config.projectRoot);
-        if (result.valid) {
-          toCheck.set(adapter.platform, adapter);
-        }
-      } catch {
-        // ignore
-      }
-    }
-  }
-
-  if (toCheck.size === 0) {
-    if (opts?.json) {
-      console.log(JSON.stringify({
-        ok: true,
-        action: "uninstall",
-        uninstalled: [],
-      }));
-    } else {
-      console.log();
-      console.log("  No ADIT hooks found to remove.");
-      console.log();
-    }
-    return;
-  }
-
-  const uninstalled: string[] = [];
-  const errors: string[] = [];
-
-  if (!opts?.json) {
-    console.log();
-  }
-
-  for (const adapter of toCheck.values()) {
-    try {
-      const result = await adapter.validateInstallation(config.projectRoot);
-      if (result.valid) {
-        await adapter.uninstallHooks(config.projectRoot);
-        uninstalled.push(adapter.displayName);
-        if (!opts?.json) {
-          console.log(`  [~] Removed ${adapter.displayName} hooks`);
-        }
-      }
-    } catch (err) {
-      errors.push(`${adapter.displayName}: ${(err as Error).message}`);
-    }
-  }
+  const result = await uninstallInstalledPlatformHooks(config.projectRoot);
+  const errors = [...result.errors];
 
   // Optionally remove .adit/ data directory
   let dataRemoved = false;
@@ -285,26 +230,70 @@ export async function pluginUninstallCommand(
     }
   }
 
-  if (opts?.json) {
-    console.log(JSON.stringify({
-      ok: errors.length === 0,
-      action: "uninstall",
-      uninstalled,
-      dataRemoved,
-      errors: errors.length > 0 ? errors : undefined,
-    }));
-  } else {
-    if (uninstalled.length === 0) {
-      console.log("  No ADIT hooks found to remove.");
+  printUninstallResult(
+    { uninstalled: result.uninstalled, errors },
+    config.dataDir,
+    dataRemoved,
+    opts,
+  );
+}
+
+/**
+ * Uninstall all installed ADIT platform hooks for a project.
+ *
+ * This intentionally does not remove `.adit/`; callers decide whether they
+ * are doing hook-only cleanup or full project uninstall.
+ */
+export async function uninstallInstalledPlatformHooks(
+  projectRoot: string,
+): Promise<UninstallHooksResult> {
+  const detectionRoot = findGitRoot(projectRoot) ?? projectRoot;
+
+  // Auto-detect all detected/installed platforms. First check which platforms
+  // are actually installed.
+  const allAdapters = listAdapters().filter((a) => a.hookMappings.length > 0);
+
+  // Combine: check detected platforms + any currently-installed platform
+  const toCheck = new Map<string, PlatformAdapter>();
+  for (const p of detectPlatforms(detectionRoot)) {
+    const adapter = getAdapterSafe(p);
+    if (adapter && adapter.hookMappings.length > 0) {
+      toCheck.set(adapter.platform, adapter);
     }
-    if (dataRemoved) {
-      console.log(`  [~] Removed data directory: ${config.dataDir}`);
-    }
-    for (const err of errors) {
-      console.error(`  [x] ${err}`);
-    }
-    console.log();
   }
+  for (const adapter of allAdapters) {
+    if (!toCheck.has(adapter.platform)) {
+      try {
+        const result = await adapter.validateInstallation(projectRoot);
+        if (result.valid) {
+          toCheck.set(adapter.platform, adapter);
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  if (toCheck.size === 0) {
+    return { uninstalled: [], errors: [] };
+  }
+
+  const uninstalled: string[] = [];
+  const errors: string[] = [];
+
+  for (const adapter of toCheck.values()) {
+    try {
+      const result = await adapter.validateInstallation(projectRoot);
+      if (result.valid) {
+        await adapter.uninstallHooks(projectRoot);
+        uninstalled.push(adapter.displayName);
+      }
+    } catch (err) {
+      errors.push(`${adapter.displayName}: ${(err as Error).message}`);
+    }
+  }
+
+  return { uninstalled, errors };
 }
 
 /** Uninstall hooks for ALL installed platforms (--all flag) */
@@ -312,13 +301,9 @@ async function uninstallAll(
   projectRoot: string,
   dataDir: string,
   opts?: { json?: boolean; clean?: boolean },
-): Promise<void> {
+): Promise<UninstallHooksResult & { dataRemoved: boolean }> {
   const uninstalled: string[] = [];
   const errors: string[] = [];
-
-  if (!opts?.json) {
-    console.log();
-  }
 
   for (const adapter of listAdapters()) {
     if (adapter.hookMappings.length === 0) continue;
@@ -327,9 +312,6 @@ async function uninstallAll(
       if (result.valid) {
         await adapter.uninstallHooks(projectRoot);
         uninstalled.push(adapter.displayName);
-        if (!opts?.json) {
-          console.log(`  [~] Removed ${adapter.displayName} hooks`);
-        }
       }
     } catch (err) {
       errors.push(`${adapter.platform}: ${(err as Error).message}`);
@@ -347,22 +329,36 @@ async function uninstallAll(
     }
   }
 
+  return { uninstalled, errors, dataRemoved };
+}
+
+function printUninstallResult(
+  result: UninstallHooksResult,
+  dataDir: string,
+  dataRemoved: boolean,
+  opts?: { json?: boolean },
+): void {
   if (opts?.json) {
     console.log(JSON.stringify({
-      ok: errors.length === 0,
+      ok: result.errors.length === 0,
       action: "uninstall",
-      uninstalled,
+      uninstalled: result.uninstalled,
       dataRemoved,
-      errors: errors.length > 0 ? errors : undefined,
+      errors: result.errors.length > 0 ? result.errors : undefined,
     }));
   } else {
-    if (uninstalled.length === 0) {
+    console.log();
+    if (result.uninstalled.length === 0) {
       console.log("  No ADIT hooks found to remove.");
+    } else {
+      for (const displayName of result.uninstalled) {
+        console.log(`  [~] Removed ${displayName} hooks`);
+      }
     }
     if (dataRemoved) {
       console.log(`  [~] Removed data directory: ${dataDir}`);
     }
-    for (const err of errors) {
+    for (const err of result.errors) {
       console.error(`  [x] ${err}`);
     }
     console.log();

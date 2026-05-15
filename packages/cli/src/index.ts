@@ -38,6 +38,7 @@ import {
   pluginListCommand,
   pluginValidateCommand,
 } from "./commands/plugin.js";
+import { projectUninstallCommand } from "./commands/project.js";
 import {
   cloudLoginCommand,
   cloudLogoutCommand,
@@ -258,6 +259,20 @@ export function createProgram(): Command {
     .option("--json", "Output as JSON")
     .action((platform, opts) =>
       pluginValidateCommand(platform, { json: opts.json }),
+    );
+
+  // Project lifecycle
+  const projectCmd = program
+    .command("project")
+    .description("Manage ADIT for the current project");
+
+  projectCmd
+    .command("uninstall")
+    .description("Uninstall ADIT from the current project")
+    .option("-y, --yes", "Skip confirmation")
+    .option("--json", "Output as JSON")
+    .action((opts) =>
+      projectUninstallCommand({ yes: opts.yes, json: opts.json }),
     );
 
   // Cloud sync

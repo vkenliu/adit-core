@@ -43,8 +43,15 @@ describe("CLI help", () => {
 
     expect(help).toContain("cloud");
     expect(help).toContain("docs");
+    expect(help).toContain("project");
     expect(help).toContain("self-update [options]");
     expect(help).toContain("help [command...]");
+  });
+
+  it("lists project uninstall command", () => {
+    const projectHelp = findCommand(createProgram(), "project").helpInformation();
+
+    expect(projectHelp).toContain("uninstall [options]");
   });
 
   it("lists cloud coding and project commands", () => {
