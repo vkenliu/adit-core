@@ -284,7 +284,7 @@ export async function cloudClaudeCommand(opts?: CloudClaudeOptions): Promise<voi
 
     const ws = new CliAgentRelayWebSocket({
       serverUrl,
-      accessToken: client.getCredentials().accessToken,
+      accessToken: async () => (await client.getFreshCredentials()).accessToken,
       register: {
         provider: "claude-code",
         terminalId,

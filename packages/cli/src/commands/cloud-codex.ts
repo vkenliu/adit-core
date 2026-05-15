@@ -312,7 +312,7 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
 
     const ws = new CliAgentRelayWebSocket({
       serverUrl,
-      accessToken: client.getCredentials().accessToken,
+      accessToken: async () => (await client.getFreshCredentials()).accessToken,
       register: {
         provider: "codex",
         terminalId,

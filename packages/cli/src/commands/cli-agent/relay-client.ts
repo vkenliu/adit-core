@@ -22,10 +22,11 @@ export interface CliAgentRelayHello {
 }
 
 type RelayWsStatus = "connecting" | "open" | "closed";
+type AccessTokenProvider = string | (() => string | Promise<string>);
 
 export interface RelayWsClientOptions {
   serverUrl: string;
-  accessToken: string;
+  accessToken: AccessTokenProvider;
   register: CliAgentRegisterPayload;
   onHello: (info: CliAgentRelayHello) => void;
   onCommand: (command: RelayCommand) => void;
@@ -96,6 +97,7 @@ export class CliAgentRelayWebSocket {
   private connectTimer: NodeJS.Timeout | null = null;
   private intentionalClose = false;
   private connectionId: string | null = null;
+  private connectPending = false;
 
   constructor(private readonly opts: RelayWsClientOptions) {}
 
@@ -113,6 +115,7 @@ export class CliAgentRelayWebSocket {
 
   connect(): void {
     if (this.intentionalClose) return;
+    if (this.connectPending) return;
     if (
       this.socket &&
       (this.socket.readyState === WebSocket.CONNECTING || this.socket.readyState === WebSocket.OPEN)
@@ -124,13 +127,37 @@ export class CliAgentRelayWebSocket {
       this.reconnectTimer = null;
     }
 
+    this.connectPending = true;
     this.setStatus("connecting");
+    void this.openSocket().catch((error) => {
+      this.connectPending = false;
+      this.opts.onError?.(error instanceof Error ? error : new Error(String(error)));
+      this.setStatus("closed");
+      if (!this.intentionalClose) this.scheduleReconnect();
+    });
+  }
+
+  private async openSocket(): Promise<void> {
+    const accessToken = await this.resolveAccessToken();
+    if (this.intentionalClose) {
+      this.connectPending = false;
+      return;
+    }
+    if (
+      this.socket &&
+      (this.socket.readyState === WebSocket.CONNECTING || this.socket.readyState === WebSocket.OPEN)
+    ) {
+      this.connectPending = false;
+      return;
+    }
+
     const socket = new WebSocket(wsUrlFromServer(this.opts.serverUrl), {
       headers: {
-        Authorization: `Bearer ${this.opts.accessToken}`,
+        Authorization: `Bearer ${accessToken}`,
       },
     });
     this.socket = socket;
+    this.connectPending = false;
     this.connectTimer = setTimeout(() => {
       if (this.socket === socket && socket.readyState === WebSocket.CONNECTING) {
         socket.terminate();
@@ -142,7 +169,7 @@ export class CliAgentRelayWebSocket {
       this.setStatus("open");
       this.send({
         type: "hello",
-        accessToken: this.opts.accessToken,
+        accessToken,
         register: this.opts.register,
       });
     });
@@ -168,6 +195,7 @@ export class CliAgentRelayWebSocket {
 
   close(): void {
     this.intentionalClose = true;
+    this.connectPending = false;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -214,6 +242,12 @@ export class CliAgentRelayWebSocket {
     if (this.statusValue === status) return;
     this.statusValue = status;
     this.opts.onStatus?.(status);
+  }
+
+  private async resolveAccessToken(): Promise<string> {
+    return typeof this.opts.accessToken === "function"
+      ? await this.opts.accessToken()
+      : this.opts.accessToken;
   }
 
   private clearConnectTimer(): void {
