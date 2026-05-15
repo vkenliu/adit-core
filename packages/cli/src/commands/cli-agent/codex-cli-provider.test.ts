@@ -304,6 +304,57 @@ describe("CodexCliProvider takeover", () => {
     provider.stop();
   });
 
+  it("keeps Codex context usage scoped to the selected thread", async () => {
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+    });
+
+    await provider.takeover();
+    provider.noteModel("gpt-5.5");
+    mocks.appServerOptions?.onNotification?.({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "019e2110-d96f-7e40-882e-b524fa9148e4",
+        tokenUsage: {
+          last: {
+            inputTokens: 1200,
+            outputTokens: 300,
+          },
+        },
+      },
+    });
+    await tick();
+    expect(provider.state.contextUsage?.totalTokens).toBe(1500);
+
+    await provider.switchSession("019e0000-0000-7000-8000-000000000001");
+    provider.noteModel("gpt-5.5");
+    expect(provider.state.contextUsage).toBeNull();
+    expect(provider.state.lastTokenUsage).toBeNull();
+
+    mocks.appServerOptions?.onNotification?.({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "019e0000-0000-7000-8000-000000000001",
+        tokenUsage: {
+          last: {
+            inputTokens: 2200,
+            outputTokens: 400,
+          },
+        },
+      },
+    });
+    await tick();
+    expect(provider.state.contextUsage?.totalTokens).toBe(2600);
+
+    await provider.switchSession("019e2110-d96f-7e40-882e-b524fa9148e4");
+    expect(provider.state.contextUsage?.totalTokens).toBe(1500);
+    expect(provider.state.lastTokenUsage?.inputTokens).toBe(1200);
+
+    provider.stop();
+  });
+
   it("resumes the active thread when Web takes over an existing session", async () => {
     const provider = new CodexCliProvider({
       bin: "codex",

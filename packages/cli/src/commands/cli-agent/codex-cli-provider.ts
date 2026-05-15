@@ -108,6 +108,8 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   private branchRefreshPromise: Promise<void> | null = null;
   private contextUsage: CliAgentContextUsage | null = null;
   private lastTokenUsage: CliAgentTokenUsage | null = null;
+  private contextUsageBySession = new Map<string, CliAgentContextUsage>();
+  private lastTokenUsageBySession = new Map<string, CliAgentTokenUsage>();
   private promptQueue: PendingPrompt[] = [];
   private promptActive = false;
   private activeTurnId: string | null = null;
@@ -167,6 +169,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     this.activeSessionId = id;
     this.resumeSessionId = id;
     this.sdkSessionId = id;
+    this.applyStoredUsageForSession(id);
     if (!changed) return;
     this.emitState();
   }
@@ -252,6 +255,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       this.activeSessionId = sessionId;
       this.resumeSessionId = sessionId;
       this.sdkSessionId = sessionId;
+      this.applyStoredUsageForSession(sessionId);
       this.emitState();
       this.startLocal(["resume", sessionId]);
       return;
@@ -780,10 +784,18 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       const rawUsage = asRecord(asRecord(params.tokenUsage)?.last);
       const usage = normalizeCodexUsage(rawUsage);
       const tokenUsage = normalizeCodexTokenUsage(rawUsage);
-      if (tokenUsage && !isSameTokenUsage(this.lastTokenUsage, tokenUsage)) {
-        this.lastTokenUsage = tokenUsage;
-        this.refreshContextUsage();
-        this.emitState();
+      const previousTokenUsage = sessionId
+        ? this.lastTokenUsageBySession.get(sessionId) ?? null
+        : this.lastTokenUsage;
+      if (tokenUsage && !isSameTokenUsage(previousTokenUsage, tokenUsage)) {
+        if (sessionId) {
+          this.lastTokenUsageBySession.set(sessionId, tokenUsage);
+        }
+        if (!sessionId || sessionId === this.currentUsageSessionId()) {
+          this.lastTokenUsage = tokenUsage;
+          this.refreshContextUsage();
+          this.emitState();
+        }
       }
       if (sessionId && usage) {
         this.pushEvent("usage", {
@@ -869,6 +881,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     this.resumeSessionId = threadId;
     this.sdkSessionId = threadId;
     this.loadedThreadIds.add(threadId);
+    this.applyStoredUsageForSession(threadId);
     const modelId = readString(result?.model);
     if (modelId) {
       this.activeModelId = modelId;
@@ -1029,6 +1042,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     this.activeSessionId = sessionId;
     this.resumeSessionId = sessionId;
     this.sdkSessionId = sessionId;
+    this.applyStoredUsageForSession(sessionId);
     if (!this.boundPendingSessionIds.has(pendingSessionId)) {
       this.boundPendingSessionIds.add(pendingSessionId);
       this.pushEvent("session-bound", {
@@ -1105,6 +1119,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   private emitState(): void {
     this.emit("state", this.state);
     this.pushEvent("state", {
+      sessionId: this.activeSessionId ?? this.resumeSessionId,
       owner: this.ownerValue,
       busy: this.busyValue,
       thinking: this.thinkingValue,
@@ -1120,13 +1135,34 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   }
 
   private refreshContextUsage(): void {
-    const nextUsage = buildCodexContextUsage(this.lastTokenUsage, this.activeModelId);
+    const sessionId = this.currentUsageSessionId();
+    const tokenUsage = sessionId
+      ? this.lastTokenUsageBySession.get(sessionId) ?? null
+      : this.lastTokenUsage;
+    this.lastTokenUsage = tokenUsage;
+    const nextUsage = buildCodexContextUsage(tokenUsage, this.activeModelId);
     if (!nextUsage) {
       this.contextUsage = null;
+      if (sessionId) this.contextUsageBySession.delete(sessionId);
       return;
     }
     if (isSameContextUsage(this.contextUsage, nextUsage)) return;
     this.contextUsage = nextUsage;
+    if (sessionId) this.contextUsageBySession.set(sessionId, nextUsage);
+  }
+
+  private currentUsageSessionId(): string | null {
+    return this.activeSessionId ?? this.resumeSessionId ?? this.sdkSessionId;
+  }
+
+  private applyStoredUsageForSession(sessionId: string | null): void {
+    if (!sessionId) {
+      this.contextUsage = null;
+      this.lastTokenUsage = null;
+      return;
+    }
+    this.lastTokenUsage = this.lastTokenUsageBySession.get(sessionId) ?? null;
+    this.contextUsage = this.contextUsageBySession.get(sessionId) ?? null;
   }
 
   private pushEvent(type: string, payload: Record<string, unknown>): void {

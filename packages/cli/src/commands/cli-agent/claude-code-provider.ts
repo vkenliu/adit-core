@@ -143,6 +143,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
   private branchRefreshAt = 0;
   private branchRefreshPromise: Promise<void> | null = null;
   private contextUsage: CliAgentContextUsage | null = null;
+  private contextUsageBySession = new Map<string, CliAgentContextUsage>();
   private contextUsageRefreshAt = 0;
   private contextUsageRefreshPromise: Promise<void> | null = null;
   private promptQueue: PendingPrompt[] = [];
@@ -180,7 +181,6 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
 
   get state(): CliAgentState {
     this.scheduleBranchRefresh();
-    this.scheduleContextUsageRefresh();
     return {
       owner: this.ownerValue,
       busy: this.busyValue,
@@ -212,6 +212,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     this.resumeSessionId = id;
     this.sdkSessionId = null;
     this.remoteSdkSessionId = null;
+    this.applyStoredContextUsageForSession(id);
     this.refreshActiveModel({ sessionId: id });
     if (!changed) return;
     this.emitState();
@@ -311,6 +312,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     this.resumeSessionId = sessionId;
     this.sdkSessionId = null;
     this.remoteSdkSessionId = null;
+    this.applyStoredContextUsageForSession(sessionId);
     this.refreshActiveModel({ sessionId });
     this.emitState();
 
@@ -1252,6 +1254,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     this.remoteSdkSessionId = id;
     this.activeSessionId = nextActiveSessionId;
     this.resumeSessionId = nextResumeSessionId;
+    this.applyStoredContextUsageForSession(nextActiveSessionId ?? id);
     if (nextActiveSessionId) {
       this.rememberRemoteSdkSession(nextActiveSessionId, id);
     }
@@ -1270,6 +1273,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     this.resumeSessionId = sessionId;
     this.sdkSessionId = sessionId;
     this.remoteSdkSessionId = sessionId;
+    this.applyStoredContextUsageForSession(sessionId);
     this.refreshActiveModel({ sessionId });
     if (!this.boundPendingSessionIds.has(pendingSessionId)) {
       this.boundPendingSessionIds.add(pendingSessionId);
@@ -1716,12 +1720,20 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     if (this.contextUsageRefreshPromise) return;
     if (!force && now - this.contextUsageRefreshAt < CONTEXT_USAGE_REFRESH_INTERVAL_MS) return;
     this.contextUsageRefreshAt = now;
+    const sessionId = this.currentContextUsageSessionId();
     this.contextUsageRefreshPromise = queryWithUsage.getContextUsage()
       .then((rawUsage) => {
         const usage = normalizeClaudeContextUsage(rawUsage, this.activeModelId);
-        if (!usage || isSameContextUsage(this.contextUsage, usage)) return;
-        this.contextUsage = usage;
-        this.emitState();
+        if (!usage) return;
+        const previousUsage = sessionId
+          ? this.contextUsageBySession.get(sessionId) ?? null
+          : this.contextUsage;
+        if (isSameContextUsage(previousUsage, usage)) return;
+        if (sessionId) this.contextUsageBySession.set(sessionId, usage);
+        if (!sessionId || sessionId === this.currentContextUsageSessionId()) {
+          this.contextUsage = usage;
+          this.emitState();
+        }
       })
       .catch(() => undefined)
       .finally(() => {
@@ -1732,6 +1744,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
   private emitState(): void {
     this.emit("state", this.state);
     this.pushEvent("state", {
+      sessionId: this.activeSessionId ?? this.resumeSessionId,
       owner: this.ownerValue,
       busy: this.busyValue,
       thinking: this.thinkingValue,
@@ -1767,6 +1780,14 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
 
   private buildEnv(): NodeJS.ProcessEnv {
     return buildClaudeCloudRelayEnv();
+  }
+
+  private currentContextUsageSessionId(): string | null {
+    return this.activeSessionId ?? this.resumeSessionId ?? this.sdkSessionId ?? this.remoteSdkSessionId;
+  }
+
+  private applyStoredContextUsageForSession(sessionId: string | null): void {
+    this.contextUsage = sessionId ? this.contextUsageBySession.get(sessionId) ?? null : null;
   }
 
   private refreshActiveModel(opts: { sessionId?: string | null } = {}): string | null {
