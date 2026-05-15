@@ -96,7 +96,7 @@ describe("dispatchHook", () => {
     );
   });
 
-  it("triggers cloud auto-sync after hook events", async () => {
+  it("does not trigger cloud auto-sync on prompt-submit", async () => {
     const input: NormalizedHookInput = {
       cwd: "/test",
       hookType: "prompt-submit",
@@ -105,11 +105,7 @@ describe("dispatchHook", () => {
 
     await dispatchHook(input);
 
-    expect(mockTriggerAutoSync).toHaveBeenCalledWith(
-      expect.anything(),
-      "proj-001",
-      undefined,
-    );
+    expect(mockTriggerAutoSync).not.toHaveBeenCalled();
   });
 
   it("skips prompt-submit when prompt is empty", async () => {
@@ -210,6 +206,23 @@ describe("dispatchHook", () => {
       expect.anything(),
       "sess-001",
       "completed",
+    );
+  });
+
+  it("triggers cloud auto-sync once on session-start", async () => {
+    const input: NormalizedHookInput = {
+      cwd: "/test",
+      hookType: "session-start",
+      sessionSource: "startup",
+    };
+
+    await dispatchHook(input);
+
+    expect(mockTriggerAutoSync).toHaveBeenCalledTimes(1);
+    expect(mockTriggerAutoSync).toHaveBeenCalledWith(
+      expect.anything(),
+      "proj-001",
+      undefined,
     );
   });
 

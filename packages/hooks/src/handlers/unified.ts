@@ -69,29 +69,35 @@ export async function dispatchHook(input: NormalizedHookInput): Promise<void> {
       });
     }
 
-    // Auto-sync to cloud on every hook event (fail-open).
+    // Auto-sync to cloud on stable hook boundaries (fail-open).
     // Uses dynamic import so @varveai/adit-cloud is not a build-time dependency.
     // The module name is constructed to prevent TypeScript from resolving it.
     // Force sync only on session-end to flush final data. Other hook events,
-    // including stop/session.idle, use the count/time thresholds in
-    // triggerAutoSync so a normal conversation does not push every turn.
-    try {
-      await withPerf(dataDir, "network", "cloud-auto-sync", async () => {
-        const cloudModuleName = ["@varveai", "adit-cloud"].join("/");
-        const cloudModule = await import(cloudModuleName) as {
-          triggerAutoSync: (db: unknown, projectId: string, options?: { force?: boolean }) => Promise<void>;
-        };
-        // Awaited so db stays open until it finishes querying.
-        // The actual network push happens inside triggerAutoSync's own fire-and-forget.
-        const force = input.hookType === "session-end";
-        await cloudModule.triggerAutoSync(ctx.db, ctx.config.projectId, force ? { force: true } : undefined);
-      });
-    } catch {
-      // @varveai/adit-cloud not installed — silently skip
+    // including stop/session.idle, use the count/time thresholds in triggerAutoSync.
+    // prompt-submit is deliberately skipped so cloud does not receive half a turn
+    // containing a user prompt without its assistant response.
+    if (shouldTriggerCloudAutoSync(input.hookType)) {
+      try {
+        await withPerf(dataDir, "network", "cloud-auto-sync", async () => {
+          const cloudModuleName = ["@varveai", "adit-cloud"].join("/");
+          const cloudModule = await import(cloudModuleName) as {
+            triggerAutoSync: (db: unknown, projectId: string, options?: { force?: boolean }) => Promise<void>;
+          };
+          // Awaited so db stays open until triggerAutoSync finishes querying and pushing.
+          const force = input.hookType === "session-end";
+          await cloudModule.triggerAutoSync(ctx.db, ctx.config.projectId, force ? { force: true } : undefined);
+        });
+      } catch {
+        // @varveai/adit-cloud not installed — silently skip
+      }
     }
   } finally {
     ctx.db.close();
   }
+}
+
+function shouldTriggerCloudAutoSync(hookType: NormalizedHookInput["hookType"]): boolean {
+  return hookType !== "prompt-submit";
 }
 
 /** Handle prompt submission (kept lightweight — no git operations) */
@@ -277,15 +283,6 @@ async function handleSessionStart(ctx: HookContext, input: NormalizedHookInput):
     } catch {
       // Fail-open
     }
-  }
-
-  // Trigger auto-sync on session start to ensure the Project record
-  // exists server-side before the user runs `/adit link`.
-  try {
-    const { triggerAutoSync } = await import("@varveai/adit-cloud");
-    triggerAutoSync(ctx.db, ctx.config.projectId).catch(() => {});
-  } catch {
-    // Fail-open — cloud package may not be available
   }
 
   // Trigger project-link auto-sync (fire-and-forget, fail-open).
