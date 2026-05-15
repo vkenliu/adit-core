@@ -7,8 +7,6 @@
  * the ADIT timeline.
  */
 
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { initCommand } from "./commands/init.js";
 import { listCommand } from "./commands/list.js";
@@ -64,6 +62,7 @@ import {
 import { completeCliHandler } from "./commands/complete.js";
 import { selfUpdateCommand } from "./commands/self-update.js";
 import { docsScaffoldCommand, docsValidateCommand } from "./commands/docs.js";
+import { isCliEntrypoint } from "./entrypoint.js";
 import { launchTui } from "./tui/index.js";
 import { CLI_VERSION } from "./version.js";
 
@@ -595,14 +594,6 @@ function findNestedCommand(
     current = next;
   }
   return current;
-}
-
-function isCliEntrypoint(
-  metaUrl: string,
-  argvPath: string | undefined,
-): boolean {
-  if (!argvPath) return false;
-  return fileURLToPath(metaUrl) === path.resolve(argvPath);
 }
 
 export function normalizeLegacyIntentCompleteArgs(argv: string[]): string[] {

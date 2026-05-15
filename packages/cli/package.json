@@ -1,6 +1,6 @@
 {
   "name": "@varveai/adit-cli",
-  "version": "0.4.2",
+  "version": "0.4.7",
   "description": "AI Development Intent Tracker — Transparent Time Machine for your codebase",
   "type": "module",
   "main": "./dist/index.js",
@@ -27,6 +27,7 @@
   "homepage": "https://github.com/vkenliu/adit-core",
   "scripts": {
     "build": "tsc",
+    "prepack": "pnpm run build",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
