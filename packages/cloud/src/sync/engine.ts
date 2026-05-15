@@ -66,6 +66,7 @@ export class SyncEngine {
   private readonly db: Database.Database;
   private readonly client: CloudClient;
   private readonly projectId: string;
+  private readonly projectName: string;
   private readonly batchSize: number;
   private readonly serverUrl: string;
   private readonly cloudClientId: string;
@@ -76,6 +77,7 @@ export class SyncEngine {
     client: CloudClient,
     config: {
       projectId: string;
+      projectName?: string;
       batchSize: number;
       serverUrl: string;
       cloudClientId: string;
@@ -85,6 +87,7 @@ export class SyncEngine {
     this.db = db;
     this.client = client;
     this.projectId = config.projectId;
+    this.projectName = config.projectName ?? "";
     this.batchSize = config.batchSize;
     this.serverUrl = config.serverUrl;
     this.cloudClientId = config.cloudClientId;
@@ -189,6 +192,7 @@ export class SyncEngine {
             clientId: this.cloudClientId,
             syncVersion,
             batch,
+            ...(this.projectName ? { projectName: this.projectName } : {}),
           },
         );
 
@@ -246,6 +250,7 @@ export class SyncEngine {
   /** Get sync status from server, scoped to this project. */
   async getRemoteStatus(): Promise<StatusResponse> {
     const params = new URLSearchParams({ projectId: this.projectId });
+    if (this.projectName) params.set("projectName", this.projectName);
     return this.client.get<StatusResponse>(`/api/sync/status?${params.toString()}`);
   }
 
