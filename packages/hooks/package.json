@@ -1,6 +1,6 @@
 {
   "name": "@varveai/adit-hooks",
-  "version": "0.4.7",
+  "version": "0.4.8",
   "description": "Hook handlers for AI coding platforms",
   "type": "module",
   "files": [

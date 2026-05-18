@@ -1,5 +1,17 @@
 # @varveai/adit-cli
 
+## 0.4.8
+
+### Patch Changes
+
+- 确保 windows 可用
+- Updated dependencies
+  - @varveai/adit-engine@0.4.8
+  - @varveai/adit-cloud@0.4.8
+  - @varveai/adit-hooks@0.4.8
+  - @varveai/adit-plans@0.4.8
+  - @varveai/adit-core@0.4.8
+
 ## 0.4.7
 
 ### Patch Changes

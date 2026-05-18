@@ -1,5 +1,11 @@
 # @varveai/adit-core
 
+## 0.4.8
+
+### Patch Changes
+
+- 确保 windows 可用
+
 ## 0.4.7
 
 ### Patch Changes
