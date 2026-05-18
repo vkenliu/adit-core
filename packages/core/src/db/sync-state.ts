@@ -45,9 +45,25 @@ export function upsertSyncState(
      VALUES (?, ?, ?, ?, ?)
      ON CONFLICT (server_url) DO UPDATE SET
        client_id = excluded.client_id,
-       last_synced_event_id = excluded.last_synced_event_id,
-       last_synced_at = excluded.last_synced_at,
-       sync_version = excluded.sync_version`,
+       last_synced_event_id = CASE
+         WHEN excluded.last_synced_event_id IS NULL THEN sync_state.last_synced_event_id
+         WHEN sync_state.last_synced_event_id IS NULL
+           OR excluded.last_synced_event_id > sync_state.last_synced_event_id
+         THEN excluded.last_synced_event_id
+         ELSE sync_state.last_synced_event_id
+       END,
+       last_synced_at = CASE
+         WHEN excluded.last_synced_at IS NULL THEN sync_state.last_synced_at
+         WHEN sync_state.last_synced_at IS NULL
+           OR excluded.last_synced_at > sync_state.last_synced_at
+         THEN excluded.last_synced_at
+         ELSE sync_state.last_synced_at
+       END,
+       sync_version = CASE
+         WHEN excluded.sync_version > sync_state.sync_version
+         THEN excluded.sync_version
+         ELSE sync_state.sync_version
+       END`,
   ).run(
     state.serverUrl,
     state.clientId,

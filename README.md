@@ -24,7 +24,7 @@ ADIT is built on three pillars:
 - **Multi-Actor Timeline** — Distinguishes assistant, user, tool, and system actions
 - **Environment Snapshotting** — Captures git state, dependency versions, runtime context, Docker detection, shell info, CPU/memory, and package managers
 - **Environment Drift Detection** — Automatically detects and records environment changes between sessions
-- **Cloud Sync** — Device-code and token-based authentication, cursor-based incremental push with per-project cursors, auto-sync after hook events, transcript upload, and rolling-window circuit breaker
+- **Cloud Sync** — Device-code and token-based authentication, cursor-based incremental push with per-project cursors, auto-sync after stable hook events, transcript upload, and rolling-window circuit breaker
 - **Auto-Sync** — Fire-and-forget cloud sync triggered by record count threshold or time elapsed, with fail-open error handling
 - **Auto Project-Link** — Background sync of git metadata and project documents on session-start, with staleness-based caching
 - **Platform Session Tracking** — Correlates events to platform-native session IDs for accurate multi-session handling
@@ -63,7 +63,7 @@ Adapters are registered via `registerAdapter()` and auto-detected from environme
 
 Cloud sync uses a cursor-based incremental push model with per-project cursors:
 
-- **Auto-sync** triggers after every hook event when credentials exist (opt-in via `adit cloud login`)
+- **Auto-sync** triggers after stable hook events when credentials exist (opt-in via `adit cloud login`); `prompt-submit` is skipped so cloud does not receive half a turn before the assistant response exists
 - **Per-project cursors** — each project tracks its own sync cursor independently, with fallback to global cursors for legacy servers
 - **Count-based trigger** — syncs when unsynced records reach the threshold (default: 20, configurable via `ADIT_CLOUD_SYNC_THRESHOLD`)
 - **Time-based trigger** — syncs when time since last sync exceeds timeout (default: 2 hours, configurable via `ADIT_CLOUD_SYNC_TIMEOUT_HOURS`)

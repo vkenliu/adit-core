@@ -48,6 +48,12 @@ interface PendingQuestion {
   reject: (error: Error) => void;
 }
 
+interface CodexSlashCommandSpec {
+  name: string;
+  description: string;
+  method: string;
+}
+
 interface CodexCliProviderOptions {
   bin: string;
   args: string[];
@@ -77,15 +83,17 @@ const CODEX_PLAN_MODE_INSTRUCTION = [
   "Do not announce that you are about to edit files; stop at the plan.",
 ].join("\n");
 
-const CODEX_CLOUD_SLASH_COMMANDS: CliSlashCommandInfo[] = [
-  { name: "compact", description: "Compress the current Codex thread" },
-  { name: "mcp", description: "Show Codex MCP server status" },
-  { name: "skills", description: "List Codex skills" },
-  { name: "fork", description: "Fork the current Codex thread" },
-  { name: "model", description: "List available Codex models" },
-  { name: "new", description: "Start a new Codex thread" },
-  { name: "clear", description: "Start a clean Codex thread" },
+const CODEX_CAPABILITY_DISCOVERY_METHOD = "adit/capabilities/discover";
+const CODEX_CLOUD_SLASH_COMMAND_SPECS: CodexSlashCommandSpec[] = [
+  { name: "compact", description: "Compress the current Codex thread", method: "thread/compact/start" },
+  { name: "mcp", description: "Show Codex MCP server status", method: "mcpServerStatus/list" },
+  { name: "skills", description: "List Codex skills", method: "skills/list" },
+  { name: "fork", description: "Fork the current Codex thread", method: "thread/fork" },
+  { name: "model", description: "List available Codex models", method: "model/list" },
+  { name: "new", description: "Start a new Codex thread", method: "thread/start" },
+  { name: "clear", description: "Start a clean Codex thread", method: "thread/start" },
 ];
+const CODEX_MCP_SLASH_COMMAND_PREFIX = "mcp.";
 const BRANCH_REFRESH_INTERVAL_MS = 5_000;
 const CODEX_MODEL_CONTEXT_WINDOWS: Array<[RegExp, number]> = [
   [/^gpt-5\.5(?:$|[-_\s])/, 1_050_000],
@@ -108,10 +116,13 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   private branchRefreshPromise: Promise<void> | null = null;
   private contextUsage: CliAgentContextUsage | null = null;
   private lastTokenUsage: CliAgentTokenUsage | null = null;
+  private contextUsageBySession = new Map<string, CliAgentContextUsage>();
+  private lastTokenUsageBySession = new Map<string, CliAgentTokenUsage>();
   private promptQueue: PendingPrompt[] = [];
   private promptActive = false;
   private activeTurnId: string | null = null;
   private loadedThreadIds = new Set<string>();
+  private emptyThreadIds = new Set<string>();
   private boundPendingSessionIds = new Set<string>();
   private pendingPermissions = new Map<string, PendingPermission>();
   private pendingQuestions = new Map<string, PendingQuestion>();
@@ -119,11 +130,16 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   private reclaimAttached = false;
   private reclaimBuffer = "";
   private suppressNextLocalExit = false;
+  private supportedAppServerMethods = new Set<string>();
+  private slashCommandsByName = new Map<string, CliSlashCommandInfo>();
+  private skillSlashCommandsByName = new Map<string, Record<string, unknown>>();
+  private mcpSlashCommandsByName = new Map<string, Record<string, unknown>>();
+  private codexSkills: Array<Record<string, unknown>> = [];
+  private codexMcpServers: Array<Record<string, unknown>> = [];
 
   constructor(private readonly opts: CodexCliProviderOptions) {
     super();
     this.startLocal();
-    this.emitSlashCommands();
   }
 
   get state(): CliAgentState {
@@ -167,6 +183,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     this.activeSessionId = id;
     this.resumeSessionId = id;
     this.sdkSessionId = id;
+    this.applyStoredUsageForSession(id);
     if (!changed) return;
     this.emitState();
   }
@@ -183,7 +200,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
 
   async takeover(): Promise<void> {
     if (this.ownerValue === "web") {
-      this.emitSlashCommands();
+      await this.hydrateAppServerCapabilities();
       return;
     }
     if (this.ownerValue !== "local") {
@@ -198,6 +215,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     }
 
     await this.ensureAppServer();
+    await this.hydrateAppServerCapabilities();
     const resumeId = this.activeSessionId ?? this.resumeSessionId;
     if (resumeId) {
       await this.resumeThread(resumeId);
@@ -214,7 +232,6 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
 
     this.ownerValue = "web";
     this.emitState();
-    this.emitSlashCommands();
     restoreTerminalForCodexReclaim();
     writeCodexTerminalNotice(
       `[adit cloud codex] Web has taken over Codex CLI. Type ${RECLAIM_COMMAND} here to reclaim local control.`,
@@ -231,6 +248,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     this.appServer?.stop();
     this.appServer = null;
     this.loadedThreadIds = new Set<string>();
+    this.emptyThreadIds = new Set<string>();
     const resumeId = this.resumeSessionId ?? this.activeSessionId;
     this.startLocal(resumeId ? ["resume", resumeId] : []);
   }
@@ -252,6 +270,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       this.activeSessionId = sessionId;
       this.resumeSessionId = sessionId;
       this.sdkSessionId = sessionId;
+      this.applyStoredUsageForSession(sessionId);
       this.emitState();
       this.startLocal(["resume", sessionId]);
       return;
@@ -345,7 +364,9 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   async handleSlashCommand(command: CliSlashCommand): Promise<void> {
     const name = command.name.trim().replace(/^\//, "").toLowerCase();
     if (!name) return;
-    if (!CODEX_CLOUD_SLASH_COMMANDS.some((item) => item.name === name)) {
+    const pendingSessionId =
+      command.pendingSessionId ?? pendingSessionIdFromSlashCommand(command);
+    if (!this.slashCommandsByName.has(name)) {
       throw Object.assign(
         new Error(`Codex Cloud Coding does not expose /${command.name} as an executable native command.`),
         { statusCode: 400 },
@@ -357,8 +378,59 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       });
     }
 
+    const wasSkillSlashCommand = this.skillSlashCommandsByName.has(name);
+    const skillCommand = wasSkillSlashCommand
+      ? await this.resolveSkillSlashCommand(name)
+      : null;
+    if (wasSkillSlashCommand && !skillCommand) {
+      throw Object.assign(new Error(`Codex skill command /${name} is no longer available.`), {
+        statusCode: 400,
+      });
+    }
+    if (skillCommand) {
+      const argsText = command.args.join(" ").trim();
+      if (argsText) {
+        await this.sendPrompt(formatCodexSkillPrompt(skillCommand, argsText), {
+          mode: "build",
+          pendingSessionId,
+          localMessageId: command.localMessageId ?? null,
+        });
+      } else {
+        this.pushNotice({
+          title: `/${name}`,
+          text: formatCodexSkills([skillCommand]),
+          sessionId: command.sessionId,
+          data: {
+            noticeKind: "skills",
+            provider: this.provider,
+            skills: [skillCommand],
+          },
+        });
+      }
+      return;
+    }
+
+    const wasMcpSlashCommand = this.mcpSlashCommandsByName.has(name);
+    const mcpCommand = wasMcpSlashCommand
+      ? await this.resolveMcpSlashCommand(name)
+      : null;
+    if (wasMcpSlashCommand && !mcpCommand) {
+      throw Object.assign(new Error(`Codex MCP command /${name} is no longer available.`), {
+        statusCode: 400,
+      });
+    }
+    if (mcpCommand) {
+      this.pushNotice({
+        title: `/${name}`,
+        text: formatCodexMcpServers([mcpCommand]),
+        sessionId: command.sessionId,
+      });
+      return;
+    }
+
     if (name === "new" || name === "clear") {
       const threadId = await this.startThread("build");
+      if (pendingSessionId) this.bindPendingSession(pendingSessionId, threadId);
       this.pushNotice({
         title: `/${name}`,
         text: `Started a clean Codex thread: ${threadId}`,
@@ -372,9 +444,11 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       const result = await this.appServer?.request("mcpServerStatus/list", {
         detail: "toolsAndAuthOnly",
       });
+      this.codexMcpServers = extractCodexMcpServers(result);
+      this.refreshSlashCommands();
       this.pushNotice({
         title: "/mcp",
-        text: formatCodexMcpStatus(result),
+        text: formatCodexMcpServers(this.codexMcpServers),
         sessionId: command.sessionId,
       });
       return;
@@ -387,6 +461,8 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
         forceReload: false,
       });
       const skills = extractCodexSkills(result);
+      this.codexSkills = skills;
+      this.refreshSlashCommands();
       this.pushNotice({
         title: "/skills",
         text: formatCodexSkills(skills),
@@ -413,18 +489,34 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       return;
     }
 
-    const threadId = command.sessionId ?? this.activeSessionId ?? this.resumeSessionId;
+    const threadId = pendingSessionId
+      ? await this.startThread("build")
+      : command.sessionId ?? this.activeSessionId ?? this.resumeSessionId;
     if (!threadId) {
       throw Object.assign(new Error(`/${name} requires an active Codex thread.`), {
         statusCode: 400,
       });
     }
-    if (!this.loadedThreadIds.has(threadId)) {
+    if (!pendingSessionId && !this.loadedThreadIds.has(threadId)) {
       await this.resumeThread(threadId);
     }
 
     if (name === "compact") {
-      await this.appServer?.request("thread/compact/start", { threadId });
+      if (pendingSessionId) this.bindPendingSession(pendingSessionId, threadId);
+      if (this.emptyThreadIds.has(threadId)) {
+        this.pushEmptyThreadNotice("compact", threadId);
+        return;
+      }
+      try {
+        await this.appServer?.request("thread/compact/start", { threadId });
+      } catch (error) {
+        if (isMissingCodexRolloutError(error)) {
+          this.emptyThreadIds.add(threadId);
+          this.pushEmptyThreadNotice("compact", threadId);
+          return;
+        }
+        throw error;
+      }
       this.pushNotice({
         title: "/compact",
         text: "Started Codex thread compaction.",
@@ -434,14 +526,31 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     }
 
     if (name === "fork") {
-      const result = asRecord(await this.appServer?.request("thread/fork", {
-        threadId,
-        cwd: this.opts.cwd,
-        ...codexThreadModeOverrides("build"),
-      })) ?? {};
+      if (this.emptyThreadIds.has(threadId)) {
+        this.pushEmptyThreadNotice("fork", threadId);
+        return;
+      }
+      let result: Record<string, unknown>;
+      try {
+        result = asRecord(await this.appServer?.request("thread/fork", {
+          threadId,
+          cwd: this.opts.cwd,
+          ...codexThreadModeOverrides("build"),
+        })) ?? {};
+      } catch (error) {
+        if (isMissingCodexRolloutError(error)) {
+          this.emptyThreadIds.add(threadId);
+          this.pushEmptyThreadNotice("fork", threadId);
+          return;
+        }
+        throw error;
+      }
       const thread = asRecord(result.thread) ?? {};
       const forkedThreadId = readString(thread.id);
       if (forkedThreadId) this.noteThread(thread, result);
+      if (pendingSessionId) {
+        this.bindPendingSession(pendingSessionId, forkedThreadId ?? threadId);
+      }
       this.pushNotice({
         title: "/fork",
         text: forkedThreadId
@@ -450,6 +559,16 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
         sessionId: forkedThreadId ?? threadId,
       });
     }
+  }
+
+  private pushEmptyThreadNotice(command: "compact" | "fork", threadId: string): void {
+    this.pushNotice({
+      title: `/${command}`,
+      text: command === "fork"
+        ? "This Codex thread has no conversation to fork yet. Send a prompt first, then run /fork."
+        : "This Codex thread has no conversation to compact yet. Send a prompt first, then run /compact.",
+      sessionId: threadId,
+    });
   }
 
   async answerPermission(
@@ -529,8 +648,11 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   }
 
   private startLocal(extraArgs: string[] = []): void {
+    const wasWeb = this.ownerValue === "web";
     this.detachReclaimInput();
     this.finishWebPrompts(new Error("local mode active"));
+    this.resetAppServerCapabilities();
+    if (wasWeb) this.emitSlashCommands();
     this.appServer?.stop();
     this.appServer = null;
     const child = spawnCliProcess(this.opts.bin, [...extraArgs, ...this.opts.args], {
@@ -597,6 +719,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       }));
       const turn = asRecord(result?.turn);
       this.activeTurnId = readString(turn?.id) ?? this.activeTurnId;
+      this.emptyThreadIds.delete(threadId);
       this.setBusy(true);
       this.setThinking(true);
       item.resolve();
@@ -660,6 +783,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     const threadId = readString(thread?.id);
     if (!threadId) throw new Error("Codex app-server did not return a thread id");
     this.noteThread(thread, result);
+    this.emptyThreadIds.add(threadId);
     return threadId;
   }
 
@@ -704,6 +828,8 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     }
 
     if (method === "turn/started") {
+      const sessionId = readString(params.threadId) ?? this.activeSessionId ?? this.resumeSessionId;
+      if (sessionId) this.emptyThreadIds.delete(sessionId);
       this.activeTurnId = readString(asRecord(params.turn)?.id) ?? this.activeTurnId;
       this.setBusy(true);
       this.setThinking(true);
@@ -780,10 +906,18 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       const rawUsage = asRecord(asRecord(params.tokenUsage)?.last);
       const usage = normalizeCodexUsage(rawUsage);
       const tokenUsage = normalizeCodexTokenUsage(rawUsage);
-      if (tokenUsage && !isSameTokenUsage(this.lastTokenUsage, tokenUsage)) {
-        this.lastTokenUsage = tokenUsage;
-        this.refreshContextUsage();
-        this.emitState();
+      const previousTokenUsage = sessionId
+        ? this.lastTokenUsageBySession.get(sessionId) ?? null
+        : this.lastTokenUsage;
+      if (tokenUsage && !isSameTokenUsage(previousTokenUsage, tokenUsage)) {
+        if (sessionId) {
+          this.lastTokenUsageBySession.set(sessionId, tokenUsage);
+        }
+        if (!sessionId || sessionId === this.currentUsageSessionId()) {
+          this.lastTokenUsage = tokenUsage;
+          this.refreshContextUsage();
+          this.emitState();
+        }
       }
       if (sessionId && usage) {
         this.pushEvent("usage", {
@@ -869,6 +1003,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     this.resumeSessionId = threadId;
     this.sdkSessionId = threadId;
     this.loadedThreadIds.add(threadId);
+    this.applyStoredUsageForSession(threadId);
     const modelId = readString(result?.model);
     if (modelId) {
       this.activeModelId = modelId;
@@ -887,6 +1022,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     const id = readString(item.id);
     if (!type || !sessionId || !id) return;
     const createdAt = Date.now();
+    this.emptyThreadIds.delete(sessionId);
 
     if ((type === "agentMessage" || type === "plan") && !opts.running) {
       const text = readString(item.text);
@@ -1029,6 +1165,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     this.activeSessionId = sessionId;
     this.resumeSessionId = sessionId;
     this.sdkSessionId = sessionId;
+    this.applyStoredUsageForSession(sessionId);
     if (!this.boundPendingSessionIds.has(pendingSessionId)) {
       this.boundPendingSessionIds.add(pendingSessionId);
       this.pushEvent("session-bound", {
@@ -1105,6 +1242,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   private emitState(): void {
     this.emit("state", this.state);
     this.pushEvent("state", {
+      sessionId: this.activeSessionId ?? this.resumeSessionId,
       owner: this.ownerValue,
       busy: this.busyValue,
       thinking: this.thinkingValue,
@@ -1120,13 +1258,34 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   }
 
   private refreshContextUsage(): void {
-    const nextUsage = buildCodexContextUsage(this.lastTokenUsage, this.activeModelId);
+    const sessionId = this.currentUsageSessionId();
+    const tokenUsage = sessionId
+      ? this.lastTokenUsageBySession.get(sessionId) ?? null
+      : this.lastTokenUsage;
+    this.lastTokenUsage = tokenUsage;
+    const nextUsage = buildCodexContextUsage(tokenUsage, this.activeModelId);
     if (!nextUsage) {
       this.contextUsage = null;
+      if (sessionId) this.contextUsageBySession.delete(sessionId);
       return;
     }
     if (isSameContextUsage(this.contextUsage, nextUsage)) return;
     this.contextUsage = nextUsage;
+    if (sessionId) this.contextUsageBySession.set(sessionId, nextUsage);
+  }
+
+  private currentUsageSessionId(): string | null {
+    return this.activeSessionId ?? this.resumeSessionId ?? this.sdkSessionId;
+  }
+
+  private applyStoredUsageForSession(sessionId: string | null): void {
+    if (!sessionId) {
+      this.contextUsage = null;
+      this.lastTokenUsage = null;
+      return;
+    }
+    this.lastTokenUsage = this.lastTokenUsageBySession.get(sessionId) ?? null;
+    this.contextUsage = this.contextUsageBySession.get(sessionId) ?? null;
   }
 
   private pushEvent(type: string, payload: Record<string, unknown>): void {
@@ -1148,10 +1307,162 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     });
   }
 
+  private async hydrateAppServerCapabilities(): Promise<void> {
+    await this.ensureAppServer();
+    try {
+      const methods = await this.discoverAppServerMethods();
+      this.supportedAppServerMethods = methods;
+
+      const [skills, mcpServers] = await Promise.all([
+        methods.has("skills/list")
+          ? this.fetchCodexSkills().catch(() => [] as Array<Record<string, unknown>>)
+          : Promise.resolve([] as Array<Record<string, unknown>>),
+        methods.has("mcpServerStatus/list")
+          ? this.fetchCodexMcpServers().catch(() => [] as Array<Record<string, unknown>>)
+          : Promise.resolve([] as Array<Record<string, unknown>>),
+      ]);
+      this.codexSkills = skills;
+      this.codexMcpServers = mcpServers;
+    } catch {
+      this.resetAppServerCapabilities();
+    }
+    this.refreshSlashCommands();
+  }
+
+  private async discoverAppServerMethods(): Promise<Set<string>> {
+    if (!this.appServer) return new Set<string>();
+    try {
+      await this.appServer.request(CODEX_CAPABILITY_DISCOVERY_METHOD, {});
+      return new Set<string>();
+    } catch (error) {
+      return extractCodexSupportedMethodsFromError(error);
+    }
+  }
+
+  private async fetchCodexSkills(): Promise<Array<Record<string, unknown>>> {
+    const result = await this.appServer?.request("skills/list", {
+      cwds: [this.opts.cwd],
+      forceReload: false,
+    });
+    return extractCodexSkills(result);
+  }
+
+  private async fetchCodexMcpServers(): Promise<Array<Record<string, unknown>>> {
+    const result = await this.appServer?.request("mcpServerStatus/list", {
+      detail: "toolsAndAuthOnly",
+    });
+    return extractCodexMcpServers(result);
+  }
+
+  private async resolveSkillSlashCommand(name: string): Promise<Record<string, unknown> | null> {
+    if (!this.skillSlashCommandsByName.has(name)) return null;
+    await this.ensureAppServer();
+    this.codexSkills = await this.fetchCodexSkills();
+    this.refreshSlashCommands();
+    return this.skillSlashCommandsByName.get(name) ?? null;
+  }
+
+  private async resolveMcpSlashCommand(name: string): Promise<Record<string, unknown> | null> {
+    if (!this.mcpSlashCommandsByName.has(name)) return null;
+    await this.ensureAppServer();
+    this.codexMcpServers = await this.fetchCodexMcpServers();
+    this.refreshSlashCommands();
+    return this.mcpSlashCommandsByName.get(name) ?? null;
+  }
+
+  private resetAppServerCapabilities(): void {
+    this.supportedAppServerMethods = new Set<string>();
+    this.slashCommandsByName = new Map<string, CliSlashCommandInfo>();
+    this.skillSlashCommandsByName = new Map<string, Record<string, unknown>>();
+    this.mcpSlashCommandsByName = new Map<string, Record<string, unknown>>();
+    this.codexSkills = [];
+    this.codexMcpServers = [];
+  }
+
+  private refreshSlashCommands(): void {
+    const commands = CODEX_CLOUD_SLASH_COMMAND_SPECS
+      .filter((spec) => this.supportedAppServerMethods.has(spec.method))
+      .map((spec) => this.codexSlashCommandInfo(spec));
+    this.skillSlashCommandsByName = new Map<string, Record<string, unknown>>();
+    this.mcpSlashCommandsByName = new Map<string, Record<string, unknown>>();
+    const reservedCommandNames = new Set(commands.map((command) => command.name.toLowerCase()));
+    const skillCommands = this.supportedAppServerMethods.has("skills/list")
+      ? this.codexSkillSlashCommands(reservedCommandNames)
+      : [];
+    for (const command of skillCommands) reservedCommandNames.add(command.name.toLowerCase());
+    const mcpCommands = this.supportedAppServerMethods.has("mcpServerStatus/list")
+      ? this.codexMcpSlashCommands(reservedCommandNames)
+      : [];
+    commands.push(...skillCommands, ...mcpCommands);
+    this.slashCommandsByName = new Map(
+      commands.map((command) => [command.name.toLowerCase(), command]),
+    );
+    this.emitSlashCommands();
+  }
+
+  private codexSlashCommandInfo(spec: CodexSlashCommandSpec): CliSlashCommandInfo {
+    if (spec.name === "skills") {
+      return {
+        name: spec.name,
+        description: `List ${this.codexSkills.length} Codex ${pluralize("skill", this.codexSkills.length)}`,
+      };
+    }
+    if (spec.name === "mcp") {
+      return {
+        name: spec.name,
+        description: `Show ${this.codexMcpServers.length} Codex MCP ${pluralize("server", this.codexMcpServers.length)}`,
+      };
+    }
+    return { name: spec.name, description: spec.description };
+  }
+
+  private codexSkillSlashCommands(reservedNames: Set<string>): CliSlashCommandInfo[] {
+    const commands: CliSlashCommandInfo[] = [];
+    const skillCommands = new Map<string, Record<string, unknown>>();
+    for (const skill of this.codexSkills) {
+      if (skill.enabled === false) continue;
+      const rawName = readString(skill.name);
+      if (!rawName) continue;
+      const name = normalizeSlashCommandName(rawName);
+      if (!name || reservedNames.has(name) || skillCommands.has(name)) continue;
+      skillCommands.set(name, skill);
+      commands.push({
+        name,
+        description: `Use Codex skill: ${
+          readString(skill.displayName) ??
+          readString(skill.description) ??
+          rawName
+        }`,
+      });
+    }
+    this.skillSlashCommandsByName = skillCommands;
+    return commands;
+  }
+
+  private codexMcpSlashCommands(reservedNames: Set<string>): CliSlashCommandInfo[] {
+    const commands: CliSlashCommandInfo[] = [];
+    const mcpCommands = new Map<string, Record<string, unknown>>();
+    for (const server of this.codexMcpServers) {
+      const rawName = readString(server.name);
+      if (!rawName) continue;
+      const slug = normalizeSlashCommandName(rawName);
+      if (!slug) continue;
+      const name = `${CODEX_MCP_SLASH_COMMAND_PREFIX}${slug}`;
+      if (reservedNames.has(name) || mcpCommands.has(name)) continue;
+      mcpCommands.set(name, server);
+      commands.push({
+        name,
+        description: `Show Codex MCP server: ${rawName}`,
+      });
+    }
+    this.mcpSlashCommandsByName = mcpCommands;
+    return commands;
+  }
+
   private emitSlashCommands(): void {
     this.pushEvent("slash-commands", {
       provider: this.provider,
-      commands: CODEX_CLOUD_SLASH_COMMANDS,
+      commands: Array.from(this.slashCommandsByName.values()),
       createdAt: Date.now(),
     });
   }
@@ -1332,6 +1643,11 @@ function readStringArray(value: unknown): string[] {
     : [];
 }
 
+function isMissingCodexRolloutError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.toLowerCase().includes("no rollout found");
+}
+
 function safeJson(value: unknown): string {
   if (typeof value === "string") return value;
   try {
@@ -1341,15 +1657,32 @@ function safeJson(value: unknown): string {
   }
 }
 
-function formatCodexMcpStatus(value: unknown): string {
+function extractCodexMcpServers(value: unknown): Array<Record<string, unknown>> {
   const data = Array.isArray(asRecord(value)?.data) ? asRecord(value)?.data as unknown[] : [];
-  if (data.length === 0) return "Codex did not report any MCP servers.";
   return data.map((item) => {
     const server = asRecord(item) ?? {};
     const name = readString(server.name) ?? "unnamed";
     const tools = asRecord(server.tools);
     const toolCount = tools ? Object.keys(tools).length : 0;
     const authStatus = readString(server.authStatus) ?? "unknown";
+    const resources = Array.isArray(server.resources) ? server.resources : [];
+    const resourceTemplates = Array.isArray(server.resourceTemplates) ? server.resourceTemplates : [];
+    return {
+      name,
+      authStatus,
+      toolCount,
+      resourceCount: resources.length,
+      resourceTemplateCount: resourceTemplates.length,
+    };
+  });
+}
+
+function formatCodexMcpServers(servers: Array<Record<string, unknown>>): string {
+  if (servers.length === 0) return "Codex did not report any MCP servers.";
+  return servers.map((server) => {
+    const name = readString(server.name) ?? "unnamed";
+    const authStatus = readString(server.authStatus) ?? "unknown";
+    const toolCount = readNumber(server.toolCount) ?? 0;
     return `- ${name}: auth=${authStatus}, tools=${toolCount}`;
   }).join("\n");
 }
@@ -1396,6 +1729,40 @@ function formatCodexSkills(skills: Array<Record<string, unknown>>): string {
     return `- ${name} (${enabled})${cwd ? ` @ ${cwd}` : ""}${description ? `: ${description}` : ""}`;
   }).filter((line): line is string => Boolean(line));
   return lines.join("\n") || "Codex did not report any skills for this workspace.";
+}
+
+function normalizeSlashCommandName(value: string): string | null {
+  const normalized = value.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return /^[a-z0-9][a-z0-9._-]*$/.test(normalized) ? normalized : null;
+}
+
+function pendingSessionIdFromSlashCommand(command: CliSlashCommand): string | null {
+  if (command.sessionId?.startsWith("pending_")) return command.sessionId;
+  return null;
+}
+
+function formatCodexSkillPrompt(skill: Record<string, unknown>, args: string): string {
+  const name = readString(skill.name) ?? "skill";
+  const path = readString(skill.path);
+  const prefix = path ? `[$${name}](${path})` : `$${name}`;
+  return `${prefix}${args ? ` ${args}` : ""}`;
+}
+
+function extractCodexSupportedMethodsFromError(error: unknown): Set<string> {
+  const message = error instanceof Error ? error.message : String(error);
+  const marker = "expected one of ";
+  const markerIndex = message.indexOf(marker);
+  if (markerIndex === -1) return new Set<string>();
+  const expected = message.slice(markerIndex + marker.length);
+  return new Set(
+    Array.from(expected.matchAll(/`([^`]+)`/g))
+      .map((match) => match[1])
+      .filter((method): method is string => Boolean(method)),
+  );
+}
+
+function pluralize(word: string, count: number): string {
+  return count === 1 ? word : `${word}s`;
 }
 
 function formatCodexModels(value: unknown): string {

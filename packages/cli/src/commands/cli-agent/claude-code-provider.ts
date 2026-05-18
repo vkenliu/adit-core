@@ -72,16 +72,15 @@ interface ClaudeCodeProviderOptions {
   onEvent?: (event: CliAgentRelayEvent) => void;
 }
 
+type CapabilityHydrateTarget =
+  | { owner: "local"; child: ChildProcess }
+  | { owner: "web"; generation: number };
+
 const RECLAIM_COMMAND = "/local";
 const ASK_USER_QUESTION_TOOL = "AskUserQuestion";
 const EXIT_PLAN_MODE_TOOL = "ExitPlanMode";
 const TODO_WRITE_TOOL = "TodoWrite";
-const CLAUDE_FALLBACK_SLASH_COMMANDS = new Set([
-  "compact",
-  "rewind",
-  "btw",
-  "memory",
-]);
+const CLAUDE_CLOUD_NATIVE_SLASH_COMMANDS = ["rewind"] as const;
 const BRANCH_REFRESH_INTERVAL_MS = 5_000;
 const CONTEXT_USAGE_REFRESH_INTERVAL_MS = 10_000;
 
@@ -143,6 +142,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
   private branchRefreshAt = 0;
   private branchRefreshPromise: Promise<void> | null = null;
   private contextUsage: CliAgentContextUsage | null = null;
+  private contextUsageBySession = new Map<string, CliAgentContextUsage>();
   private contextUsageRefreshAt = 0;
   private contextUsageRefreshPromise: Promise<void> | null = null;
   private promptQueue: PendingPrompt[] = [];
@@ -175,12 +175,10 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
   constructor(private readonly opts: ClaudeCodeProviderOptions) {
     super();
     this.startLocal();
-    this.emitFallbackSlashCommands();
   }
 
   get state(): CliAgentState {
     this.scheduleBranchRefresh();
-    this.scheduleContextUsageRefresh();
     return {
       owner: this.ownerValue,
       busy: this.busyValue,
@@ -212,6 +210,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     this.resumeSessionId = id;
     this.sdkSessionId = null;
     this.remoteSdkSessionId = null;
+    this.applyStoredContextUsageForSession(id);
     this.refreshActiveModel({ sessionId: id });
     if (!changed) return;
     this.emitState();
@@ -230,7 +229,10 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
   async takeover(): Promise<void> {
     if (this.ownerValue === "web") {
       this.emitSlashCommands();
-      void this.hydrateCapabilities(this.remoteLoopGeneration);
+      void this.hydrateCapabilities({
+        owner: "web",
+        generation: this.remoteLoopGeneration,
+      });
       return;
     }
     if (this.ownerValue !== "local") {
@@ -260,7 +262,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     this.attachReclaimInput();
     const generation = ++this.remoteLoopGeneration;
     void this.runRemoteLoop(generation);
-    void this.hydrateCapabilities(generation);
+    void this.hydrateCapabilities({ owner: "web", generation });
   }
 
   async releaseToLocal(): Promise<void> {
@@ -311,6 +313,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     this.resumeSessionId = sessionId;
     this.sdkSessionId = null;
     this.remoteSdkSessionId = null;
+    this.applyStoredContextUsageForSession(sessionId);
     this.refreshActiveModel({ sessionId });
     this.emitState();
 
@@ -431,11 +434,6 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     if (!name) return;
     const normalized = name.toLowerCase();
 
-    if (normalized === "rewind") {
-      this.requestRewind(command.sessionId);
-      return;
-    }
-
     if (normalized === "mcp") {
       this.pushNotice({
         title: "/mcp",
@@ -462,10 +460,12 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       return;
     }
 
-    const hasDynamicCommandList = this.slashCommandsByName.size > 0;
-    const supported = this.slashCommandsByName.has(normalized) ||
-      (!hasDynamicCommandList && CLAUDE_FALLBACK_SLASH_COMMANDS.has(normalized));
-    if (!supported) {
+    if (normalized === "rewind") {
+      this.requestRewind(command.sessionId);
+      return;
+    }
+
+    if (!this.slashCommandsByName.has(normalized)) {
       throw Object.assign(
         new Error(`Claude Code did not expose /${name} for this Cloud session.`),
         { statusCode: 400 },
@@ -474,6 +474,8 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
 
     await this.sendPrompt(command.raw.startsWith("/") ? command.raw : `/${command.raw}`, {
       mode: "build",
+      pendingSessionId: command.pendingSessionId ?? pendingSessionIdFromSlashCommand(command),
+      localMessageId: command.localMessageId ?? null,
     });
   }
 
@@ -752,6 +754,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     this.local = child;
     this.ownerValue = "local";
     this.emitState();
+    void this.hydrateCapabilities({ owner: "local", child });
 
     child.on("error", (error) => {
       this.pushEvent("error", { message: error.message });
@@ -779,10 +782,11 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     });
   }
 
-  private async hydrateCapabilities(generation: number): Promise<void> {
-    if (this.ownerValue !== "web" || this.remoteLoopGeneration !== generation) return;
-    this.capabilityHydrateGeneration += 1;
-    const hydrateGeneration = this.capabilityHydrateGeneration;
+  private async hydrateCapabilities(target: CapabilityHydrateTarget): Promise<void> {
+    if (!this.isCapabilityHydrateTargetCurrent(target)) return;
+    this.stopCapabilityProbe();
+    if (!this.isCapabilityHydrateTargetCurrent(target)) return;
+    const hydrateGeneration = ++this.capabilityHydrateGeneration;
     const abortController = new AbortController();
     this.capabilityProbeAbortController = abortController;
     const probe = query({
@@ -808,8 +812,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
         probe.mcpServerStatus().catch(() => []),
       ]);
       if (
-        this.ownerValue !== "web" ||
-        this.remoteLoopGeneration !== generation ||
+        !this.isCapabilityHydrateTargetCurrent(target) ||
         this.capabilityHydrateGeneration !== hydrateGeneration ||
         this.capabilityProbeQuery !== probe
       ) {
@@ -1011,6 +1014,13 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     }
   }
 
+  private isCapabilityHydrateTargetCurrent(target: CapabilityHydrateTarget): boolean {
+    if (target.owner === "web") {
+      return this.ownerValue === "web" && this.remoteLoopGeneration === target.generation;
+    }
+    return this.ownerValue === "local" && this.local === target.child;
+  }
+
   private async *createCapabilityProbeStream(
     signal: AbortSignal,
   ): AsyncIterable<SDKUserMessage> {
@@ -1127,6 +1137,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       });
     }
     const sessionId =
+      (opts.suppressActiveFallback ? sdkSessionId : null) ??
       canonicalSessionId ??
       (opts.suppressActiveFallback ? null : this.activeSessionId) ??
       (opts.suppressActiveFallback ? null : this.resumeSessionId) ??
@@ -1194,40 +1205,17 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
   }): void {
     if (input.mcpServers) this.mcpServers = input.mcpServers;
     if (input.skills) this.skills = input.skills;
-    const commands = input.commands ?? [];
-    if (commands.length > 0) {
+    if (input.commands !== undefined) {
       this.slashCommandsByName = new Map(
-        commands.map((command) => [command.name.toLowerCase(), command]),
+        withClaudeCloudNativeSlashCommands(input.commands)
+          .map((command) => [command.name.toLowerCase(), command]),
       );
     }
     this.emitSlashCommands();
   }
 
-  private emitFallbackSlashCommands(): void {
-    const fallbackCommands = Array.from(CLAUDE_FALLBACK_SLASH_COMMANDS)
-      .map(commandInfoFromClaudeSlashName);
-    this.pushEvent("slash-commands", {
-      provider: this.provider,
-      commands: [
-        ...fallbackCommands,
-        { name: "mcp", description: describeClaudeSlashCommand("mcp") },
-        { name: "skills", description: describeClaudeSlashCommand("skills") },
-      ],
-      createdAt: Date.now(),
-    });
-  }
-
   private emitSlashCommands(): void {
-    const commands = this.slashCommandsByName.size > 0
-      ? Array.from(this.slashCommandsByName.values())
-      : [
-          ...Array.from(CLAUDE_FALLBACK_SLASH_COMMANDS).map(commandInfoFromClaudeSlashName),
-          { name: "mcp", description: describeClaudeSlashCommand("mcp") },
-          { name: "skills", description: describeClaudeSlashCommand("skills") },
-        ];
-    this.slashCommandsByName = new Map(
-      commands.map((command) => [command.name.toLowerCase(), command]),
-    );
+    const commands = Array.from(this.slashCommandsByName.values());
     this.pushEvent("slash-commands", {
       provider: this.provider,
       commands,
@@ -1252,6 +1240,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     this.remoteSdkSessionId = id;
     this.activeSessionId = nextActiveSessionId;
     this.resumeSessionId = nextResumeSessionId;
+    this.applyStoredContextUsageForSession(nextActiveSessionId ?? id);
     if (nextActiveSessionId) {
       this.rememberRemoteSdkSession(nextActiveSessionId, id);
     }
@@ -1270,6 +1259,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     this.resumeSessionId = sessionId;
     this.sdkSessionId = sessionId;
     this.remoteSdkSessionId = sessionId;
+    this.applyStoredContextUsageForSession(sessionId);
     this.refreshActiveModel({ sessionId });
     if (!this.boundPendingSessionIds.has(pendingSessionId)) {
       this.boundPendingSessionIds.add(pendingSessionId);
@@ -1716,12 +1706,20 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     if (this.contextUsageRefreshPromise) return;
     if (!force && now - this.contextUsageRefreshAt < CONTEXT_USAGE_REFRESH_INTERVAL_MS) return;
     this.contextUsageRefreshAt = now;
+    const sessionId = this.currentContextUsageSessionId();
     this.contextUsageRefreshPromise = queryWithUsage.getContextUsage()
       .then((rawUsage) => {
         const usage = normalizeClaudeContextUsage(rawUsage, this.activeModelId);
-        if (!usage || isSameContextUsage(this.contextUsage, usage)) return;
-        this.contextUsage = usage;
-        this.emitState();
+        if (!usage) return;
+        const previousUsage = sessionId
+          ? this.contextUsageBySession.get(sessionId) ?? null
+          : this.contextUsage;
+        if (isSameContextUsage(previousUsage, usage)) return;
+        if (sessionId) this.contextUsageBySession.set(sessionId, usage);
+        if (!sessionId || sessionId === this.currentContextUsageSessionId()) {
+          this.contextUsage = usage;
+          this.emitState();
+        }
       })
       .catch(() => undefined)
       .finally(() => {
@@ -1732,6 +1730,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
   private emitState(): void {
     this.emit("state", this.state);
     this.pushEvent("state", {
+      sessionId: this.activeSessionId ?? this.resumeSessionId,
       owner: this.ownerValue,
       busy: this.busyValue,
       thinking: this.thinkingValue,
@@ -1767,6 +1766,14 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
 
   private buildEnv(): NodeJS.ProcessEnv {
     return buildClaudeCloudRelayEnv();
+  }
+
+  private currentContextUsageSessionId(): string | null {
+    return this.activeSessionId ?? this.resumeSessionId ?? this.sdkSessionId ?? this.remoteSdkSessionId;
+  }
+
+  private applyStoredContextUsageForSession(sessionId: string | null): void {
+    this.contextUsage = sessionId ? this.contextUsageBySession.get(sessionId) ?? null : null;
   }
 
   private refreshActiveModel(opts: { sessionId?: string | null } = {}): string | null {
@@ -2180,22 +2187,40 @@ function formatToolResult(content: unknown): string {
 
 function commandInfoFromClaudeSlashName(name: string): CliSlashCommandInfo {
   const normalized = name.trim().replace(/^\//, "");
+  const description = describeClaudeSlashCommand(normalized.toLowerCase());
   return {
     name: normalized,
-    description: describeClaudeSlashCommand(normalized.toLowerCase()),
+    ...(description ? { description } : {}),
   };
 }
 
 function commandInfoFromClaudeSlashCommand(command: SlashCommand): CliSlashCommandInfo {
+  const name = command.name.trim().replace(/^\//, "");
+  const description = command.description?.trim() || describeClaudeSlashCommand(name.toLowerCase());
   return {
-    name: command.name.trim().replace(/^\//, ""),
-    description: command.description || describeClaudeSlashCommand(command.name.toLowerCase()),
+    name,
+    ...(description ? { description } : {}),
     argumentHint: command.argumentHint || undefined,
     aliases: command.aliases,
   };
 }
 
-function describeClaudeSlashCommand(name: string): string {
+function withClaudeCloudNativeSlashCommands(commands: CliSlashCommandInfo[]): CliSlashCommandInfo[] {
+  const merged = new Map<string, CliSlashCommandInfo>();
+  for (const command of commands) {
+    const name = command.name.trim().replace(/^\//, "");
+    if (!name) continue;
+    merged.set(name.toLowerCase(), { ...command, name });
+  }
+  for (const name of CLAUDE_CLOUD_NATIVE_SLASH_COMMANDS) {
+    if (!merged.has(name)) {
+      merged.set(name, commandInfoFromClaudeSlashName(name));
+    }
+  }
+  return Array.from(merged.values());
+}
+
+function describeClaudeSlashCommand(name: string): string | undefined {
   switch (name) {
     case "compact":
       return "Compact the current Claude Code conversation";
@@ -2210,7 +2235,7 @@ function describeClaudeSlashCommand(name: string): string {
     case "memory":
       return "Open Claude Code memory command";
     default:
-      return "Claude Code slash command";
+      return undefined;
   }
 }
 
@@ -2347,6 +2372,11 @@ export function normalizeClaudeTodoWriteInput(input: unknown): ClaudeTodoItem[] 
 
 function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
+function pendingSessionIdFromSlashCommand(command: CliSlashCommand): string | null {
+  if (command.sessionId?.startsWith("pending_")) return command.sessionId;
+  return null;
 }
 
 function isValidClaudeSession(sessionId: string, cwd: string): boolean {
