@@ -208,6 +208,7 @@ describe("ClaudeCodeProvider takeover", () => {
       supportedCommands: vi.fn(async () => [
         { name: "debug", description: "Enable debug logging" },
         { name: "lark-mail", description: "Use Lark mail" },
+        { name: "custom-command" },
       ]),
       mcpServerStatus: vi.fn(async () => [
         { name: "lark", status: "connected" },
@@ -244,6 +245,11 @@ describe("ClaudeCodeProvider takeover", () => {
             {
               name: "lark-mail",
               description: "Use Lark mail",
+              argumentHint: undefined,
+              aliases: undefined,
+            },
+            {
+              name: "custom-command",
               argumentHint: undefined,
               aliases: undefined,
             },

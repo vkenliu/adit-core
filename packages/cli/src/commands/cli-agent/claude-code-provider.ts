@@ -2187,16 +2187,19 @@ function formatToolResult(content: unknown): string {
 
 function commandInfoFromClaudeSlashName(name: string): CliSlashCommandInfo {
   const normalized = name.trim().replace(/^\//, "");
+  const description = describeClaudeSlashCommand(normalized.toLowerCase());
   return {
     name: normalized,
-    description: describeClaudeSlashCommand(normalized.toLowerCase()),
+    ...(description ? { description } : {}),
   };
 }
 
 function commandInfoFromClaudeSlashCommand(command: SlashCommand): CliSlashCommandInfo {
+  const name = command.name.trim().replace(/^\//, "");
+  const description = command.description?.trim() || describeClaudeSlashCommand(name.toLowerCase());
   return {
-    name: command.name.trim().replace(/^\//, ""),
-    description: command.description || describeClaudeSlashCommand(command.name.toLowerCase()),
+    name,
+    ...(description ? { description } : {}),
     argumentHint: command.argumentHint || undefined,
     aliases: command.aliases,
   };
@@ -2217,7 +2220,7 @@ function withClaudeCloudNativeSlashCommands(commands: CliSlashCommandInfo[]): Cl
   return Array.from(merged.values());
 }
 
-function describeClaudeSlashCommand(name: string): string {
+function describeClaudeSlashCommand(name: string): string | undefined {
   switch (name) {
     case "compact":
       return "Compact the current Claude Code conversation";
@@ -2232,7 +2235,7 @@ function describeClaudeSlashCommand(name: string): string {
     case "memory":
       return "Open Claude Code memory command";
     default:
-      return "Claude Code slash command";
+      return undefined;
   }
 }
 
