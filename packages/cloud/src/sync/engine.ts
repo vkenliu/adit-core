@@ -169,6 +169,14 @@ export class SyncEngine {
         totalRecords: 0,
       };
 
+      upsertSyncState(this.db, {
+        serverUrl: this.serverUrl,
+        clientId: this.cloudClientId,
+        lastSyncedEventId: cursor,
+        lastSyncedAt,
+        syncVersion,
+      });
+
       // 3. Push batches until no more records
       while (true) {
         const batch = buildSyncBatch(
@@ -209,6 +217,16 @@ export class SyncEngine {
         syncVersion = response.newSyncVersion;
         result.newSyncCursor = cursor;
 
+        // Persist progress after each batch (crash-safe), including the
+        // duplicate-only path below so local threshold checks use server truth.
+        upsertSyncState(this.db, {
+          serverUrl: this.serverUrl,
+          clientId: this.cloudClientId,
+          lastSyncedEventId: cursor,
+          lastSyncedAt: new Date().toISOString(),
+          syncVersion,
+        });
+
         // Guard against infinite loop: if all records were duplicates and
         // the cursor didn't advance, the same batch would repeat forever.
         if (response.accepted === 0 && cursor === prevCursor) {
@@ -219,15 +237,6 @@ export class SyncEngine {
           }
           break;
         }
-
-        // Persist progress after each batch (crash-safe)
-        upsertSyncState(this.db, {
-          serverUrl: this.serverUrl,
-          clientId: this.cloudClientId,
-          lastSyncedEventId: cursor,
-          lastSyncedAt: new Date().toISOString(),
-          syncVersion,
-        });
 
         // If batch was smaller than limit, we're done
         if (count < this.batchSize) break;
