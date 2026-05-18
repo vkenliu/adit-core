@@ -477,6 +477,68 @@ describe("CodexCliProvider takeover", () => {
     provider.stop();
   });
 
+  it("binds a pending Web session when /fork starts an empty thread", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    let threadStartCount = 0;
+    const initialThreadId = "019e2110-d96f-7e40-882e-b524fa9148e4";
+    const slashThreadId = "019e2110-d96f-7e40-882e-b524fa9148e5";
+    mocks.appRequest.mockImplementation(async (method: string) => {
+      if (method === "adit/capabilities/discover") {
+        throw appServerMethodsError();
+      }
+      if (method === "thread/start") {
+        threadStartCount += 1;
+        return {
+          model: "gpt-test",
+          thread: { id: threadStartCount === 1 ? initialThreadId : slashThreadId },
+        };
+      }
+      if (method === "skills/list") return { data: [] };
+      if (method === "mcpServerStatus/list") return { data: [] };
+      return {};
+    });
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    await provider.takeover();
+    events.length = 0;
+    mocks.appRequest.mockClear();
+
+    await provider.handleSlashCommand({
+      name: "fork",
+      args: [],
+      raw: "/fork",
+      sessionId: "pending_web_session",
+      pendingSessionId: "pending_web_session",
+      localMessageId: "local-user-1",
+    });
+
+    expect(provider.state.activeSessionId).toBe(slashThreadId);
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "session-bound",
+      payload: {
+        pendingSessionId: "pending_web_session",
+        sessionId: slashThreadId,
+        createdAt: expect.any(Number),
+      },
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "notice",
+      payload: expect.objectContaining({
+        title: "/fork",
+        text: expect.stringContaining("no conversation to fork"),
+        sessionId: slashThreadId,
+      }),
+    }));
+    expect(mocks.appRequest.mock.calls.filter(([method]) => method === "thread/fork")).toHaveLength(0);
+
+    provider.stop();
+  });
+
   it("refreshes skills from app-server when /skills runs", async () => {
     const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
     const provider = new CodexCliProvider({

@@ -228,8 +228,13 @@ export class CliAgentRelayWebSocket {
     return this.send({ type: "command.ack", commandId });
   }
 
-  commandError(commandId: string, message: string): boolean {
-    return this.send({ type: "command.error", commandId, message });
+  commandError(commandId: string, message: string, sessionId?: string | null): boolean {
+    return this.send({
+      type: "command.error",
+      commandId,
+      message,
+      ...(sessionId ? { sessionId } : {}),
+    });
   }
 
   private send(value: unknown): boolean {
