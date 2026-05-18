@@ -122,6 +122,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   private promptActive = false;
   private activeTurnId: string | null = null;
   private loadedThreadIds = new Set<string>();
+  private emptyThreadIds = new Set<string>();
   private boundPendingSessionIds = new Set<string>();
   private pendingPermissions = new Map<string, PendingPermission>();
   private pendingQuestions = new Map<string, PendingQuestion>();
@@ -247,6 +248,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     this.appServer?.stop();
     this.appServer = null;
     this.loadedThreadIds = new Set<string>();
+    this.emptyThreadIds = new Set<string>();
     const resumeId = this.resumeSessionId ?? this.activeSessionId;
     this.startLocal(resumeId ? ["resume", resumeId] : []);
   }
@@ -501,7 +503,20 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
 
     if (name === "compact") {
       if (pendingSessionId) this.bindPendingSession(pendingSessionId, threadId);
-      await this.appServer?.request("thread/compact/start", { threadId });
+      if (this.emptyThreadIds.has(threadId)) {
+        this.pushEmptyThreadNotice("compact", threadId);
+        return;
+      }
+      try {
+        await this.appServer?.request("thread/compact/start", { threadId });
+      } catch (error) {
+        if (isMissingCodexRolloutError(error)) {
+          this.emptyThreadIds.add(threadId);
+          this.pushEmptyThreadNotice("compact", threadId);
+          return;
+        }
+        throw error;
+      }
       this.pushNotice({
         title: "/compact",
         text: "Started Codex thread compaction.",
@@ -511,11 +526,25 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     }
 
     if (name === "fork") {
-      const result = asRecord(await this.appServer?.request("thread/fork", {
-        threadId,
-        cwd: this.opts.cwd,
-        ...codexThreadModeOverrides("build"),
-      })) ?? {};
+      if (this.emptyThreadIds.has(threadId)) {
+        this.pushEmptyThreadNotice("fork", threadId);
+        return;
+      }
+      let result: Record<string, unknown>;
+      try {
+        result = asRecord(await this.appServer?.request("thread/fork", {
+          threadId,
+          cwd: this.opts.cwd,
+          ...codexThreadModeOverrides("build"),
+        })) ?? {};
+      } catch (error) {
+        if (isMissingCodexRolloutError(error)) {
+          this.emptyThreadIds.add(threadId);
+          this.pushEmptyThreadNotice("fork", threadId);
+          return;
+        }
+        throw error;
+      }
       const thread = asRecord(result.thread) ?? {};
       const forkedThreadId = readString(thread.id);
       if (forkedThreadId) this.noteThread(thread, result);
@@ -530,6 +559,16 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
         sessionId: forkedThreadId ?? threadId,
       });
     }
+  }
+
+  private pushEmptyThreadNotice(command: "compact" | "fork", threadId: string): void {
+    this.pushNotice({
+      title: `/${command}`,
+      text: command === "fork"
+        ? "This Codex thread has no conversation to fork yet. Send a prompt first, then run /fork."
+        : "This Codex thread has no conversation to compact yet. Send a prompt first, then run /compact.",
+      sessionId: threadId,
+    });
   }
 
   async answerPermission(
@@ -680,6 +719,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       }));
       const turn = asRecord(result?.turn);
       this.activeTurnId = readString(turn?.id) ?? this.activeTurnId;
+      this.emptyThreadIds.delete(threadId);
       this.setBusy(true);
       this.setThinking(true);
       item.resolve();
@@ -743,6 +783,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     const threadId = readString(thread?.id);
     if (!threadId) throw new Error("Codex app-server did not return a thread id");
     this.noteThread(thread, result);
+    this.emptyThreadIds.add(threadId);
     return threadId;
   }
 
@@ -787,6 +828,8 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     }
 
     if (method === "turn/started") {
+      const sessionId = readString(params.threadId) ?? this.activeSessionId ?? this.resumeSessionId;
+      if (sessionId) this.emptyThreadIds.delete(sessionId);
       this.activeTurnId = readString(asRecord(params.turn)?.id) ?? this.activeTurnId;
       this.setBusy(true);
       this.setThinking(true);
@@ -979,6 +1022,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     const id = readString(item.id);
     if (!type || !sessionId || !id) return;
     const createdAt = Date.now();
+    this.emptyThreadIds.delete(sessionId);
 
     if ((type === "agentMessage" || type === "plan") && !opts.running) {
       const text = readString(item.text);
@@ -1597,6 +1641,11 @@ function readStringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string" && item.length > 0)
     : [];
+}
+
+function isMissingCodexRolloutError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.toLowerCase().includes("no rollout found");
 }
 
 function safeJson(value: unknown): string {
