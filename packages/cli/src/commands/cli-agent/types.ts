@@ -52,6 +52,8 @@ export interface CliSlashCommand {
   args: string[];
   raw: string;
   sessionId?: string | null;
+  pendingSessionId?: string | null;
+  localMessageId?: string | null;
 }
 
 export interface CliRewindResponse {

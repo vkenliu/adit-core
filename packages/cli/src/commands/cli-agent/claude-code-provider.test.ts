@@ -186,6 +186,247 @@ describe("ClaudeCodeProvider abort", () => {
 });
 
 describe("ClaudeCodeProvider takeover", () => {
+  it("does not emit fallback slash commands on construction", () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new ClaudeCodeProvider({
+      bin: "claude",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    try {
+      expect(events.some((event) => event.type === "slash-commands")).toBe(false);
+    } finally {
+      provider.stop();
+    }
+  });
+
+  it("hydrates slash commands and MCP status from the SDK while local owns Claude", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const capabilityQuery = {
+      supportedCommands: vi.fn(async () => [
+        { name: "debug", description: "Enable debug logging" },
+        { name: "lark-mail", description: "Use Lark mail" },
+      ]),
+      mcpServerStatus: vi.fn(async () => [
+        { name: "lark", status: "connected" },
+      ]),
+      close: vi.fn(),
+      interrupt: vi.fn(),
+      async *[Symbol.asyncIterator]() {},
+    };
+    mocks.query.mockImplementation(() => capabilityQuery);
+
+    const provider = new ClaudeCodeProvider({
+      bin: "claude",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    try {
+      await tick();
+      await tick();
+
+      expect(capabilityQuery.supportedCommands).toHaveBeenCalledTimes(1);
+      expect(capabilityQuery.mcpServerStatus).toHaveBeenCalledTimes(1);
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "slash-commands",
+        payload: expect.objectContaining({
+          commands: [
+            {
+              name: "debug",
+              description: "Enable debug logging",
+              argumentHint: undefined,
+              aliases: undefined,
+            },
+            {
+              name: "lark-mail",
+              description: "Use Lark mail",
+              argumentHint: undefined,
+              aliases: undefined,
+            },
+            {
+              name: "rewind",
+              description: "Rewind Claude Code files when checkpointing is available",
+            },
+          ],
+        }),
+      }));
+
+      await provider.handleSlashCommand({ name: "mcp", args: [], raw: "/mcp" });
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "notice",
+        payload: expect.objectContaining({
+          title: "/mcp",
+          text: "- lark: connected",
+        }),
+      }));
+    } finally {
+      provider.stop();
+    }
+  });
+
+  it("keeps Claude native rewind when the SDK command snapshot is empty", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new ClaudeCodeProvider({
+      bin: "claude",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    try {
+      await tick();
+      await tick();
+
+      const slashEvents = events.filter((event) => event.type === "slash-commands");
+      expect(slashEvents.length).toBeGreaterThan(0);
+      expect(slashEvents.at(-1)?.payload.commands).toEqual([
+        {
+          name: "rewind",
+          description: "Rewind Claude Code files when checkpointing is available",
+        },
+      ]);
+    } finally {
+      provider.stop();
+    }
+  });
+
+  it("rejects unreported slash commands before hydrate while keeping internal notices available", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new ClaudeCodeProvider({
+      bin: "claude",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    try {
+      await expect(
+        provider.handleSlashCommand({ name: "compact", args: [], raw: "/compact" }),
+      ).rejects.toMatchObject({
+        message: "Claude Code did not expose /compact for this Cloud session.",
+        statusCode: 400,
+      });
+
+      await provider.handleSlashCommand({ name: "rewind", args: [], raw: "/rewind" });
+
+      await provider.handleSlashCommand({ name: "mcp", args: [], raw: "/mcp" });
+      await provider.handleSlashCommand({ name: "skills", args: [], raw: "/skills" });
+
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "notice",
+        payload: expect.objectContaining({ title: "/mcp" }),
+      }));
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "notice",
+        payload: expect.objectContaining({ title: "/rewind" }),
+      }));
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "notice",
+        payload: expect.objectContaining({ title: "/skills" }),
+      }));
+    } finally {
+      provider.stop();
+    }
+  });
+
+  it("binds a pending Web session when the first native slash command starts a Claude session", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const sessionId = "11111111-1111-1111-1111-111111111111";
+    mocks.query.mockImplementation((
+      input: {
+        options?: {
+          abortController?: AbortController;
+          includePartialMessages?: boolean;
+        };
+      },
+    ) => {
+      if (!input.options?.includePartialMessages) {
+        return {
+          supportedCommands: vi.fn(async () => [
+            { name: "compact", description: "Compact conversation" },
+          ]),
+          mcpServerStatus: vi.fn(async () => []),
+          close: vi.fn(),
+          interrupt: vi.fn(),
+          async *[Symbol.asyncIterator]() {},
+        };
+      }
+
+      return {
+        supportedCommands: vi.fn(async () => []),
+        mcpServerStatus: vi.fn(async () => []),
+        getContextUsage: vi.fn(async () => ({
+          totalTokens: 100,
+          maxTokens: 200,
+          percentage: 50,
+          model: "claude-test",
+        })),
+        close: mocks.remoteClose,
+        interrupt: mocks.remoteInterrupt,
+        async *[Symbol.asyncIterator]() {
+          yield {
+            type: "system",
+            subtype: "init",
+            session_id: sessionId,
+            slash_commands: ["compact"],
+          };
+          yield {
+            type: "result",
+            session_id: sessionId,
+            usage: { input_tokens: 1, output_tokens: 1 },
+          };
+        },
+      };
+    });
+    const provider = new ClaudeCodeProvider({
+      bin: "claude",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    try {
+      await tick();
+      await tick();
+      await provider.takeover();
+
+      await provider.handleSlashCommand({
+        name: "compact",
+        args: [],
+        raw: "/compact",
+        sessionId: "pending_web_session",
+        pendingSessionId: "pending_web_session",
+        localMessageId: "local-user-1",
+      });
+      await tick();
+      await tick();
+
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "session-bound",
+        payload: {
+          pendingSessionId: "pending_web_session",
+          sessionId,
+          createdAt: expect.any(Number),
+        },
+      }));
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "message",
+        payload: expect.objectContaining({
+          role: "user",
+          sessionId,
+          messageId: "local-user-1",
+          text: "/compact",
+        }),
+      }));
+    } finally {
+      provider.stop();
+    }
+  });
+
   it("rejects Web takeover after the local Claude CLI exits", async () => {
     const provider = new ClaudeCodeProvider({
       bin: "claude",

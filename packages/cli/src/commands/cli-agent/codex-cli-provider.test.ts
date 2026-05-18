@@ -72,12 +72,37 @@ function tick(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+const DEFAULT_APP_SERVER_METHODS = [
+  "initialize",
+  "thread/start",
+  "thread/resume",
+  "thread/fork",
+  "thread/compact/start",
+  "skills/list",
+  "model/list",
+  "mcpServerStatus/list",
+  "turn/start",
+  "turn/steer",
+  "turn/interrupt",
+];
+
+function appServerMethodsError(methods = DEFAULT_APP_SERVER_METHODS): Error {
+  return new Error(
+    `Invalid request: unknown variant \`adit/capabilities/discover\`, expected one of ${
+      methods.map((method) => `\`${method}\``).join(", ")
+    }`,
+  );
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.appServerOptions = null;
   mocks.spawn.mockImplementation(() => mockChildProcess());
   mocks.appStart.mockResolvedValue(undefined);
   mocks.appRequest.mockImplementation(async (method: string, params: unknown) => {
+    if (method === "adit/capabilities/discover") {
+      throw appServerMethodsError();
+    }
     if (method === "thread/start") {
       return {
         model: "gpt-test",
@@ -92,6 +117,47 @@ beforeEach(() => {
     }
     if (method === "turn/start") {
       return { turn: { id: "turn-1" } };
+    }
+    if (method === "skills/list") {
+      return {
+        data: [
+          {
+            cwd: (params as { cwds?: string[] }).cwds?.[0] ?? "/tmp/project",
+            skills: [
+              {
+                name: "imagegen",
+                description: "Generate images",
+                path: "/tmp/skills/imagegen/SKILL.md",
+                scope: "system",
+                enabled: true,
+              },
+              {
+                name: "git-workflow",
+                description: "Use Git safely",
+                path: "/tmp/skills/git-workflow/SKILL.md",
+                scope: "user",
+                enabled: true,
+              },
+            ],
+          },
+        ],
+      };
+    }
+    if (method === "mcpServerStatus/list") {
+      return {
+        data: [
+          {
+            name: "chrome-devtools",
+            tools: {
+              list_pages: { name: "list_pages" },
+              take_snapshot: { name: "take_snapshot" },
+            },
+            resources: [],
+            resourceTemplates: [],
+            authStatus: "unsupported",
+          },
+        ],
+      };
     }
     return {};
   });
@@ -175,6 +241,20 @@ describe("Codex prompt modes", () => {
 });
 
 describe("CodexCliProvider takeover", () => {
+  it("does not emit fixed slash commands on construction", () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(events.some((event) => event.type === "slash-commands")).toBe(false);
+
+    provider.stop();
+  });
+
   it("rejects Web takeover after the local Codex CLI exits", async () => {
     const provider = new CodexCliProvider({
       bin: "codex",
@@ -192,6 +272,114 @@ describe("CodexCliProvider takeover", () => {
       statusCode: 409,
     });
     expect(mocks.appRequest).not.toHaveBeenCalled();
+
+    provider.stop();
+  });
+
+  it("hydrates slash commands from app-server methods", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    await provider.takeover();
+
+    const slashEvent = events.find((event) => event.type === "slash-commands");
+    expect(slashEvent?.payload.commands).toEqual([
+      { name: "compact", description: "Compress the current Codex thread" },
+      { name: "mcp", description: "Show 1 Codex MCP server" },
+      { name: "skills", description: "List 2 Codex skills" },
+      { name: "fork", description: "Fork the current Codex thread" },
+      { name: "model", description: "List available Codex models" },
+      { name: "new", description: "Start a new Codex thread" },
+      { name: "clear", description: "Start a clean Codex thread" },
+      { name: "imagegen", description: "Use Codex skill: Generate images" },
+      { name: "git-workflow", description: "Use Codex skill: Use Git safely" },
+      { name: "mcp.chrome-devtools", description: "Show Codex MCP server: chrome-devtools" },
+    ]);
+
+    provider.stop();
+  });
+
+  it("omits slash commands whose app-server methods are missing", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    mocks.appRequest.mockImplementation(async (method: string, params: unknown) => {
+      if (method === "adit/capabilities/discover") {
+        throw appServerMethodsError(["initialize", "thread/start", "skills/list"]);
+      }
+      if (method === "thread/start") {
+        return {
+          model: "gpt-test",
+          thread: { id: "019e2110-d96f-7e40-882e-b524fa9148e4" },
+        };
+      }
+      if (method === "skills/list") {
+        return {
+          data: [
+            {
+              cwd: (params as { cwds?: string[] }).cwds?.[0] ?? "/tmp/project",
+              skills: [{ name: "imagegen", enabled: true }],
+            },
+          ],
+        };
+      }
+      return {};
+    });
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    await provider.takeover();
+
+    const slashEvent = events.find((event) => event.type === "slash-commands");
+    expect((slashEvent?.payload.commands as Array<{ name: string }>).map((command) => command.name)).toEqual([
+      "skills",
+      "new",
+      "clear",
+      "imagegen",
+    ]);
+    await expect(
+      provider.handleSlashCommand({ name: "mcp", args: [], raw: "/mcp" }),
+    ).rejects.toMatchObject({
+      message: "Codex Cloud Coding does not expose /mcp as an executable native command.",
+      statusCode: 400,
+    });
+
+    provider.stop();
+  });
+
+  it("emits an empty slash list when capability hydrate fails without blocking takeover", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    mocks.appRequest.mockImplementation(async (method: string) => {
+      if (method === "adit/capabilities/discover") {
+        throw new Error("app-server refused capability probe");
+      }
+      if (method === "thread/start") {
+        return {
+          model: "gpt-test",
+          thread: { id: "019e2110-d96f-7e40-882e-b524fa9148e4" },
+        };
+      }
+      return {};
+    });
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    await provider.takeover();
+
+    expect(provider.state.owner).toBe("web");
+    const slashEvent = events.find((event) => event.type === "slash-commands");
+    expect(slashEvent?.payload.commands).toEqual([]);
 
     provider.stop();
   });
@@ -226,6 +414,231 @@ describe("CodexCliProvider takeover", () => {
       event.type === "state" &&
       event.payload.activeSessionId === "019e2110-d96f-7e40-882e-b524fa9148e4"
     )).toBe(true);
+
+    provider.stop();
+  });
+
+  it("binds a pending Web session when the first slash command starts a thread", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    let threadStartCount = 0;
+    const initialThreadId = "019e2110-d96f-7e40-882e-b524fa9148e4";
+    const slashThreadId = "019e2110-d96f-7e40-882e-b524fa9148e5";
+    mocks.appRequest.mockImplementation(async (method: string) => {
+      if (method === "adit/capabilities/discover") {
+        throw appServerMethodsError();
+      }
+      if (method === "thread/start") {
+        threadStartCount += 1;
+        return {
+          model: "gpt-test",
+          thread: { id: threadStartCount === 1 ? initialThreadId : slashThreadId },
+        };
+      }
+      if (method === "skills/list") return { data: [] };
+      if (method === "mcpServerStatus/list") return { data: [] };
+      return {};
+    });
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    await provider.takeover();
+    events.length = 0;
+
+    await provider.handleSlashCommand({
+      name: "new",
+      args: [],
+      raw: "/new",
+      sessionId: "pending_web_session",
+      pendingSessionId: "pending_web_session",
+      localMessageId: "local-user-1",
+    });
+
+    expect(provider.state.activeSessionId).toBe(slashThreadId);
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "session-bound",
+      payload: {
+        pendingSessionId: "pending_web_session",
+        sessionId: slashThreadId,
+        createdAt: expect.any(Number),
+      },
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "notice",
+      payload: expect.objectContaining({
+        title: "/new",
+        sessionId: slashThreadId,
+      }),
+    }));
+
+    provider.stop();
+  });
+
+  it("refreshes skills from app-server when /skills runs", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+    await provider.takeover();
+    mocks.appRequest.mockClear();
+    mocks.appRequest.mockImplementation(async (method: string, params: unknown) => {
+      if (method === "skills/list") {
+        return {
+          data: [
+            {
+              cwd: (params as { cwds?: string[] }).cwds?.[0] ?? "/tmp/project",
+              skills: [
+                {
+                  name: "skill-installer",
+                  description: "Install skills",
+                  enabled: true,
+                },
+              ],
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    await provider.handleSlashCommand({ name: "skills", args: [], raw: "/skills" });
+
+    expect(mocks.appRequest).toHaveBeenCalledWith("skills/list", {
+      cwds: ["/tmp/project"],
+      forceReload: false,
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "notice",
+      payload: expect.objectContaining({
+        title: "/skills",
+        noticeKind: "skills",
+        skills: [
+          expect.objectContaining({
+            name: "skill-installer",
+            description: "Install skills",
+          }),
+        ],
+      }),
+    }));
+    expect(events.filter((event) => event.type === "slash-commands").at(-1)?.payload.commands)
+      .toContainEqual({ name: "skills", description: "List 1 Codex skill" });
+    expect(events.filter((event) => event.type === "slash-commands").at(-1)?.payload.commands)
+      .toContainEqual({ name: "skill-installer", description: "Use Codex skill: Install skills" });
+
+    provider.stop();
+  });
+
+  it("refreshes MCP servers from app-server when /mcp runs", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+    await provider.takeover();
+    mocks.appRequest.mockClear();
+    mocks.appRequest.mockImplementation(async (method: string) => {
+      if (method === "mcpServerStatus/list") {
+        return {
+          data: [
+            { name: "chrome-devtools", tools: {}, authStatus: "unsupported" },
+            { name: "codex_apps", tools: {}, authStatus: "bearerToken" },
+          ],
+        };
+      }
+      return {};
+    });
+
+    await provider.handleSlashCommand({ name: "mcp", args: [], raw: "/mcp" });
+
+    expect(mocks.appRequest).toHaveBeenCalledWith("mcpServerStatus/list", {
+      detail: "toolsAndAuthOnly",
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "notice",
+      payload: expect.objectContaining({
+        title: "/mcp",
+        text: expect.stringContaining("codex_apps"),
+      }),
+    }));
+    expect(events.filter((event) => event.type === "slash-commands").at(-1)?.payload.commands)
+      .toContainEqual({ name: "mcp", description: "Show 2 Codex MCP servers" });
+    expect(events.filter((event) => event.type === "slash-commands").at(-1)?.payload.commands)
+      .toContainEqual({ name: "mcp.chrome-devtools", description: "Show Codex MCP server: chrome-devtools" });
+    expect(events.filter((event) => event.type === "slash-commands").at(-1)?.payload.commands)
+      .toContainEqual({ name: "mcp.codex_apps", description: "Show Codex MCP server: codex_apps" });
+
+    provider.stop();
+  });
+
+  it("exposes individual skill slash commands that refresh skill data", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+    await provider.takeover();
+    mocks.appRequest.mockClear();
+
+    await provider.handleSlashCommand({ name: "imagegen", args: [], raw: "/imagegen" });
+
+    expect(mocks.appRequest).toHaveBeenCalledWith("skills/list", {
+      cwds: ["/tmp/project"],
+      forceReload: false,
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "notice",
+      payload: expect.objectContaining({
+        title: "/imagegen",
+        noticeKind: "skills",
+        skills: [
+          expect.objectContaining({
+            name: "imagegen",
+            description: "Generate images",
+          }),
+        ],
+      }),
+    }));
+
+    provider.stop();
+  });
+
+  it("exposes individual MCP server slash commands that refresh MCP data", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+    await provider.takeover();
+    mocks.appRequest.mockClear();
+
+    await provider.handleSlashCommand({
+      name: "mcp.chrome-devtools",
+      args: [],
+      raw: "/mcp.chrome-devtools",
+    });
+
+    expect(mocks.appRequest).toHaveBeenCalledWith("mcpServerStatus/list", {
+      detail: "toolsAndAuthOnly",
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "notice",
+      payload: expect.objectContaining({
+        title: "/mcp.chrome-devtools",
+        text: "- chrome-devtools: auth=unsupported, tools=2",
+      }),
+    }));
 
     provider.stop();
   });
