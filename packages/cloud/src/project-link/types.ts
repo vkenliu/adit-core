@@ -42,8 +42,10 @@ export interface DiscoveredDocument {
 // ─── Local Cache ───────────────────────────────────────────
 
 export interface ProjectLinkCache {
+  /** Local project ID from the client config; used as the cache key. */
   projectId: string;
   serverUrl: string;
+  /** Effective cloud project ID returned by the server, for display/debug only. */
   confirmedProjectId: string | null;
   lastCommitSha: string | null;
   lastBranchSyncAt: string | null;
@@ -57,6 +59,8 @@ export interface ProjectLinkCache {
 // ─── Server API Responses ──────────────────────────────────
 
 export interface NegotiateResponse {
+  localProjectId: string;
+  serverProjectId: string;
   confirmedProjectId: string;
   projectName: string;
   status: "confirmed" | "id_mismatch";
@@ -66,7 +70,9 @@ export interface NegotiateResponse {
 export interface LinkInitResponse {
   projectLink: {
     id: string;
+    localProjectId: string;
     projectId: string;
+    serverProjectId: string;
     remoteUrl: string;
     defaultBranch: string | null;
     branchCount: number;
@@ -79,6 +85,8 @@ export interface LinkInitResponse {
 }
 
 export interface CommitUploadResponse {
+  localProjectId?: string;
+  serverProjectId?: string;
   accepted: number;
   duplicates: number;
   totalCommits: number;
@@ -86,6 +94,8 @@ export interface CommitUploadResponse {
 }
 
 export interface DocumentUploadResponse {
+  localProjectId?: string;
+  serverProjectId?: string;
   results: Array<{
     fileName: string;
     documentId: string;
@@ -248,7 +258,12 @@ export interface StepTiming {
 // ─── Command Results ───────────────────────────────────────
 
 export interface LinkResult {
+  /** Cloud project ID returned by the server. */
   projectId: string;
+  /** Client-local project ID computed from the local repo. */
+  localProjectId: string;
+  /** Cloud project ID returned by the server. */
+  serverProjectId: string;
   projectName: string;
   serverUrl: string;
   branchCount: number;
