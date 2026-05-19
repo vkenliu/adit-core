@@ -70,6 +70,7 @@ export class SyncEngine {
   private readonly db: Database.Database;
   private readonly client: CloudClient;
   private readonly projectId: string;
+  private readonly projectName: string;
   private readonly batchSize: number;
   private readonly serverUrl: string;
   private readonly cloudClientId: string;
@@ -80,6 +81,7 @@ export class SyncEngine {
     client: CloudClient,
     config: {
       projectId: string;
+      projectName?: string;
       batchSize: number;
       serverUrl: string;
       cloudClientId: string;
@@ -89,6 +91,7 @@ export class SyncEngine {
     this.db = db;
     this.client = client;
     this.projectId = config.projectId;
+    this.projectName = config.projectName ?? "";
     this.batchSize = config.batchSize;
     this.serverUrl = config.serverUrl;
     this.cloudClientId = config.cloudClientId;
@@ -114,6 +117,10 @@ export class SyncEngine {
       let syncVersion = serverStatus.syncVersion;
 
       const projectEntry = serverStatus.projectCursor ?? serverStatus.projectCursors?.[this.projectId];
+      const supportsProjectCursors =
+        serverStatus.projectCursor !== undefined || serverStatus.projectCursors !== undefined;
+      const isNewProject =
+        supportsProjectCursors && (projectEntry === undefined || projectEntry.serverProjectId === null);
       if (projectEntry !== undefined) {
         // Server has a per-project cursor — use it directly.
         cursor = projectEntry.lastSyncedEventId;
@@ -123,7 +130,7 @@ export class SyncEngine {
             `[adit-cloud] sync: using per-project cursor for ${this.projectId}: ${cursor ?? "null"}\n`,
           );
         }
-      } else if (serverStatus.projectCursors !== undefined) {
+      } else if (supportsProjectCursors) {
         // Server supports per-project cursors but has no entry for this
         // project — it has never seen events for it. Send everything.
         cursor = null;
@@ -201,6 +208,7 @@ export class SyncEngine {
             localProjectId: this.projectId,
             syncVersion,
             batch,
+            ...(isNewProject && this.projectName ? { projectName: this.projectName } : {}),
           },
         );
 

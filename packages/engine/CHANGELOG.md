@@ -1,5 +1,53 @@
 # @varveai/adit-engine
 
+## 0.4.8
+
+### Patch Changes
+
+- 确保 windows 可用
+- Updated dependencies
+  - @varveai/adit-core@0.4.8
+
+## 0.4.7
+
+### Patch Changes
+
+- 新增 adit project uninstall 命令卸载当前项目中的 adit，不影响其他项目
+- Updated dependencies
+  - @varveai/adit-core@0.4.7
+
+## 0.4.6
+
+### Patch Changes
+
+- 重构代码
+- Updated dependencies
+  - @varveai/adit-core@0.4.6
+
+## 0.4.5
+
+### Patch Changes
+
+- 修复 bug
+- Updated dependencies
+  - @varveai/adit-core@0.4.5
+
+## 0.4.4
+
+### Patch Changes
+
+- cli 的 websocket 连接稳定性优化
+- Updated dependencies
+  - @varveai/adit-core@0.4.4
+
+## 0.4.3
+
+### Patch Changes
+
+- 新增支持 windows
+- Updated dependencies
+  - @varveai/adit-core@0.4.3
+
 ## 0.4.2
 
 ### Patch Changes

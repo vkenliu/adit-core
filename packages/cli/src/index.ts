@@ -7,8 +7,6 @@
  * the ADIT timeline.
  */
 
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { initCommand } from "./commands/init.js";
 import { listCommand } from "./commands/list.js";
@@ -38,6 +36,7 @@ import {
   pluginListCommand,
   pluginValidateCommand,
 } from "./commands/plugin.js";
+import { projectUninstallCommand } from "./commands/project.js";
 import {
   cloudLoginCommand,
   cloudLogoutCommand,
@@ -63,6 +62,7 @@ import {
 import { completeCliHandler } from "./commands/complete.js";
 import { selfUpdateCommand } from "./commands/self-update.js";
 import { docsScaffoldCommand, docsValidateCommand } from "./commands/docs.js";
+import { isCliEntrypoint } from "./entrypoint.js";
 import { launchTui } from "./tui/index.js";
 import { CLI_VERSION } from "./version.js";
 
@@ -258,6 +258,20 @@ export function createProgram(): Command {
     .option("--json", "Output as JSON")
     .action((platform, opts) =>
       pluginValidateCommand(platform, { json: opts.json }),
+    );
+
+  // Project lifecycle
+  const projectCmd = program
+    .command("project")
+    .description("Manage ADIT for the current project");
+
+  projectCmd
+    .command("uninstall")
+    .description("Uninstall ADIT from the current project")
+    .option("-y, --yes", "Skip confirmation")
+    .option("--json", "Output as JSON")
+    .action((opts) =>
+      projectUninstallCommand({ yes: opts.yes, json: opts.json }),
     );
 
   // Cloud sync
@@ -580,14 +594,6 @@ function findNestedCommand(
     current = next;
   }
   return current;
-}
-
-function isCliEntrypoint(
-  metaUrl: string,
-  argvPath: string | undefined,
-): boolean {
-  if (!argvPath) return false;
-  return fileURLToPath(metaUrl) === path.resolve(argvPath);
 }
 
 export function normalizeLegacyIntentCompleteArgs(argv: string[]): string[] {
