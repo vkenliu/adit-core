@@ -18,10 +18,10 @@ import type { QualifyResponse } from "./types.js";
  */
 export async function checkQuality(
   client: CloudClient,
-  projectId: string,
+  localProjectId: string,
 ): Promise<QualifyResponse> {
   return client.get<QualifyResponse>(
-    `/api/project-link/qualify?projectId=${encodeURIComponent(projectId)}`,
+    `/api/project-link/qualify?localProjectId=${encodeURIComponent(localProjectId)}`,
   );
 }
 

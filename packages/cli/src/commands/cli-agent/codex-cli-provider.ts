@@ -527,6 +527,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
 
     if (name === "fork") {
       if (this.emptyThreadIds.has(threadId)) {
+        if (pendingSessionId) this.bindPendingSession(pendingSessionId, threadId);
         this.pushEmptyThreadNotice("fork", threadId);
         return;
       }
@@ -540,6 +541,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       } catch (error) {
         if (isMissingCodexRolloutError(error)) {
           this.emptyThreadIds.add(threadId);
+          if (pendingSessionId) this.bindPendingSession(pendingSessionId, threadId);
           this.pushEmptyThreadNotice("fork", threadId);
           return;
         }

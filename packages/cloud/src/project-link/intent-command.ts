@@ -16,23 +16,24 @@ import type {
 /**
  * Execute the intent command: list intents or show detail.
  *
- * Requires a linked project with a confirmed project ID.
+ * Requires a linked project. The project ID passed here is the local project ID
+ * from the client config; the server resolves it to the effective cloud project.
  */
 export async function intentCommand(
   client: CloudClient,
-  projectId: string,
+  localProjectId: string,
   options: IntentOptions,
 ): Promise<IntentResult> {
   if (options.id) {
     // Show detail for a specific intent
     const intent = await client.get<{ intent: IntentDetail }>(
-      `/api/project-link/intents/${encodeURIComponent(options.id)}?projectId=${encodeURIComponent(projectId)}`,
+      `/api/project-link/intents/${encodeURIComponent(options.id)}?localProjectId=${encodeURIComponent(localProjectId)}`,
     );
     return { intent: intent.intent };
   }
 
   // List intents
-  let url = `/api/project-link/intents?projectId=${encodeURIComponent(projectId)}`;
+  let url = `/api/project-link/intents?localProjectId=${encodeURIComponent(localProjectId)}`;
   if (options.state) {
     url += `&state=${encodeURIComponent(options.state)}`;
   }

@@ -147,14 +147,8 @@ export async function projectIntentCliHandler(
     cloudConfig.serverUrl ?? credentials.serverUrl ?? DEFAULT_SERVER_URL;
   const client = new CloudClient(serverUrl, credentials);
 
-  // Check for cached confirmed project ID
-  const db = openDatabase(config.dbPath);
   try {
-    const { getProjectLinkCache } = await import("@varveai/adit-cloud");
-    const cache = getProjectLinkCache(db, config.projectId, serverUrl);
-    const projectId = cache?.confirmedProjectId ?? config.projectId;
-
-    const result = await intentCommand(client, projectId, opts);
+    const result = await intentCommand(client, config.projectId, opts);
 
     if (opts.json) {
       console.log(JSON.stringify(result, null, 2));
@@ -177,7 +171,5 @@ export async function projectIntentCliHandler(
       );
     }
     process.exitCode = 1;
-  } finally {
-    closeDatabase(db);
   }
 }

@@ -90,7 +90,7 @@ export async function linkCommand(
     clearProjectLinkCache(db, projectId, serverUrl);
     try {
       await client.delete(
-        `/api/project-link/reset?projectId=${encodeURIComponent(projectId)}`,
+        `/api/project-link/reset?localProjectId=${encodeURIComponent(projectId)}`,
       );
       log("Server link data cleared.");
     } catch {
@@ -110,55 +110,62 @@ export async function linkCommand(
 
   const remoteUrl = await collectRemoteUrl(projectRoot);
   const projectName = projectNameFromRemoteUrl(remoteUrl);
-  let confirmedProjectId = cache?.confirmedProjectId ?? null;
+  const cachedServerProjectId = cache?.confirmedProjectId ?? null;
 
-  if (!confirmedProjectId || options.force) {
-    const negotiate = await client.post<NegotiateResponse>(
-      "/api/project-link/negotiate",
-      { projectId, remoteUrl, projectName },
-    );
+  const negotiate = await client.post<NegotiateResponse>(
+    "/api/project-link/negotiate",
+    { localProjectId: projectId, remoteUrl, projectName },
+  );
+  const confirmedProjectId = negotiate.confirmedProjectId;
+  const serverProjectChanged =
+    cachedServerProjectId !== null && cachedServerProjectId !== confirmedProjectId;
 
-    confirmedProjectId = negotiate.confirmedProjectId;
-
-    if (negotiate.status === "id_mismatch") {
-      log(`  Server found existing project with different ID. Adopting: ${confirmedProjectId}`);
-    }
-
-    log(`  Project confirmed: ${negotiate.projectName} (${confirmedProjectId.slice(0, 12)}...)`);
-
-    // Initialize or update cache
-    const now = new Date().toISOString();
-    if (!cache) {
-      cache = {
-        projectId,
-        serverUrl,
-        confirmedProjectId,
-        lastCommitSha: null,
-        lastBranchSyncAt: null,
-        lastDocSyncAt: null,
-        docHashes: {},
-        qualified: false,
-        initializedAt: now,
-        updatedAt: now,
-      };
-      upsertProjectLinkCache(db, cache);
-    } else {
-      cache.confirmedProjectId = confirmedProjectId;
-      cache.updatedAt = now;
-      upsertProjectLinkCache(db, cache);
-    }
-  } else {
-    log(`  Project confirmed: ${projectName} (${confirmedProjectId.slice(0, 12)}...)`);
+  if (negotiate.status === "id_mismatch") {
+    log(`  Server found existing project with different ID. Adopting: ${confirmedProjectId}`);
   }
 
-  // At this point cache is guaranteed non-null: either loaded from DB
-  // (else branch) or freshly created (if branch). Assert for TypeScript.
+  log(`  Project confirmed: ${negotiate.projectName} (${confirmedProjectId.slice(0, 12)}...)`);
+
+  // Initialize or update cache. The cache key remains the local project ID;
+  // confirmedProjectId is only the latest server ID seen for this login.
+  const now = new Date().toISOString();
+  if (!cache) {
+    cache = {
+      projectId,
+      serverUrl,
+      confirmedProjectId,
+      lastCommitSha: null,
+      lastBranchSyncAt: null,
+      lastDocSyncAt: null,
+      docHashes: {},
+      qualified: false,
+      initializedAt: now,
+      updatedAt: now,
+    };
+    upsertProjectLinkCache(db, cache);
+  } else {
+    cache.confirmedProjectId = confirmedProjectId;
+    if (serverProjectChanged) {
+      log("  Server project changed for this login; resetting cached sync markers.");
+      cache.lastCommitSha = null;
+      cache.lastBranchSyncAt = null;
+      cache.lastDocSyncAt = null;
+      cache.docHashes = {};
+      cache.qualified = false;
+    }
+    cache.updatedAt = now;
+    upsertProjectLinkCache(db, cache);
+  }
+
+  // At this point cache is guaranteed non-null: either loaded from DB or freshly created.
   if (!cache) {
     throw new Error("Internal error: project link cache not initialized after negotiate");
   }
 
-  // Use the confirmed project ID for all subsequent API calls
-  const effectiveProjectId = confirmedProjectId;
+  // Keep using the client-local ID for API requests. The server resolves it
+  // with the authenticated user to the cloud project ID.
+  const localProjectId = projectId;
+  const serverProjectId = confirmedProjectId;
   endStep("Negotiate project ID", step1Start);
 
   // ──────────────────────────────────────────────────────────
@@ -185,7 +192,7 @@ export async function linkCommand(
       const initResponse = await client.post<LinkInitResponse>(
         "/api/project-link/init",
         {
-          projectId: effectiveProjectId,
+          localProjectId,
           remoteUrl,
           defaultBranch,
           branches: allBranches.map((b) => ({
@@ -233,7 +240,7 @@ export async function linkCommand(
         const response = await client.post<CommitUploadResponse>(
           "/api/project-link/commits",
           {
-            projectId: effectiveProjectId,
+            localProjectId,
             sinceCommitSha: null,
             commits: batch.map((c) => ({
               sha: c.sha,
@@ -257,7 +264,7 @@ export async function linkCommand(
 
       // Update cache with latest commit SHA
       if (commits.length > 0) {
-        updateCachedCommitSha(db, effectiveProjectId, serverUrl, commits[0].sha);
+        updateCachedCommitSha(db, localProjectId, serverUrl, commits[0].sha);
         cache.lastCommitSha = commits[0].sha;
       }
 
@@ -270,7 +277,7 @@ export async function linkCommand(
         ...cache.docHashes,
         [REFS_FINGERPRINT_CACHE_KEY]: refsFingerprint,
       };
-      updateCachedMetadata(db, effectiveProjectId, serverUrl, docHashes);
+      updateCachedMetadata(db, localProjectId, serverUrl, docHashes);
       cache.docHashes = docHashes;
     }
   } else {
@@ -352,7 +359,7 @@ export async function linkCommand(
       const response = await client.post<DocumentUploadResponse>(
         "/api/project-link/documents",
         {
-          projectId: effectiveProjectId,
+          localProjectId,
           documents: toUpload.map((d) => ({
             fileName: d.fileName,
             sourcePath: d.sourcePath,
@@ -371,7 +378,7 @@ export async function linkCommand(
       for (const doc of discoveredDocs) {
         newHashes[doc.sourcePath] = doc.contentHash;
       }
-      updateCachedDocHashes(db, effectiveProjectId, serverUrl, newHashes);
+      updateCachedDocHashes(db, localProjectId, serverUrl, newHashes);
       cache.docHashes = newHashes;
     }
   } else {
@@ -391,7 +398,7 @@ export async function linkCommand(
   if (!options.skipDocs && !options.dryRun && !options.skipQualify) {
     log("\n[Step 5/6] Checking document quality...");
 
-    const qualifyResult = await checkQuality(client, effectiveProjectId);
+    const qualifyResult = await checkQuality(client, localProjectId);
     qualified = qualifyResult.qualified;
     score = qualifyResult.score;
 
@@ -413,7 +420,7 @@ export async function linkCommand(
       log(`  ${qualifyResult.feedback.summaryPrompt}`);
     }
 
-    updateCachedQualified(db, effectiveProjectId, serverUrl, qualified);
+    updateCachedQualified(db, localProjectId, serverUrl, qualified);
     cache.qualified = qualified;
   } else {
     log("\n[Step 5/6] Skipping quality check");
@@ -444,7 +451,9 @@ export async function linkCommand(
   log("══════════════════════════════════════════");
 
   return {
-    projectId: effectiveProjectId,
+    projectId: serverProjectId,
+    localProjectId,
+    serverProjectId,
     projectName,
     serverUrl,
     branchCount,

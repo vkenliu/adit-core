@@ -350,7 +350,7 @@ describe("SyncEngine", () => {
       );
     });
 
-    it("passes projectId as query param to getRemoteStatus", async () => {
+    it("passes localProjectId as query param to getRemoteStatus", async () => {
       const { engine, mockClient } = createEngine();
       mockBatchRecordCount.mockReturnValue(0);
       mockBuildSyncBatch.mockReturnValue({ events: [], sessions: [] } as never);
@@ -358,7 +358,7 @@ describe("SyncEngine", () => {
       await engine.sync();
 
       expect(mockClient.get).toHaveBeenCalledWith(
-        expect.stringContaining("projectId=proj-001"),
+        expect.stringContaining("localProjectId=proj-001"),
       );
     });
   });
