@@ -116,7 +116,7 @@ export async function initCommand(opts: {
     if (platforms.length === 0) {
       console.log("  [ ] No AI platforms detected in this project.");
       console.log("      Supported: Claude Code (.claude/), OpenCode (.opencode/)");
-      console.log("      Run 'adit plugin install <platform>' to add one manually.");
+      console.log("      Run 'adit hook install <platform>' to add one manually.");
     } else {
       for (const platform of platforms) {
         try {
@@ -215,12 +215,12 @@ export async function initCommand(opts: {
     console.log("  Done! ADIT is ready.");
     console.log();
     console.log(`  Installed for: ${installed.join(", ")}`);
-    console.log("  Run 'adit list' to view the timeline after your first prompt.");
+    console.log("  Run 'adit timeline' to view the timeline after your first prompt.");
   } else {
     console.log("  Done! ADIT data directory is ready.");
     console.log();
     console.log("  No platform hooks were installed.");
-    console.log("  Run 'adit plugin install <platform>' when you're ready to add one.");
+    console.log("  Run 'adit hook install <platform>' when you're ready to add one.");
   }
   if (skipped.length > 0) {
     console.log(`  Skipped: ${skipped.join(", ")}`);

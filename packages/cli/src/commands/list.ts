@@ -1,5 +1,5 @@
 /**
- * `adit list` — Show timeline entries.
+ * `adit timeline` — Show timeline entries.
  *
  * Displays a compact, token-efficient table of recent events.
  */

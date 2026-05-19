@@ -37,7 +37,7 @@ export async function completeCliHandler(
   if (!credentials) {
     console.error("Not logged in to adit-cloud.");
     console.error(
-      "Run 'adit cloud login' to authenticate, or 'adit cloud auth-token <token>' for token auth.",
+      "Run 'adit cloud login' to authenticate, or 'adit cloud login --token <token>' for token auth.",
     );
     process.exitCode = 1;
     return;

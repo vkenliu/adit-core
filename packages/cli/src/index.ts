@@ -73,6 +73,7 @@ export function createProgram(): Command {
     .name("adit")
     .description("AI Development Intent Tracker — The Transparent Time Machine")
     .version(CLI_VERSION);
+  configureTopLevelHelp(program);
 
   program
     .command("init")
@@ -94,8 +95,8 @@ export function createProgram(): Command {
     );
 
   program
-    .command("list")
-    .alias("ls")
+    .command("timeline")
+    .aliases(["list", "ls"])
     .description("Show timeline entries")
     .option("-l, --limit <n>", "Number of entries to show", "20")
     .option("-a, --actor <actor>", "Filter by actor (assistant|user|tool)")
@@ -219,53 +220,14 @@ export function createProgram(): Command {
     .option("--json", "Output as JSON")
     .action((opts) => configCommand({ json: opts.json }));
 
-  // Plugin management
-  const pluginCmd = program
-    .command("plugin")
-    .description("Manage platform plugin integrations");
+  // Hook management
+  registerHookCommands(
+    program
+      .command("hook")
+      .description("Manage platform hook integrations"),
+  );
 
-  pluginCmd
-    .command("install [platform]")
-    .description("Install ADIT hooks for a platform")
-    .option("--json", "Output as JSON")
-    .action((platform, opts) =>
-      pluginInstallCommand(platform, { json: opts.json }),
-    );
-
-  pluginCmd
-    .command("uninstall [platform]")
-    .description("Remove ADIT hooks for a platform")
-    .option("-a, --all", "Uninstall hooks for all installed platforms")
-    .option("--clean", "Also remove the .adit/ data directory")
-    .option("--json", "Output as JSON")
-    .action((platform, opts) =>
-      pluginUninstallCommand(platform, {
-        json: opts.json,
-        all: opts.all,
-        clean: opts.clean,
-      }),
-    );
-
-  pluginCmd
-    .command("list")
-    .description("List available platform adapters")
-    .option("--json", "Output as JSON")
-    .action((opts) => pluginListCommand({ json: opts.json }));
-
-  pluginCmd
-    .command("validate [platform]")
-    .description("Validate platform plugin installation")
-    .option("--json", "Output as JSON")
-    .action((platform, opts) =>
-      pluginValidateCommand(platform, { json: opts.json }),
-    );
-
-  // Project lifecycle
-  const projectCmd = program
-    .command("project")
-    .description("Manage ADIT for the current project");
-
-  projectCmd
+  program
     .command("uninstall")
     .description("Uninstall ADIT from the current project")
     .option("-y, --yes", "Skip confirmation")
@@ -279,9 +241,14 @@ export function createProgram(): Command {
 
   cloudCmd
     .command("login")
-    .description("Authenticate with adit-cloud via device code flow")
+    .description("Authenticate with adit-cloud")
     .option("-s, --server <url>", "Cloud server URL")
-    .action((opts) => cloudLoginCommand({ server: opts.server }));
+    .option("--token <token>", "Authenticate with a static JWT token")
+    .action((opts) =>
+      opts.token
+        ? cloudAuthTokenCommand(opts.token, { server: opts.server })
+        : cloudLoginCommand({ server: opts.server }),
+    );
 
   cloudCmd
     .command("logout")
@@ -300,16 +267,15 @@ export function createProgram(): Command {
     .option("--json", "Output as JSON")
     .action((opts) => cloudStatusCommand({ json: opts.json }));
 
-  cloudCmd
-    .command("reset-credentials")
+  const cloudAuthCmd = cloudCmd
+    .command("auth")
+    .description("Manage cloud authentication");
+
+  cloudAuthCmd
+    .command("reset")
     .description("Force-clear all credentials and sync state")
     .option("-y, --yes", "Skip confirmation")
     .action((opts) => cloudResetCredentialsCommand({ yes: opts.yes }));
-
-  cloudCmd
-    .command("auth-token <token>")
-    .description("Authenticate with a static JWT token")
-    .action((token) => cloudAuthTokenCommand(token));
 
   registerCloudCliAgentCommands(cloudCmd);
 
@@ -393,24 +359,27 @@ export function createProgram(): Command {
       }),
     );
 
-  // Database management
-  const dbCmd = program
-    .command("db")
-    .description("Database management commands");
+  // Debug and maintenance commands
+  const debugCmd = program
+    .command("debug")
+    .description("Debug and maintenance commands");
 
-  dbCmd
+  const debugDbCmd = debugCmd
+    .command("db")
+    .description("Debug database commands");
+
+  debugDbCmd
     .command("clear-events")
     .description("Delete all local events, sessions, diffs, and env snapshots")
     .option("-y, --yes", "Skip confirmation")
     .option("--json", "Output as JSON")
     .action((opts) => dbClearEventsCommand({ yes: opts.yes, json: opts.json }));
 
-  // Performance stats
-  const perfCmd = program
+  const debugPerfCmd = debugCmd
     .command("perf")
-    .description("Performance stats for hook and git operations");
+    .description("Debug performance commands");
 
-  perfCmd
+  debugPerfCmd
     .command("stats")
     .description("Show performance stats report")
     .option("--from <date>", "Start date (YYYY-MM-DD)")
@@ -429,7 +398,7 @@ export function createProgram(): Command {
       }),
     );
 
-  perfCmd
+  debugPerfCmd
     .command("clear")
     .description("Clear all performance logs")
     .option("--json", "Output as JSON")
@@ -560,6 +529,80 @@ export function createProgram(): Command {
   registerNestedHelpCommand(program);
 
   return program;
+}
+
+function registerHookCommands(hookCmd: Command): void {
+  hookCmd
+    .command("install [platform]")
+    .description("Install ADIT hooks for a platform")
+    .option("--json", "Output as JSON")
+    .action((platform, opts) =>
+      pluginInstallCommand(platform, { json: opts.json }),
+    );
+
+  hookCmd
+    .command("uninstall [platform]")
+    .description("Remove ADIT hooks for a platform")
+    .option("-a, --all", "Uninstall hooks for all installed platforms")
+    .option("--clean", "Also remove the .adit/ data directory")
+    .option("--json", "Output as JSON")
+    .action((platform, opts) =>
+      pluginUninstallCommand(platform, {
+        json: opts.json,
+        all: opts.all,
+        clean: opts.clean,
+      }),
+    );
+
+  hookCmd
+    .command("list")
+    .description("List available platform adapters")
+    .option("--json", "Output as JSON")
+    .action((opts) => pluginListCommand({ json: opts.json }));
+
+  hookCmd
+    .command("validate [platform]")
+    .description("Validate platform hook installation")
+    .option("--json", "Output as JSON")
+    .action((platform, opts) =>
+      pluginValidateCommand(platform, { json: opts.json }),
+    );
+}
+
+function configureTopLevelHelp(program: Command): void {
+  program.helpInformation = () => formatTopLevelHelp();
+}
+
+function formatTopLevelHelp(): string {
+  return `Usage: adit [options] [command]
+
+AI Development Intent Tracker
+
+Options:
+  -V, --version              output the version number
+  -h, --help                 display help for command
+
+Commands:
+  init [options]             Initialize ADIT in the current project
+  uninstall [options]        Uninstall ADIT from the current project
+
+  status [options]           Show project status
+  timeline|list [options]    Show local timeline entries
+  show <id>                  Show full event details
+  search [options] <query>   Search timeline events
+
+  snapshot                   Manage checkpoints, diffs, and environment snapshots
+  cloud                      Sync and connect with adit-cloud
+  hook                       Manage AI platform hook integrations
+  docs                       Scaffold and validate project documents
+  export                     Export event or session data
+
+  doctor [options]           Validate installation health
+  tui                        Launch the interactive terminal UI
+  self-update [options]      Update ADIT
+  debug                      Debug and maintenance commands
+  help [command...]          display help for command
+`;
 }
 
 function registerNestedHelpCommand(program: Command): void {

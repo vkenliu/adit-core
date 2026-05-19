@@ -2,7 +2,7 @@
  * `adit project` — Project-level lifecycle commands.
  *
  * These commands manage ADIT's local footprint for the current git project,
- * above the lower-level per-platform plugin hooks.
+ * above the lower-level per-platform hooks.
  */
 
 import { existsSync, rmSync } from "node:fs";
