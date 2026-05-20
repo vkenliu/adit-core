@@ -297,6 +297,44 @@ describe("dispatchHook", () => {
     );
   });
 
+  it("skips empty notification events", async () => {
+    const input: NormalizedHookInput = {
+      cwd: "/test",
+      hookType: "notification",
+    };
+
+    await dispatchHook(input);
+
+    expect(mockRecordEvent).not.toHaveBeenCalled();
+  });
+
+  it("records tool notification metadata when message fields are missing", async () => {
+    const input: NormalizedHookInput = {
+      cwd: "/test",
+      hookType: "notification",
+      toolName: "Bash",
+      toolInput: { command: "git status" },
+      toolOutput: { stdout: "clean" },
+    };
+
+    await dispatchHook(input);
+
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "sess-001",
+        eventType: "notification",
+        actor: "system",
+        responseText: "Tool Bash completed",
+        toolName: "Bash",
+        toolInputJson: JSON.stringify({
+          toolName: "Bash",
+          toolInput: { command: "git status" },
+        }),
+        toolOutputJson: JSON.stringify({ stdout: "clean" }),
+      }),
+    );
+  });
+
   it("routes task-completed and records event", async () => {
     const input: NormalizedHookInput = {
       cwd: "/test",

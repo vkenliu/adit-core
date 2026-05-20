@@ -477,6 +477,33 @@ describe("Codex CLI Hook Chaining", () => {
         rawPlatformData: raw
       });
     });
+
+    it("parses PostToolUse camelCase tool aliases", () => {
+      const raw = {
+        session_id: "session123",
+        toolName: "Bash",
+        toolInput: { command: "git status" },
+        toolResponse: { output: "clean" },
+        cwd: "/project"
+      };
+
+      const result = codexAdapter.parseInput(raw, "PostToolUse");
+
+      expect(result).toEqual({
+        cwd: "/project",
+        hookType: "notification",
+        platformCli: "codex",
+        platformSessionId: "session123",
+        toolName: "Bash",
+        toolInput: { command: "git status" },
+        toolOutput: { output: "clean" },
+        permissionMode: undefined,
+        model: undefined,
+        sessionSource: undefined,
+        sessionEndReason: undefined,
+        rawPlatformData: raw
+      });
+    });
   });
 
   describe("generateHookConfig", () => {

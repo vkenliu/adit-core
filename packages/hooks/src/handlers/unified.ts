@@ -341,20 +341,51 @@ async function handleTaskCompleted(ctx: HookContext, input: NormalizedHookInput)
 async function handleNotification(ctx: HookContext, input: NormalizedHookInput): Promise<void> {
   const timeline = createTimelineManager(ctx.db, ctx.config);
 
+  const message = nonEmptyString(input.notificationMessage);
+  const title = nonEmptyString(input.notificationTitle);
+  const notificationType = nonEmptyString(input.notificationType);
+  const toolName = nonEmptyString(input.toolName);
+  const hasToolInput = hasObjectContent(input.toolInput);
+  const hasToolOutput = hasObjectContent(input.toolOutput);
+
+  if (!message && !title && !notificationType && !toolName && !hasToolInput && !hasToolOutput) {
+    return;
+  }
+
   const base: Record<string, unknown> = {
-    message: input.notificationMessage,
-    title: input.notificationTitle,
-    notificationType: input.notificationType,
+    message,
+    title,
+    notificationType,
+    toolName,
+    toolInput: hasToolInput ? input.toolInput : undefined,
   };
+  const responseText =
+    message ??
+    title ??
+    (toolName
+      ? `Tool ${toolName} completed`
+      : notificationType
+        ? `Notification: ${notificationType}`
+        : "Tool notification");
 
   await timeline.recordEvent({
     sessionId: ctx.session.id,
     eventType: "notification",
     actor: "system",
-    responseText: input.notificationMessage ?? "Notification",
-    toolName: input.notificationType ?? null,
+    responseText,
+    toolName: notificationType ?? toolName ?? null,
     toolInputJson: JSON.stringify(base),
+    toolOutputJson: hasToolOutput ? JSON.stringify(input.toolOutput) : null,
   });
+}
+
+function nonEmptyString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function hasObjectContent(value: Record<string, unknown> | undefined): boolean {
+  return value != null && Object.keys(value).length > 0;
 }
 
 /** Handle subagent start — record when a subagent is spawned */
