@@ -779,6 +779,40 @@ describe("CodexCliProvider takeover", () => {
     provider.stop();
   });
 
+  it("preserves leading spaces in Codex app-server text deltas", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    await provider.takeover();
+    mocks.appServerOptions?.onNotification?.({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "019e2110-d96f-7e40-882e-b524fa9148e4",
+        itemId: "item-1",
+        delta: " Let's",
+      },
+    });
+    mocks.appServerOptions?.onNotification?.({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "019e2110-d96f-7e40-882e-b524fa9148e4",
+        itemId: "item-1",
+        delta: " analyze",
+      },
+    });
+    await tick();
+
+    expect(events.filter((event) => event.type === "assistant-delta").map((event) => event.payload.text))
+      .toEqual([" Let's", " analyze"]);
+
+    provider.stop();
+  });
+
   it("keeps Codex context usage scoped to the selected thread", async () => {
     const provider = new CodexCliProvider({
       bin: "codex",

@@ -872,7 +872,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     }
 
     if (method === "item/agentMessage/delta" || method === "item/plan/delta") {
-      const text = readString(params.delta);
+      const text = readDeltaString(params.delta);
       const sessionId = readString(params.threadId);
       const messageId = readString(params.itemId);
       if (text && sessionId && messageId) {
@@ -889,7 +889,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     }
 
     if (method === "item/reasoning/textDelta" || method === "item/reasoning/summaryTextDelta") {
-      const text = readString(params.delta);
+      const text = readDeltaString(params.delta);
       const sessionId = readString(params.threadId);
       const messageId = readString(params.itemId);
       if (text && sessionId && messageId) {
@@ -1631,6 +1631,10 @@ export function codexTurnModeOverrides(
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function readDeltaString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
