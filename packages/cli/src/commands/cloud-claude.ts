@@ -15,6 +15,7 @@ import { resolveExecutable } from "./cli-agent/cli-process.js";
 import { ClaudeTranscriptSync } from "./cli-agent/claude-transcript-sync.js";
 import {
   cleanupStaleClaudeCloudSettings,
+  ensurePersistentClaudeHooksInstalled,
   installClaudeHooks,
   type InstalledHooks,
 } from "./cli-agent/hooks-bootstrap.js";
@@ -273,6 +274,19 @@ export async function cloudClaudeCommand(opts?: CloudClaudeOptions): Promise<voi
   const transcriptSync = new ClaudeTranscriptSync();
 
   try {
+    try {
+      const installedPersistentHooks = await ensurePersistentClaudeHooksInstalled({
+        cwd: config.projectRoot,
+      });
+      if (installedPersistentHooks) {
+        console.log("Installed ADIT Claude Code hooks for local timeline tracking.");
+      }
+    } catch (error) {
+      console.error(
+        `[adit cloud claude] warning: failed to install persistent ADIT Claude Code hooks: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+
     await cleanupStaleClaudeCloudSettings({ cwd: config.projectRoot });
     hookServer = await startCliAgentHookServer();
     const hookSettingsPath = join(

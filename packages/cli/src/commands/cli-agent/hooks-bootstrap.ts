@@ -4,7 +4,10 @@ import { connect } from "node:net";
 import {
   ADIT_CLOUD_CODEX_HOOK_TRUST_BLOCK,
   buildCodexHookStatesForEntries,
+  claudeCodeAdapter,
+  codexAdapter,
   installCodexHookTrustConfig,
+  resolveAditHookBinary,
 } from "@varveai/adit-hooks/adapters";
 
 const EVENTS = [
@@ -29,6 +32,34 @@ interface CodexHookEntry {
 export interface InstalledHooks {
   settingsPath: string;
   cleanup: () => void;
+}
+
+export async function ensurePersistentCodexHooksInstalled(opts: {
+  cwd: string;
+  aditHookBinary?: string;
+}): Promise<boolean> {
+  const validation = await codexAdapter.validateInstallation(opts.cwd);
+  if (validation.valid) return false;
+
+  await codexAdapter.installHooks(
+    opts.cwd,
+    opts.aditHookBinary ?? resolveAditHookBinary(),
+  );
+  return true;
+}
+
+export async function ensurePersistentClaudeHooksInstalled(opts: {
+  cwd: string;
+  aditHookBinary?: string;
+}): Promise<boolean> {
+  const validation = await claudeCodeAdapter.validateInstallation(opts.cwd);
+  if (validation.valid) return false;
+
+  await claudeCodeAdapter.installHooks(
+    opts.cwd,
+    opts.aditHookBinary ?? resolveAditHookBinary(),
+  );
+  return true;
 }
 
 export async function cleanupStaleClaudeCloudSettings(opts: {

@@ -12,6 +12,8 @@ import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   cleanupStaleClaudeCloudSettings,
+  ensurePersistentClaudeHooksInstalled,
+  ensurePersistentCodexHooksInstalled,
   installClaudeHooks,
   installCodexHooks,
 } from "./hooks-bootstrap.js";
@@ -399,6 +401,121 @@ describe("installCodexHooks", () => {
 
       installed.cleanup();
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("ensurePersistentClaudeHooksInstalled", () => {
+  it("installs persistent ADIT Claude hooks when missing", async () => {
+    const dir = tempDir();
+    try {
+      const installed = await ensurePersistentClaudeHooksInstalled({
+        cwd: dir,
+        aditHookBinary: "node /tmp/adit-hook",
+      });
+
+      expect(installed).toBe(true);
+      const settings = readFileSync(join(dir, ".claude", "settings.local.json"), "utf8");
+
+      for (const hookType of [
+        "prompt-submit",
+        "stop",
+        "session-start",
+        "session-end",
+        "task-completed",
+        "notification",
+        "subagent-start",
+        "subagent-stop",
+      ]) {
+        expect(settings).toContain(`node /tmp/adit-hook --platform claude ${hookType}`);
+      }
+      expect(existsSync(join(dir, ".claude", "commands", "adit.md"))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not duplicate persistent Claude hooks when already installed", async () => {
+    const dir = tempDir();
+    try {
+      await ensurePersistentClaudeHooksInstalled({
+        cwd: dir,
+        aditHookBinary: "node /tmp/adit-hook",
+      });
+      const installedAgain = await ensurePersistentClaudeHooksInstalled({
+        cwd: dir,
+        aditHookBinary: "node /tmp/adit-hook",
+      });
+
+      const settings = readFileSync(join(dir, ".claude", "settings.local.json"), "utf8");
+      expect(installedAgain).toBe(false);
+      expect((settings.match(/node \/tmp\/adit-hook/gu) ?? []).length).toBe(8);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("ensurePersistentCodexHooksInstalled", () => {
+  it("installs persistent ADIT Codex hooks when missing", async () => {
+    const dir = tempDir();
+    const codexHome = join(dir, "codex-home");
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
+
+    try {
+      const installed = await ensurePersistentCodexHooksInstalled({
+        cwd: dir,
+        aditHookBinary: "node /tmp/adit-hook",
+      });
+
+      expect(installed).toBe(true);
+      const hooks = readFileSync(join(dir, ".codex", "hooks.json"), "utf8");
+      const config = readFileSync(join(dir, ".codex", "config.toml"), "utf8");
+      const userConfig = readFileSync(join(codexHome, "config.toml"), "utf8");
+
+      expect(hooks).toContain("node /tmp/adit-hook --platform codex session-start");
+      expect(hooks).toContain("node /tmp/adit-hook --platform codex prompt-submit");
+      expect(hooks).toContain("node /tmp/adit-hook --platform codex stop");
+      expect(hooks).toContain("node /tmp/adit-hook --platform codex notification");
+      expect(config).toContain("hooks = true");
+      expect(userConfig).toContain("# >>> adit-codex-hooks project=");
+    } finally {
+      if (previousCodexHome === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = previousCodexHome;
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not duplicate persistent hooks when already installed", async () => {
+    const dir = tempDir();
+    const codexHome = join(dir, "codex-home");
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
+
+    try {
+      await ensurePersistentCodexHooksInstalled({
+        cwd: dir,
+        aditHookBinary: "node /tmp/adit-hook",
+      });
+      const installedAgain = await ensurePersistentCodexHooksInstalled({
+        cwd: dir,
+        aditHookBinary: "node /tmp/adit-hook",
+      });
+
+      const hooks = readFileSync(join(dir, ".codex", "hooks.json"), "utf8");
+      expect(installedAgain).toBe(false);
+      expect((hooks.match(/node \/tmp\/adit-hook/gu) ?? []).length).toBe(4);
+    } finally {
+      if (previousCodexHome === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = previousCodexHome;
+      }
       rmSync(dir, { recursive: true, force: true });
     }
   });
