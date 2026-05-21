@@ -183,6 +183,62 @@ describe("ClaudeCodeProvider abort", () => {
 
     provider.stop();
   });
+
+  it("marks a pending tool permission as errored when the run is aborted", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const sessionId = "11111111-1111-1111-1111-111111111111";
+    const provider = new ClaudeCodeProvider({
+      bin: "claude",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    try {
+      provider.noteLocalSession(sessionId);
+      await provider.takeover();
+      await provider.sendPrompt("edit aaa.md", { mode: "plan" });
+
+      const remoteCall = mocks.query.mock.calls.find(([input]) =>
+        (input as { options?: { includePartialMessages?: boolean } }).options?.includePartialMessages === true
+      );
+      const canUseTool = (remoteCall?.[0] as {
+        options?: {
+          canUseTool?: (
+            toolName: string,
+            input: Record<string, unknown>,
+            options: { toolUseID: string; signal: AbortSignal },
+          ) => Promise<unknown>;
+        };
+      }).options?.canUseTool;
+      expect(canUseTool).toBeTypeOf("function");
+
+      const toolSignal = new AbortController();
+      const permission = canUseTool?.("Edit", { file_path: "aaa.md" }, {
+        toolUseID: "tool-1",
+        signal: toolSignal.signal,
+      });
+      await tick();
+      expect(provider.permissions).toHaveLength(1);
+
+      await provider.abort();
+      await expect(permission).rejects.toThrow("Claude run aborted");
+
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "tool",
+        payload: expect.objectContaining({
+          sessionId,
+          toolUseId: "tool-1",
+          toolName: "Edit",
+          input: { file_path: "aaa.md" },
+          error: "Claude run aborted",
+          status: "error",
+        }),
+      }));
+    } finally {
+      provider.stop();
+    }
+  });
 });
 
 describe("ClaudeCodeProvider takeover", () => {
