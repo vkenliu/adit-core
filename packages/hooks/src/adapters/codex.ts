@@ -49,6 +49,30 @@ const PLATFORM_TO_ADIT: Record<string, AditHookType> = Object.fromEntries(
   HOOK_MAPPINGS.map((m) => [m.platformEvent, m.aditHandler]),
 ) as Record<string, AditHookType>;
 
+function readStringField(
+  raw: Record<string, unknown>,
+  ...keys: string[]
+): string | undefined {
+  for (const key of keys) {
+    const value = raw[key];
+    if (typeof value === "string") return value;
+  }
+  return undefined;
+}
+
+function readObjectField(
+  raw: Record<string, unknown>,
+  ...keys: string[]
+): Record<string, unknown> | undefined {
+  for (const key of keys) {
+    const value = raw[key];
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      return value as Record<string, unknown>;
+    }
+  }
+  return undefined;
+}
+
 export const codexAdapter: PlatformAdapter = {
   platform: "codex" as Platform,
   displayName: "Codex",
@@ -71,9 +95,16 @@ export const codexAdapter: PlatformAdapter = {
       lastAssistantMessage: raw.last_assistant_message as string | undefined,
       stopHookActive: raw.stop_hook_active as boolean | undefined,
       // Tool use (from PostToolUse)
-      toolName: raw.tool_name as string | undefined,
-      toolInput: raw.tool_input as Record<string, unknown> | undefined,
-      toolOutput: raw.tool_response as Record<string, unknown> | undefined,
+      toolName: readStringField(raw, "tool_name", "toolName", "tool", "name"),
+      toolInput: readObjectField(raw, "tool_input", "toolInput", "input"),
+      toolOutput: readObjectField(
+        raw,
+        "tool_response",
+        "toolResponse",
+        "tool_output",
+        "toolOutput",
+        "output",
+      ),
       // Session lifecycle
       sessionSource: raw.source as string | undefined,
       sessionEndReason: raw.reason as string | undefined,

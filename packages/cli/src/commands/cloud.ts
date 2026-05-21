@@ -6,7 +6,7 @@
  *   logout            — Clear stored credentials
  *   sync              — Push unsynced records to cloud
  *   status            — Show sync state and unsynced count
- *   reset-credentials — Force-clear all credentials and sync state
+ *   auth reset        — Force-clear all credentials and sync state
  */
 
 import { loadConfig, openDatabase, closeDatabase } from "@varveai/adit-core";
@@ -53,7 +53,7 @@ export async function cloudLoginCommand(opts?: {
       "A client can only be connected to one cloud server at a time.",
     );
     console.error(
-      "Run 'adit cloud reset-credentials' first to disconnect, then try again.",
+      "Run 'adit cloud auth reset' first to disconnect, then try again.",
     );
     process.exitCode = 1;
     return;
@@ -176,7 +176,7 @@ export async function cloudSyncCommand(opts?: {
 
   if (!credentials) {
     const msg =
-      "Not logged in. Run 'adit cloud login' or 'adit cloud auth-token <jwt>' first.";
+      "Not logged in. Run 'adit cloud login' or 'adit cloud login --token <jwt>' first.";
     if (opts?.json) {
       console.log(JSON.stringify({ error: msg }));
     } else {
@@ -478,14 +478,16 @@ export async function cloudStatusCommand(opts?: {
 }
 
 /**
- * `adit cloud auth-token <token>` — Authenticate with a static JWT token.
+ * `adit cloud login --token <token>` — Authenticate with a static JWT token.
  *
  * Server URL: ADIT_CLOUD_URL env > DEFAULT_SERVER_URL.
- * If device-code (login) credentials already exist, rejects —
- * login credentials take priority.
  */
-export async function cloudAuthTokenCommand(token: string): Promise<void> {
-  const serverUrl = process.env.ADIT_CLOUD_URL ?? DEFAULT_SERVER_URL;
+export async function cloudAuthTokenCommand(
+  token: string,
+  opts?: { server?: string },
+): Promise<void> {
+  const serverUrl =
+    opts?.server ?? process.env.ADIT_CLOUD_URL ?? DEFAULT_SERVER_URL;
   const config = loadConfig();
 
   // If device (login) credentials already exist, warn but allow override
@@ -550,7 +552,7 @@ export async function cloudAuthTokenCommand(token: string): Promise<void> {
 }
 
 /**
- * `adit cloud reset-credentials` — Force-clear all credentials and sync state.
+ * `adit cloud auth reset` — Force-clear all credentials and sync state.
  *
  * Unlike logout, this does not attempt to revoke the token on the server.
  * It simply wipes all local credential and sync state, allowing the client

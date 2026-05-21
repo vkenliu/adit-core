@@ -42,25 +42,75 @@ describe("CLI help", () => {
     const help = createProgram().helpInformation();
 
     expect(help).toContain("cloud");
+    expect(help).toContain("debug");
     expect(help).toContain("docs");
-    expect(help).toContain("project");
+    expect(help).toContain("hook");
     expect(help).toContain("self-update [options]");
+    expect(help).toContain("timeline|list [options]");
+    expect(help).toContain("uninstall [options]");
     expect(help).toContain("help [command...]");
+    expect(help).not.toMatch(/^  db\s/m);
+    expect(help).not.toMatch(/^  perf\s/m);
+    expect(help).not.toMatch(/^  project\s/m);
   });
 
-  it("lists project uninstall command", () => {
-    const projectHelp = findCommand(createProgram(), "project").helpInformation();
+  it("lists top-level uninstall command", () => {
+    const program = createProgram();
+    const uninstallHelp = findCommand(program, "uninstall").helpInformation();
 
-    expect(projectHelp).toContain("uninstall [options]");
+    expect(uninstallHelp).toContain("Usage: adit uninstall [options]");
+  });
+
+  it("lists hook integration commands", () => {
+    const hookHelp = findCommand(createProgram(), "hook").helpInformation();
+
+    expect(hookHelp).toContain("install [options] [platform]");
+    expect(hookHelp).toContain("uninstall [options] [platform]");
+    expect(hookHelp).toContain("list [options]");
+    expect(hookHelp).toContain("validate [options] [platform]");
+  });
+
+  it("keeps timeline aliases available", () => {
+    const timelineCommand = findCommand(createProgram(), "timeline");
+
+    expect(timelineCommand.aliases()).toEqual(["list", "ls"]);
+    expect(findCommand(createProgram(), "ls").name()).toBe("timeline");
   });
 
   it("lists cloud coding and project commands", () => {
     const cloudHelp = findCommand(createProgram(), "cloud").helpInformation();
 
+    expect(cloudHelp).toContain("auth");
     expect(cloudHelp).toContain("claude [options] [cliArgs...]");
     expect(cloudHelp).toContain("codex [options] [cliArgs...]");
     expect(cloudHelp).toContain("link [options]");
     expect(cloudHelp).toContain("intent [options]");
+  });
+
+  it("lists token login and auth reset commands", () => {
+    const program = createProgram();
+    const loginHelp = findCommand(program, "cloud", "login").helpInformation();
+    const authHelp = findCommand(program, "cloud", "auth").helpInformation();
+
+    expect(loginHelp).toContain("--token <token>");
+    expect(authHelp).toContain("reset [options]");
+  });
+
+  it("lists debug maintenance commands", () => {
+    const program = createProgram();
+    const debugHelp = findCommand(program, "debug").helpInformation();
+    const debugDbHelp = findCommand(program, "debug", "db").helpInformation();
+    const debugPerfHelp = findCommand(
+      program,
+      "debug",
+      "perf",
+    ).helpInformation();
+
+    expect(debugHelp).toContain("db");
+    expect(debugHelp).toContain("perf");
+    expect(debugDbHelp).toContain("clear-events [options]");
+    expect(debugPerfHelp).toContain("stats [options]");
+    expect(debugPerfHelp).toContain("clear [options]");
   });
 
   it("documents the actual intent completion syntax", () => {

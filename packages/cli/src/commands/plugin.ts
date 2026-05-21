@@ -1,5 +1,5 @@
 /**
- * `adit plugin` — Platform plugin management commands.
+ * `adit hook` — Platform hook management commands.
  *
  * Install, uninstall, list, and validate ADIT integrations
  * for different AI platforms. All commands auto-detect which
@@ -33,7 +33,7 @@ function resolveProjectRoot(): string {
   return findGitRoot(config.projectRoot) ?? config.projectRoot;
 }
 
-/** adit plugin install [platform] */
+/** adit hook install [platform] */
 export async function pluginInstallCommand(
   platformArg?: string,
   opts?: { json?: boolean },
@@ -75,9 +75,9 @@ export async function pluginInstallCommand(
       console.log("    Gemini CLI            →  .gemini/");
       console.log();
       console.log("  To install for a specific platform:");
-      console.log("    adit plugin install claude-code");
-      console.log("    adit plugin install claude-vscode");
-      console.log("    adit plugin install opencode");
+      console.log("    adit hook install claude-code");
+      console.log("    adit hook install claude-vscode");
+      console.log("    adit hook install opencode");
       console.log();
     }
     return;
@@ -193,7 +193,7 @@ async function installSinglePlatform(
   }
 }
 
-/** adit plugin uninstall [platform] */
+/** adit hook uninstall [platform] */
 export async function pluginUninstallCommand(
   platformArg?: string,
   opts?: { json?: boolean; all?: boolean; clean?: boolean },
@@ -412,7 +412,7 @@ async function uninstallSinglePlatform(
   }
 }
 
-/** adit plugin list */
+/** adit hook list */
 export async function pluginListCommand(
   opts?: { json?: boolean },
 ): Promise<void> {
@@ -479,7 +479,7 @@ export async function pluginListCommand(
   console.log();
 }
 
-/** adit plugin validate [platform] */
+/** adit hook validate [platform] */
 export async function pluginValidateCommand(
   platformArg?: string,
   opts?: { json?: boolean },
@@ -504,7 +504,7 @@ export async function pluginValidateCommand(
     } else {
       console.log();
       console.log("  No AI platforms detected in this project.");
-      console.log("  Run 'adit plugin validate <platform>' for a specific platform.");
+      console.log("  Run 'adit hook validate <platform>' for a specific platform.");
       console.log();
     }
     return;
@@ -565,7 +565,7 @@ async function validateSinglePlatform(
   }
 
   console.log();
-  console.log(`  Plugin validation: ${adapter.displayName}`);
+  console.log(`  Hook validation: ${adapter.displayName}`);
   console.log();
   for (const check of result.checks) {
     const symbol = check.ok ? "+" : "x";

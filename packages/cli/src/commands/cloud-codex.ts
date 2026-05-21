@@ -13,7 +13,11 @@ import {
 import { CodexCliProvider } from "./cli-agent/codex-cli-provider.js";
 import { resolveExecutable, spawnCliSync } from "./cli-agent/cli-process.js";
 import { CodexRelayEventDeduper, CodexTranscriptSync } from "./cli-agent/codex-transcript-sync.js";
-import { installCodexHooks, type InstalledHooks } from "./cli-agent/hooks-bootstrap.js";
+import {
+  ensurePersistentCodexHooksInstalled,
+  installCodexHooks,
+  type InstalledHooks,
+} from "./cli-agent/hooks-bootstrap.js";
 import { startCliAgentHookServer, type HookServer } from "./cli-agent/hook-server.js";
 import { CliAgentRelayWebSocket } from "./cli-agent/relay-client.js";
 import type { CliAgentRelayEvent, RelayCommand } from "./cli-agent/types.js";
@@ -333,6 +337,19 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
   const enqueueEvents = (events: CliAgentRelayEvent[]): void => {
     for (const event of events) enqueueEvent(event);
   };
+
+  try {
+    const installedPersistentHooks = await ensurePersistentCodexHooksInstalled({
+      cwd: config.projectRoot,
+    });
+    if (installedPersistentHooks) {
+      console.log("Installed ADIT Codex hooks for local timeline tracking.");
+    }
+  } catch (error) {
+    console.error(
+      `[adit cloud codex] warning: failed to install persistent ADIT Codex hooks: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 
   try {
     hookServer = await startCliAgentHookServer();

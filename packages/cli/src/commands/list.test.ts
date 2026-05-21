@@ -1,5 +1,5 @@
 /**
- * Tests for `adit list` command utilities.
+ * Tests for `adit timeline` command utilities.
  */
 
 import { describe, it, expect } from "vitest";

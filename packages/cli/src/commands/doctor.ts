@@ -256,7 +256,7 @@ export async function doctorCommand(
       }
     }
 
-    // Fix missing hooks via plugin install
+    // Fix missing platform hooks.
     if (!hooksOk) {
       for (const adapter of adaptersNeedingFix) {
         try {
