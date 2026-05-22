@@ -634,6 +634,86 @@ describe("ClaudeCodeProvider takeover", () => {
     provider.stop();
   });
 
+  it("ignores zero-token Claude context usage placeholders", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const contextUsages = [
+      {
+        totalTokens: 100,
+        maxTokens: 200,
+        percentage: 50,
+        model: "claude-test",
+      },
+      {
+        totalTokens: 0,
+        maxTokens: 200,
+        percentage: 0,
+        model: "claude-test",
+      },
+    ];
+    mocks.query.mockImplementation((
+      input: {
+        options?: {
+          abortController?: AbortController;
+          includePartialMessages?: boolean;
+        };
+      },
+    ) => {
+      if (!input.options?.includePartialMessages) return createCapabilityQuery();
+      const query = createRemoteQuery(input.options.abortController);
+      return {
+        ...query,
+        getContextUsage: vi.fn(async () => contextUsages.shift()),
+      };
+    });
+    const provider = new ClaudeCodeProvider({
+      bin: "claude",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    await provider.takeover();
+    await provider.sendPrompt("hello");
+    await tick();
+    expect(provider.state.contextUsage?.totalTokens).toBe(100);
+
+    (provider as unknown as { scheduleContextUsageRefresh(force?: boolean): void })
+      .scheduleContextUsageRefresh(true);
+    await tick();
+
+    expect(provider.state.contextUsage?.totalTokens).toBe(100);
+    expect(events).not.toContainEqual(expect.objectContaining({
+      type: "state",
+      payload: expect.objectContaining({
+        contextUsage: expect.objectContaining({ totalTokens: 0 }),
+      }),
+    }));
+
+    await provider.abort();
+    provider.stop();
+  });
+
+  it("does not persist duplicate state events when state is unchanged", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new ClaudeCodeProvider({
+      bin: "claude",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    await provider.takeover();
+    const stateEvents = () => events.filter((event) => event.type === "state").length;
+    const count = stateEvents();
+
+    (provider as unknown as { emitState(): void }).emitState();
+    (provider as unknown as { emitState(): void }).emitState();
+
+    expect(stateEvents()).toBe(count);
+
+    provider.stop();
+  });
+
   it("accepts a new prompt after the SDK reports a completed result", async () => {
     const remotePrompts: string[] = [];
     mocks.query.mockImplementation((
@@ -694,6 +774,80 @@ describe("ClaudeCodeProvider takeover", () => {
 
       expect(result).toBe("resolved");
       expect(remotePrompts).toEqual(["first", "second"]);
+    } finally {
+      provider.stop();
+    }
+  });
+
+  it("does not emit whitespace-only thinking parts as reasoning", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const sessionId = "11111111-1111-1111-1111-111111111111";
+    mocks.query.mockImplementation((
+      input: {
+        options?: {
+          includePartialMessages?: boolean;
+        };
+      },
+    ) => {
+      if (!input.options?.includePartialMessages) {
+        return createCapabilityQuery();
+      }
+
+      return {
+        supportedCommands: vi.fn(async () => []),
+        mcpServerStatus: vi.fn(async () => []),
+        getContextUsage: vi.fn(async () => ({
+          totalTokens: 100,
+          maxTokens: 200,
+          percentage: 50,
+          model: "claude-test",
+        })),
+        close: mocks.remoteClose,
+        interrupt: mocks.remoteInterrupt,
+        async *[Symbol.asyncIterator]() {
+          yield {
+            type: "assistant",
+            session_id: sessionId,
+            message: {
+              id: "message-1",
+              role: "assistant",
+              model: "glm-4.5-flash",
+              content: [
+                { type: "thinking", thinking: "\n\t " },
+                { type: "thinking", thinking: "\nactual reasoning\n" },
+              ],
+              usage: { input_tokens: 1, output_tokens: 1 },
+            },
+          };
+          yield {
+            type: "result",
+            session_id: sessionId,
+            usage: { input_tokens: 1, output_tokens: 1 },
+          };
+        },
+      };
+    });
+
+    const provider = new ClaudeCodeProvider({
+      bin: "claude",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    try {
+      await provider.takeover();
+      await provider.sendPrompt("hello");
+      await tick();
+      await tick();
+
+      const reasoningEvents = events.filter((event) => event.type === "reasoning");
+      expect(reasoningEvents).toHaveLength(1);
+      expect(reasoningEvents[0]?.payload).toEqual(expect.objectContaining({
+        sessionId,
+        messageId: "message-1",
+        text: "\nactual reasoning\n",
+      }));
     } finally {
       provider.stop();
     }
@@ -803,6 +957,104 @@ describe("ClaudeCodeProvider steerPrompt", () => {
 
     await provider.abort();
     provider.stop();
+  });
+
+  it("keeps the SDK prompt stream open until steered turns also complete", async () => {
+    const remotePrompts: string[] = [];
+    let releaseFirstResult: () => void = () => {};
+    const firstResultAllowed = new Promise<void>((resolve) => {
+      releaseFirstResult = resolve;
+    });
+    let markFirstPromptRead: () => void = () => {};
+    const firstPromptRead = new Promise<void>((resolve) => {
+      markFirstPromptRead = resolve;
+    });
+    let recordThirdRead: (value: "done" | "pending" | "value") => void = () => {};
+    const thirdReadObserved = new Promise<"done" | "pending" | "value">((resolve) => {
+      recordThirdRead = resolve;
+    });
+    let finishSdkOutput: () => void = () => {};
+    const sdkOutputFinished = new Promise<void>((resolve) => {
+      finishSdkOutput = resolve;
+    });
+
+    mocks.query.mockImplementation((
+      input: {
+        prompt?: AsyncIterable<Record<string, unknown>>;
+        options?: {
+          includePartialMessages?: boolean;
+        };
+      },
+    ) => {
+      if (!input.options?.includePartialMessages || !input.prompt) {
+        return createCapabilityQuery();
+      }
+
+      return {
+        supportedCommands: vi.fn(async () => []),
+        mcpServerStatus: vi.fn(async () => []),
+        getContextUsage: vi.fn(async () => ({
+          totalTokens: 100,
+          maxTokens: 200,
+          percentage: 50,
+          model: "claude-test",
+        })),
+        close: mocks.remoteClose,
+        interrupt: mocks.remoteInterrupt,
+        async *[Symbol.asyncIterator]() {
+          const iterator = input.prompt![Symbol.asyncIterator]();
+          const first = await iterator.next();
+          remotePrompts.push(String((first.value?.message as { content?: unknown } | undefined)?.content));
+          markFirstPromptRead();
+
+          await firstResultAllowed;
+          yield {
+            type: "result",
+            session_id: "11111111-1111-1111-1111-111111111111",
+            usage: { input_tokens: 1, output_tokens: 1 },
+          };
+
+          const second = await iterator.next();
+          remotePrompts.push(String((second.value?.message as { content?: unknown } | undefined)?.content));
+          const thirdRead = iterator.next();
+          const thirdState = await Promise.race([
+            thirdRead.then((result) => result.done ? "done" as const : "value" as const),
+            new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 20)),
+          ]);
+          recordThirdRead(thirdState);
+
+          yield {
+            type: "result",
+            session_id: "11111111-1111-1111-1111-111111111111",
+            usage: { input_tokens: 1, output_tokens: 1 },
+          };
+          await thirdRead;
+          await sdkOutputFinished;
+        },
+      };
+    });
+
+    const provider = new ClaudeCodeProvider({
+      bin: "claude",
+      args: [],
+      cwd: "/tmp/project",
+    });
+
+    try {
+      await provider.takeover();
+      await provider.sendPrompt("hello");
+      await firstPromptRead;
+      await provider.steerPrompt("focus on tests");
+
+      releaseFirstResult();
+
+      expect(await thirdReadObserved).toBe("pending");
+      expect(remotePrompts).toEqual(["hello", "focus on tests"]);
+    } finally {
+      finishSdkOutput();
+      await tick();
+      provider.stop();
+    }
   });
 
   it("rejects steering when no SDK prompt stream is active", async () => {

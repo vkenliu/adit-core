@@ -56,6 +56,8 @@ interface ActiveClaudePromptInput {
   displaySessionId: string | null;
   acceptedSessionIds: Set<string>;
   stream: PushableSdkPromptStream;
+  submittedTurnCount: number;
+  completedResultCount: number;
 }
 
 interface PendingPromptEvent {
@@ -145,6 +147,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
   private contextUsageBySession = new Map<string, CliAgentContextUsage>();
   private contextUsageRefreshAt = 0;
   private contextUsageRefreshPromise: Promise<void> | null = null;
+  private lastStateEventKey: string | null = null;
   private promptQueue: PendingPrompt[] = [];
   private promptResolvers: Array<(value: QueuedSdkPrompt | null) => void> = [];
   private startingPrompt: QueuedSdkPrompt | null = null;
@@ -410,6 +413,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       priority: "now",
       shouldQuery: true,
     }));
+    input.submittedTurnCount += 1;
     this.pushEvent("message", {
       role: "user",
       sessionId,
@@ -874,6 +878,8 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
           ].filter((id): id is string => Boolean(id)),
         ),
         stream: promptInput,
+        submittedTurnCount: 1,
+        completedResultCount: 0,
       };
       const options: Options = {
         cwd: this.opts.cwd,
@@ -940,7 +946,17 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
           });
           this.scheduleContextUsageRefresh(message.type === "result");
           if (message.type === "result") {
-            promptInput.close();
+            const activeInput = this.activePromptInput?.stream === promptInput
+              ? this.activePromptInput
+              : null;
+            if (activeInput) {
+              activeInput.completedResultCount += 1;
+              if (activeInput.completedResultCount >= activeInput.submittedTurnCount) {
+                promptInput.close();
+              }
+            } else {
+              promptInput.close();
+            }
           }
           const boundSessionId = sdkSessionId ?? pendingClaudeSessionId;
           if (pendingSessionId && boundSessionId) {
@@ -1391,11 +1407,8 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
           text: part.text,
           createdAt: Date.now(),
         });
-      } else if (
-        part.type === "thinking" &&
-        typeof part.thinking === "string" &&
-        part.thinking
-      ) {
+      } else if (part.type === "thinking" && typeof part.thinking === "string") {
+        if (!part.thinking.trim()) continue;
         this.pushEvent("reasoning", {
           sessionId,
           messageId,
@@ -1821,7 +1834,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
 
   private emitState(): void {
     this.emit("state", this.state);
-    this.pushEvent("state", {
+    const payload = {
       sessionId: this.activeSessionId ?? this.resumeSessionId,
       owner: this.ownerValue,
       busy: this.busyValue,
@@ -1833,6 +1846,12 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       currentBranch: this.currentBranch,
       contextUsage: this.contextUsage,
       lastTokenUsage: null,
+    };
+    const key = stableStateEventKey(payload);
+    if (key === this.lastStateEventKey) return;
+    this.lastStateEventKey = key;
+    this.pushEvent("state", {
+      ...payload,
       createdAt: Date.now(),
     });
   }
@@ -2184,7 +2203,9 @@ function normalizeClaudeContextUsage(
   const usage = asRecord(value);
   const totalTokens = readNumber(usage.totalTokens);
   const maxTokens = readNumber(usage.maxTokens);
-  if (totalTokens === null || maxTokens === null || maxTokens <= 0) return null;
+  if (totalTokens === null || totalTokens <= 0 || maxTokens === null || maxTokens <= 0) {
+    return null;
+  }
   const rawPercentage = readNumber(usage.percentage) ?? totalTokens / maxTokens * 100;
   return {
     percentage: Math.max(0, Math.min(100, rawPercentage)),
@@ -2194,6 +2215,10 @@ function normalizeClaudeContextUsage(
     updatedAt: Date.now(),
     source: "claude-sdk",
   };
+}
+
+function stableStateEventKey(payload: Record<string, unknown>): string {
+  return JSON.stringify(payload);
 }
 
 function isSameContextUsage(
