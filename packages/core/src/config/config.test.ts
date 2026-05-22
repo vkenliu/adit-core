@@ -1,7 +1,22 @@
 import { describe, it, expect } from "vitest";
-import { redactSensitiveKeys } from "./index.js";
+import { projectNameFromRoot, redactSensitiveKeys } from "./index.js";
 
 describe("Config", () => {
+  describe("projectNameFromRoot", () => {
+    it("extracts project name from POSIX root", () => {
+      expect(projectNameFromRoot("/Users/edy/item/adit-core1")).toBe("adit-core1");
+    });
+
+    it("extracts project name from Windows root", () => {
+      expect(projectNameFromRoot("C:\\Users\\edy\\item\\adit-core1")).toBe("adit-core1");
+    });
+
+    it("handles trailing separators", () => {
+      expect(projectNameFromRoot("C:\\Users\\edy\\item\\adit-core1\\")).toBe("adit-core1");
+      expect(projectNameFromRoot("/Users/edy/item/adit-core1/")).toBe("adit-core1");
+    });
+  });
+
   describe("redactSensitiveKeys", () => {
     it("redacts known sensitive keys", () => {
       const input = {
