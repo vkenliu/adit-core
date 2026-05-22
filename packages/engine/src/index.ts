@@ -1,5 +1,5 @@
 /**
- * @adit/engine — Git operations, snapshots, detection, timeline, and environment capture.
+ * @varveai/adit-engine — Git operations, snapshots, detection, timeline, and environment capture.
  */
 
 // Git operations

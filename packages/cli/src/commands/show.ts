@@ -9,8 +9,8 @@ import {
   parseLabels,
   parseDiffStats,
   parseError,
-} from "@adit/core";
-import { createTimelineManager } from "@adit/engine";
+} from "@varveai/adit-core";
+import { createTimelineManager } from "@varveai/adit-engine";
 
 export async function showCommand(eventId: string): Promise<void> {
   const config = loadConfig();
@@ -21,7 +21,7 @@ export async function showCommand(eventId: string): Promise<void> {
     const event = await timeline.get(eventId);
     if (!event) {
       // Try prefix match
-      const { queryEvents } = await import("@adit/core");
+      const { queryEvents } = await import("@varveai/adit-core");
       const all = queryEvents(db, { limit: 500 });
       const match = all.find((e) => e.id.startsWith(eventId));
       if (!match) {

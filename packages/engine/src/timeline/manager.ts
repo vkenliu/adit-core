@@ -23,7 +23,7 @@ import {
   type Actor,
   type AditConfig,
   withPerf,
-} from "@adit/core";
+} from "@varveai/adit-core";
 import { createSnapshot, getCheckpointDiff } from "../snapshot/creator.js";
 import type { FileChange } from "../detector/working-tree.js";
 import { getHeadSha, getCurrentBranch, shaExists } from "../git/runner.js";

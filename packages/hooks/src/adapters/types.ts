@@ -5,7 +5,7 @@
  * the platform's hook/event system and ADIT's internal model.
  */
 
-import type { Platform } from "@adit/core";
+import type { Platform } from "@varveai/adit-core";
 
 /**
  * Adapter that bridges a specific AI platform's hook system

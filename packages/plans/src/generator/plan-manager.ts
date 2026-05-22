@@ -21,7 +21,7 @@ import {
   type AditPlan,
   type PlanType,
   type PlanStatus,
-} from "@adit/core";
+} from "@varveai/adit-core";
 import { renderIntentTemplate } from "../templates/intent.js";
 import { renderRoadmapTemplate } from "../templates/roadmap.js";
 import { renderTaskTemplate } from "../templates/task.js";

@@ -20,7 +20,7 @@ import {
   type Actor,
   type EventType,
   type EnvSnapshot,
-} from "@adit/core";
+} from "@varveai/adit-core";
 
 export interface TimelineState {
   events: AditEvent[];

@@ -19,7 +19,7 @@ import {
   serialize,
   insertEnvSnapshot,
   type AditConfig,
-} from "@adit/core";
+} from "@varveai/adit-core";
 import { getHeadSha, getCurrentBranch } from "../git/runner.js";
 import { getChangedFiles } from "../detector/working-tree.js";
 

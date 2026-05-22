@@ -9,7 +9,7 @@
  *   reset    — Reset a failed transcript for re-upload
  */
 
-import { loadConfig, openDatabase, closeDatabase } from "@adit/core";
+import { loadConfig, openDatabase, closeDatabase } from "@varveai/adit-core";
 import {
   loadCloudConfig,
   loadCredentials,
@@ -18,8 +18,8 @@ import {
   CloudAuthError,
   CloudNetworkError,
   processTranscriptUploads,
-} from "@adit/cloud";
-import type { TranscriptUpload } from "@adit/core";
+} from "@varveai/adit-cloud";
+import type { TranscriptUpload } from "@varveai/adit-core";
 
 /**
  * `adit transcript enable` — Enable transcript upload.
@@ -100,7 +100,7 @@ export async function transcriptStatusCommand(opts?: {
   try {
     const db = openDatabase(config.dbPath);
     try {
-      const { listPendingTranscriptUploads } = await import("@adit/core");
+      const { listPendingTranscriptUploads } = await import("@varveai/adit-core");
       const serverUrl =
         cloudConfig.serverUrl ?? credentials?.serverUrl ?? "";
       if (serverUrl) {
@@ -296,7 +296,7 @@ export async function transcriptResetCommand(
 
   try {
     const { getTranscriptUploadById, resetTranscriptUpload } = await import(
-      "@adit/core"
+      "@varveai/adit-core"
     );
 
     // Try to find by ID prefix
@@ -307,7 +307,7 @@ export async function transcriptResetCommand(
       const credentials = loadCredentials();
       const serverUrl =
         cloudConfig.serverUrl ?? credentials?.serverUrl ?? "";
-      const { getTranscriptUpload } = await import("@adit/core");
+      const { getTranscriptUpload } = await import("@varveai/adit-core");
       const byPath = getTranscriptUpload(db, id, serverUrl);
 
       if (!byPath) {

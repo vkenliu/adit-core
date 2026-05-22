@@ -6,10 +6,15 @@
  *   logout            — Clear stored credentials
  *   sync              — Push unsynced records to cloud
  *   status            — Show sync state and unsynced count
- *   reset-credentials — Force-clear all credentials and sync state
+ *   auth reset        — Force-clear all credentials and sync state
  */
 
-import { loadConfig, openDatabase, closeDatabase } from "@adit/core";
+import {
+  loadConfig,
+  openDatabase,
+  closeDatabase,
+  projectNameFromRoot,
+} from "@varveai/adit-core";
 import {
   loadCloudConfig,
   loadCredentials,
@@ -27,8 +32,8 @@ import {
   clearSyncErrors,
   isSyncDisabled,
   DEFAULT_SERVER_URL,
-} from "@adit/cloud";
-import type { DeviceAuthOptions } from "@adit/cloud";
+} from "@varveai/adit-cloud";
+import type { DeviceAuthOptions } from "@varveai/adit-cloud";
 import { createHash } from "node:crypto";
 import { hostname } from "node:os";
 import { CLI_VERSION } from "../version.js";
@@ -52,7 +57,7 @@ export async function cloudLoginCommand(opts?: {
       "A client can only be connected to one cloud server at a time.",
     );
     console.error(
-      "Run 'adit cloud reset-credentials' first to disconnect, then try again.",
+      "Run 'adit cloud auth reset' first to disconnect, then try again.",
     );
     process.exitCode = 1;
     return;
@@ -151,7 +156,7 @@ export async function cloudLogoutCommand(): Promise<void> {
   try {
     const db = openDatabase(config.dbPath);
     try {
-      const { clearSyncState } = await import("@adit/core");
+      const { clearSyncState } = await import("@varveai/adit-core");
       clearSyncState(db, credentials.serverUrl);
     } finally {
       closeDatabase(db);
@@ -175,7 +180,7 @@ export async function cloudSyncCommand(opts?: {
 
   if (!credentials) {
     const msg =
-      "Not logged in. Run 'adit cloud login' or 'adit cloud auth-token <jwt>' first.";
+      "Not logged in. Run 'adit cloud login' or 'adit cloud login --token <jwt>' first.";
     if (opts?.json) {
       console.log(JSON.stringify({ error: msg }));
     } else {
@@ -200,8 +205,10 @@ export async function cloudSyncCommand(opts?: {
   const db = openDatabase(config.dbPath);
   try {
     const client = new CloudClient(serverUrl, credentials);
+    const projectName = projectNameFromRoot(config.projectRoot);
     const engine = new SyncEngine(db, client, {
       projectId: config.projectId,
+      projectName,
       batchSize: cloudConfig.batchSize,
       serverUrl,
       cloudClientId: credentials.clientId,
@@ -249,9 +256,6 @@ export async function cloudStatusCommand(opts?: {
   const credentials = loadCredentials();
   const config = loadConfig();
 
-  // Reset circuit breaker on manual status check
-  clearSyncErrors();
-
   const status: Record<string, unknown> = {
     serverUrl: cloudConfig.serverUrl,
     enabled: cloudConfig.enabled,
@@ -260,9 +264,18 @@ export async function cloudStatusCommand(opts?: {
   };
 
   if (credentials) {
+    const accessTokenExpired = isTokenExpired(credentials);
     status.authType = credentials.authType ?? "device";
     status.clientId = credentials.clientId;
-    status.tokenExpired = isTokenExpired(credentials);
+    status.accessToken = credentials.authType === "token"
+      ? { status: "static", expired: false }
+      : {
+          status: accessTokenExpired ? "expired" : "valid",
+          expired: accessTokenExpired,
+          expiresAt: credentials.expiresAt || null,
+        };
+    status.tokenExpired = accessTokenExpired;
+    status.lastAuthFailure = credentials.lastAuthFailure ?? null;
   }
 
   // Check server reachability
@@ -275,6 +288,8 @@ export async function cloudStatusCommand(opts?: {
       const statusPath = params.toString()
         ? `/api/sync/status?${params.toString()}`
         : "/api/sync/status";
+      const refreshTokenStatus = await client.getRefreshTokenStatus();
+      status.refreshToken = refreshTokenStatus;
       const remoteStatus = await client.get<{
         lastSyncedEventId: string | null;
         syncVersion: number;
@@ -285,9 +300,11 @@ export async function cloudStatusCommand(opts?: {
         }>;
       }>(statusPath);
       status.serverOnline = true;
+      status.authVerified = true;
       status.remoteStatus = remoteStatus;
     } catch (error) {
       status.serverOnline = false;
+      status.authVerified = false;
       status.serverError =
         error instanceof CloudNetworkError
           ? `unreachable — ${error.cause?.message ?? error.message}`
@@ -303,7 +320,7 @@ export async function cloudStatusCommand(opts?: {
   try {
     const db = openDatabase(config.dbPath);
     try {
-      const { getSyncState } = await import("@adit/core");
+      const { getSyncState } = await import("@varveai/adit-core");
       const syncState = getSyncState(
         db,
         cloudConfig.serverUrl ?? credentials?.serverUrl ?? "",
@@ -343,17 +360,42 @@ export async function cloudStatusCommand(opts?: {
   console.log(`Server:       ${effectiveServerUrl ?? "(not configured)"}`);
   console.log(`Enabled:      ${cloudConfig.enabled ? "yes" : "no"}`);
   console.log(`Auto-sync:    ${cloudConfig.autoSync ? "yes" : "no"}`);
-  console.log(`Logged in:    ${credentials ? "yes" : "no"}`);
+  console.log(`Logged in:    ${credentials ? "yes (local credentials present)" : "no"}`);
 
   if (credentials) {
     const authType = credentials.authType ?? "device";
+    const accessStatus = status.accessToken as { status: string; expiresAt?: string | null } | undefined;
+    const refreshStatus = status.refreshToken as {
+      valid?: boolean;
+      reason?: string;
+      status?: number;
+      expiresAt?: string;
+      message?: string;
+    } | undefined;
     console.log(`Auth type:    ${authType}`);
     console.log(`Client ID:    ${credentials.clientId}`);
     if (authType === "token") {
-      console.log("Token:        static (never expires)");
+      console.log("Access token: static (never expires)");
+      console.log("Refresh token: not used");
     } else {
       console.log(
-        `Token:        ${isTokenExpired(credentials) ? "expired" : "valid"}`,
+        `Access token: ${accessStatus?.status ?? (isTokenExpired(credentials) ? "expired" : "valid")}${accessStatus?.expiresAt ? ` (expires ${accessStatus.expiresAt})` : ""}`,
+      );
+      if (refreshStatus) {
+        const refreshLabel = refreshStatus.valid
+          ? "valid"
+          : `invalid${refreshStatus.reason ? ` (${refreshStatus.reason})` : ""}`;
+        console.log(
+          `Refresh token: ${refreshLabel}${refreshStatus.expiresAt ? ` (expires ${refreshStatus.expiresAt})` : ""}`,
+        );
+      } else {
+        console.log("Refresh token: not checked");
+      }
+    }
+    console.log(`Auth verified: ${status.authVerified === true ? "yes" : "no"}`);
+    if (credentials.lastAuthFailure) {
+      console.log(
+        `Last auth failure: ${credentials.lastAuthFailure.at} [${credentials.lastAuthFailure.stage}] ${credentials.lastAuthFailure.message}`,
       );
     }
   }
@@ -422,6 +464,10 @@ export async function cloudStatusCommand(opts?: {
     console.log(
       "The cloud server is not reachable. Auto-sync will resume when the server is back online.",
     );
+    const lastAuthFailure = credentials?.lastAuthFailure;
+    if (lastAuthFailure) {
+      console.log(`Last auth failure: ${lastAuthFailure.message}`);
+    }
     console.log("To retry manually: adit cloud sync");
   } else if (
     status.serverOnline === true &&
@@ -436,14 +482,16 @@ export async function cloudStatusCommand(opts?: {
 }
 
 /**
- * `adit cloud auth-token <token>` — Authenticate with a static JWT token.
+ * `adit cloud login --token <token>` — Authenticate with a static JWT token.
  *
  * Server URL: ADIT_CLOUD_URL env > DEFAULT_SERVER_URL.
- * If device-code (login) credentials already exist, rejects —
- * login credentials take priority.
  */
-export async function cloudAuthTokenCommand(token: string): Promise<void> {
-  const serverUrl = process.env.ADIT_CLOUD_URL ?? DEFAULT_SERVER_URL;
+export async function cloudAuthTokenCommand(
+  token: string,
+  opts?: { server?: string },
+): Promise<void> {
+  const serverUrl =
+    opts?.server ?? process.env.ADIT_CLOUD_URL ?? DEFAULT_SERVER_URL;
   const config = loadConfig();
 
   // If device (login) credentials already exist, warn but allow override
@@ -508,7 +556,7 @@ export async function cloudAuthTokenCommand(token: string): Promise<void> {
 }
 
 /**
- * `adit cloud reset-credentials` — Force-clear all credentials and sync state.
+ * `adit cloud auth reset` — Force-clear all credentials and sync state.
  *
  * Unlike logout, this does not attempt to revoke the token on the server.
  * It simply wipes all local credential and sync state, allowing the client
@@ -543,7 +591,7 @@ export async function cloudResetCredentialsCommand(opts?: {
   try {
     const db = openDatabase(config.dbPath);
     try {
-      const { clearSyncState } = await import("@adit/core");
+      const { clearSyncState } = await import("@varveai/adit-core");
       clearSyncState(db, credentials.serverUrl);
     } finally {
       closeDatabase(db);

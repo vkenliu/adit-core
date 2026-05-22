@@ -1,7 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { getAdapter, listAdapters, detectPlatform, registerAdapter } from "./registry.js";
+import { getAdapter, listAdapters, detectPlatform, detectPlatformFromPayload, registerAdapter } from "./registry.js";
 import { claudeCodeAdapter } from "./claude-code.js";
+import { claudeVscodeAdapter } from "./claude-vscode.js";
 import { opencodeAdapter } from "./opencode.js";
+import { cursorAdapter } from "./cursor.js";
+import { codexAdapter } from "./codex.js";
+import { geminiAdapter } from "./gemini.js";
 import type { PlatformAdapter } from "./types.js";
 
 describe("Adapter Registry", () => {
@@ -18,20 +22,29 @@ describe("Adapter Registry", () => {
     );
   });
 
-  it("lists all registered adapters including stubs", () => {
+  it("lists all registered adapters including new platforms", () => {
     const adapters = listAdapters();
-    expect(adapters.length).toBeGreaterThanOrEqual(5);
+    expect(adapters.length).toBeGreaterThanOrEqual(7);
     expect(adapters.find((a) => a.platform === "claude-code")).toBeDefined();
     expect(adapters.find((a) => a.platform === "cursor")).toBeDefined();
     expect(adapters.find((a) => a.platform === "copilot")).toBeDefined();
     expect(adapters.find((a) => a.platform === "opencode")).toBeDefined();
     expect(adapters.find((a) => a.platform === "codex")).toBeDefined();
+    expect(adapters.find((a) => a.platform === "gemini")).toBeDefined();
   });
 
   it("detects platform from environment", () => {
-    // Default should be claude-code
     const platform = detectPlatform();
-    expect(["claude-code", "cursor", "copilot", "opencode", "codex", "other"]).toContain(platform);
+    expect([
+      "claude-code",
+      "claude-vscode",
+      "cursor",
+      "copilot",
+      "opencode",
+      "codex",
+      "gemini",
+      "other",
+    ]).toContain(platform);
   });
 
   it("returns the OpenCode adapter (fully implemented)", () => {
@@ -40,18 +53,27 @@ describe("Adapter Registry", () => {
     expect(opencode.hookMappings.length).toBeGreaterThan(0);
   });
 
-  it("returns stub adapters for unimplemented platforms", () => {
+  it("returns the Cursor adapter (fully implemented)", () => {
     const cursor = getAdapter("cursor");
     expect(cursor.displayName).toBe("Cursor");
-    expect(cursor.hookMappings).toHaveLength(0);
+    expect(cursor.hookMappings.length).toBeGreaterThan(0);
+  });
 
+  it("returns the Codex adapter (fully implemented)", () => {
     const codex = getAdapter("codex");
     expect(codex.displayName).toBe("Codex");
+    expect(codex.hookMappings.length).toBeGreaterThan(0);
+  });
+
+  it("returns the Gemini adapter (fully implemented)", () => {
+    const gemini = getAdapter("gemini");
+    expect(gemini.displayName).toBe("Gemini CLI");
+    expect(gemini.hookMappings.length).toBeGreaterThan(0);
   });
 
   it("stub adapters report not implemented in validation", async () => {
-    const cursor = getAdapter("cursor");
-    const result = await cursor.validateInstallation("/test");
+    const copilot = getAdapter("copilot");
+    const result = await copilot.validateInstallation("/test");
     expect(result.valid).toBe(false);
     expect(result.checks[0].detail).toContain("not yet implemented");
   });
@@ -217,6 +239,7 @@ describe("Claude Code Adapter", () => {
         hooks: Array<{ type: string; command: string; async?: boolean }>;
       }>;
       expect(entries[0].hooks[0].async).toBeUndefined();
+      expect(entries[0].hooks[0].command).toContain("--platform claude");
     }
   });
 });
@@ -381,7 +404,7 @@ describe("OpenCode Adapter", () => {
     expect(config.content.plugin).toBeDefined();
 
     const pluginContent = config.content.plugin as string;
-    expect(pluginContent).toContain("@adit/auto-generated");
+    expect(pluginContent).toContain("@varveai/adit-auto-generated");
     expect(pluginContent).toContain("adit-hook");
     expect(pluginContent).toContain("OPENCODE");
     // Core hooks
@@ -430,5 +453,137 @@ describe("OpenCode Adapter", () => {
     const result = await opencodeAdapter.validateInstallation("/nonexistent/path");
     expect(result.valid).toBe(false);
     expect(result.checks.some((c) => !c.ok && c.detail.includes("Not found"))).toBe(true);
+  });
+});
+
+describe("Claude Code VS Code Adapter", () => {
+  it("has correct platform metadata", () => {
+    expect(claudeVscodeAdapter.platform).toBe("claude-vscode");
+    expect(claudeVscodeAdapter.displayName).toBe("Claude Code (VS Code)");
+  });
+
+  it("returns the VS Code adapter from registry", () => {
+    const adapter = getAdapter("claude-vscode");
+    expect(adapter).toBeDefined();
+    expect(adapter.platform).toBe("claude-vscode");
+  });
+
+  it("shares hook mappings with claude-code adapter", () => {
+    expect(claudeVscodeAdapter.hookMappings).toBe(claudeCodeAdapter.hookMappings);
+    expect(claudeVscodeAdapter.hookMappings).toHaveLength(8);
+  });
+
+  it("parseInput overrides platformCli to claude-vscode", () => {
+    const input = claudeVscodeAdapter.parseInput(
+      { cwd: "/project", prompt: "hello" },
+      "UserPromptSubmit",
+    );
+    expect(input.hookType).toBe("prompt-submit");
+    expect(input.platformCli).toBe("claude-vscode");
+    expect(input.prompt).toBe("hello");
+  });
+
+  it("parseInput delegates field mapping to claude-code adapter", () => {
+    const input = claudeVscodeAdapter.parseInput(
+      {
+        cwd: "/project",
+        session_id: "sess-1",
+        stop_reason: "end_turn",
+        last_assistant_message: "Done.",
+      },
+      "Stop",
+    );
+    expect(input.hookType).toBe("stop");
+    expect(input.platformCli).toBe("claude-vscode");
+    expect(input.platformSessionId).toBe("sess-1");
+    expect(input.stopReason).toBe("end_turn");
+    expect(input.lastAssistantMessage).toBe("Done.");
+  });
+
+  it("generateHookConfig produces same output as claude-code", () => {
+    const vscodeConfig = claudeVscodeAdapter.generateHookConfig("npx adit-hook");
+    const cliConfig = claudeCodeAdapter.generateHookConfig("npx adit-hook");
+    expect(vscodeConfig).toEqual(cliConfig);
+  });
+
+  it("getResumeCommand returns null", () => {
+    expect(claudeVscodeAdapter.getResumeCommand("/project")).toBeNull();
+  });
+});
+
+describe("detectPlatformFromPayload", () => {
+  it("detects Cursor from cursor_version field", () => {
+    const result = detectPlatformFromPayload({
+      cursor_version: "3.1.15",
+      conversation_id: "abc-123",
+      hook_event_name: "stop",
+      status: "completed",
+    });
+    expect(result).toBe("cursor");
+  });
+
+  it("detects Cursor from Cursor-native hook_event_name (beforeSubmitPrompt)", () => {
+    const result = detectPlatformFromPayload({
+      hook_event_name: "beforeSubmitPrompt",
+      conversation_id: "abc-123",
+      prompt: "hello",
+    });
+    expect(result).toBe("cursor");
+  });
+
+  it("detects Cursor from Cursor-native hook_event_name (stop)", () => {
+    const result = detectPlatformFromPayload({
+      hook_event_name: "stop",
+      status: "completed",
+      conversation_id: "abc-123",
+    });
+    expect(result).toBe("cursor");
+  });
+
+  it("detects Cursor from Cursor-native hook_event_name (sessionStart)", () => {
+    const result = detectPlatformFromPayload({
+      hook_event_name: "sessionStart",
+      session_id: "sess-1",
+    });
+    expect(result).toBe("cursor");
+  });
+
+  it("detects Cursor from Cursor-native hook_event_name (afterAgentResponse)", () => {
+    const result = detectPlatformFromPayload({
+      hook_event_name: "afterAgentResponse",
+      conversation_id: "abc-123",
+      message: "Agent done",
+    });
+    expect(result).toBe("cursor");
+  });
+
+  it("returns null for Claude Code payloads", () => {
+    // Claude Code uses CamelCase hook_event_name values
+    const result = detectPlatformFromPayload({
+      hook_event_name: "UserPromptSubmit",
+      session_id: "sess-1",
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null for unrecognized payloads", () => {
+    expect(detectPlatformFromPayload({})).toBeNull();
+    expect(detectPlatformFromPayload({ foo: "bar" })).toBeNull();
+  });
+
+  it("detects Gemini payloads by unique event names", () => {
+    const result = detectPlatformFromPayload({
+      hook_event_name: "AfterAgent",
+      session_id: "sess-1",
+    });
+    expect(result).toBe("gemini");
+  });
+
+  it("detects Gemini payloads with BeforeAgent event", () => {
+    const result = detectPlatformFromPayload({
+      hook_event_name: "BeforeAgent",
+      prompt: "hello",
+    });
+    expect(result).toBe("gemini");
   });
 });

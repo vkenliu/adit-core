@@ -1,8 +1,11 @@
 {
-  "name": "@adit/core",
-  "version": "0.2.0",
+  "name": "@varveai/adit-core",
+  "version": "0.4.8",
   "description": "Core types, database, and sync primitives for ADIT",
   "type": "module",
+  "files": [
+    "dist"
+  ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -16,7 +19,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "better-sqlite3": "^12.6.2",
+    "better-sqlite3": "12.6.2",
     "ulid": "^2.3.0"
   },
   "devDependencies": {

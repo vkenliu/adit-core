@@ -5,7 +5,7 @@
  *   clear-events — Delete all events, sessions, diffs, and env snapshots
  */
 
-import { loadConfig, openDatabase, closeDatabase, clearEvents, countEvents } from "@adit/core";
+import { loadConfig, openDatabase, closeDatabase, clearEvents, countEvents } from "@varveai/adit-core";
 
 /**
  * `adit db clear-events` — Clear all local events and related data.

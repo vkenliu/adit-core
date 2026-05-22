@@ -8,9 +8,9 @@ import {
   closeDatabase,
   type AditEvent,
   type EventType,
-} from "@adit/core";
+} from "@varveai/adit-core";
 import { getEventSummary } from "../utils/summary.js";
-import { createTimelineManager } from "@adit/engine";
+import { createTimelineManager } from "@varveai/adit-engine";
 
 /** `adit search <query>` — search events with advanced filters */
 export async function searchCommand(

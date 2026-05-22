@@ -18,9 +18,14 @@ import {
   queryEvents,
   listSessions,
   endSession,
-} from "@adit/core";
-import { isGitRepo, listCheckpointRefs, deleteCheckpointRef } from "@adit/engine";
-import { detectPlatform, getAdapter, listAdapters } from "@adit/hooks/adapters";
+} from "@varveai/adit-core";
+import { isGitRepo, listCheckpointRefs, deleteCheckpointRef } from "@varveai/adit-engine";
+import {
+  detectPlatform,
+  getAdapter,
+  listAdapters,
+  resolveAditHookBinary,
+} from "@varveai/adit-hooks/adapters";
 
 interface Check {
   name: string;
@@ -85,8 +90,9 @@ export async function doctorCommand(
 
   // 5. adit-hook binary
   let binaryOk = false;
+  const aditHookBinary = resolveAditHookBinary();
   try {
-    execSync("npx adit-hook --help 2>/dev/null", { timeout: 5000, stdio: "pipe" });
+    execSync(`${aditHookBinary} --help 2>/dev/null`, { timeout: 5000, stdio: "pipe" });
     binaryOk = true;
   } catch {
     // Try direct binary
@@ -100,7 +106,9 @@ export async function doctorCommand(
   checks.push({
     name: "adit-hook binary",
     ok: binaryOk,
-    detail: binaryOk ? "Available on PATH or via npx" : "Not found. Ensure @adit/hooks is installed.",
+    detail: binaryOk
+      ? `Available via ${aditHookBinary}`
+      : "Not found. Ensure @varveai/adit-hooks is installed.",
   });
 
   // 6. Hooks — validate via platform adapters
@@ -248,12 +256,11 @@ export async function doctorCommand(
       }
     }
 
-    // Fix missing hooks via plugin install
+    // Fix missing platform hooks.
     if (!hooksOk) {
       for (const adapter of adaptersNeedingFix) {
         try {
-          const { resolveAditHookBinary } = await import("@adit/hooks/adapters");
-          await adapter.installHooks(config.projectRoot, resolveAditHookBinary());
+          await adapter.installHooks(config.projectRoot, aditHookBinary);
           fixes.push(`Installed ADIT hooks for ${adapter.displayName}`);
         } catch {
           // ignore

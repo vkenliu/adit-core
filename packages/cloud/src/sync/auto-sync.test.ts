@@ -15,6 +15,7 @@ const syncFn = vi.fn().mockResolvedValue({
   batches: 0,
   totalRecords: 0,
 });
+const syncEngineConstructorFn = vi.fn();
 
 // Mock modules before importing the subject
 vi.mock("../config.js", () => ({
@@ -32,9 +33,15 @@ vi.mock("../auth/credentials.js", () => ({
   isSyncDisabled: vi.fn(() => false),
 }));
 
-vi.mock("@adit/core", () => ({
+vi.mock("@varveai/adit-core", () => ({
   getSyncState: vi.fn(),
-  loadConfig: vi.fn(() => ({ clientId: "test-client" })),
+  loadConfig: vi.fn(() => ({
+    clientId: "test-client",
+    projectRoot: "C:\\Users\\edy\\item\\windows-project",
+  })),
+  projectNameFromRoot: vi.fn((projectRoot: string) =>
+    projectRoot.replace(/[\\/]+$/u, "").split(/[\\/]+/u).at(-1) ?? "",
+  ),
 }));
 
 vi.mock("./serializer.js", () => ({
@@ -44,6 +51,10 @@ vi.mock("./serializer.js", () => ({
 vi.mock("./engine.js", () => {
   return {
     SyncEngine: class MockSyncEngine {
+      constructor(...args: unknown[]) {
+        syncEngineConstructorFn(...args);
+      }
+
       sync = syncFn;
     },
   };
@@ -63,7 +74,7 @@ vi.mock("../http/errors.js", () => ({
 import { triggerAutoSync } from "./auto-sync.js";
 import { loadCloudConfig } from "../config.js";
 import { loadCredentials } from "../auth/credentials.js";
-import { getSyncState } from "@adit/core";
+import { getSyncState } from "@varveai/adit-core";
 import { countUnsyncedRecords } from "./serializer.js";
 
 const mockLoadCloudConfig = vi.mocked(loadCloudConfig);
@@ -135,6 +146,22 @@ describe("triggerAutoSync", () => {
 
     expect(mockCountUnsyncedRecords).toHaveBeenCalled();
     expect(syncFn).toHaveBeenCalled();
+  });
+
+  it("passes project name from project root when syncing", async () => {
+    mockCountUnsyncedRecords.mockReturnValue(20);
+
+    await triggerAutoSync(fakeDb, PROJECT_ID, {
+      projectRoot: "C:\\Users\\edy\\item\\windows-project",
+    });
+
+    expect(syncEngineConstructorFn).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({
+        projectName: "windows-project",
+      }),
+    );
   });
 
   it("syncs via time trigger when >2h since last sync, skipping count check", async () => {

@@ -12,7 +12,7 @@ import {
   generatePerfStats,
   clearPerfLogs,
   type PerfStatsReport,
-} from "@adit/core";
+} from "@varveai/adit-core";
 
 /** Show performance stats report */
 export function perfCommand(opts?: {

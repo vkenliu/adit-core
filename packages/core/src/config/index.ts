@@ -61,6 +61,16 @@ function computeProjectId(projectRoot: string, remoteUrl?: string): string {
   return createHash("sha256").update(input).digest("hex").substring(0, 16);
 }
 
+/** Extract the project directory name from a root path, regardless of platform separators. */
+export function projectNameFromRoot(projectRoot: string): string {
+  const trimmed = projectRoot.trim().replace(/[\\/]+$/u, "");
+  if (!trimmed) return "";
+
+  const segments = trimmed.split(/[\\/]+/u);
+  const name = segments.at(-1) ?? "";
+  return /^[A-Za-z]:$/u.test(name) ? "" : name;
+}
+
 /** Find the git root by walking up from cwd */
 export function findGitRoot(startDir?: string): string | null {
   let dir = resolve(startDir ?? process.cwd());

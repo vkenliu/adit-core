@@ -2,7 +2,7 @@
  * Sync engine — orchestrates cursor-based incremental push.
  *
  * Protocol:
- * 1. GET /api/sync/status → retrieve server's cursor
+ * 1. GET /api/sync/status?localProjectId=... → retrieve server's cursor
  * 2. Build batch of local records after cursor
  * 3. POST /api/sync/push → push batch
  * 4. Update local cursor from response
@@ -10,8 +10,8 @@
  */
 
 import type Database from "better-sqlite3";
-import { getSyncState, upsertSyncState, withPerf } from "@adit/core";
-import type { SyncState } from "@adit/core";
+import { getSyncState, upsertSyncState, withPerf } from "@varveai/adit-core";
+import type { SyncState } from "@varveai/adit-core";
 import type { CloudClient } from "../http/client.js";
 import { buildSyncBatch, batchRecordCount, countUnsyncedRecords } from "./serializer.js";
 import { handleConflicts, type SyncConflict } from "./conflicts.js";
@@ -43,6 +43,8 @@ interface PushResponse {
 
 /** Per-project cursor entry returned by the server in projectCursors. */
 interface ProjectCursor {
+  localProjectId?: string;
+  serverProjectId?: string | null;
   lastSyncedEventId: string | null;
   lastSyncedAt: string | null;
 }
@@ -50,15 +52,17 @@ interface ProjectCursor {
 /**
  * Response from GET /api/sync/status.
  *
- * The server tracks cursors per (clientId, projectId) pair and returns them
- * in the `projectCursors` map. The top-level `lastSyncedEventId` and
- * `syncVersion` remain for backward compatibility.
+ * The server tracks cursors per (clientId, effective cloud projectId) pair,
+ * but returns them to the client keyed by localProjectId. The top-level
+ * `lastSyncedEventId` and `syncVersion` remain for backward compatibility.
  */
 interface StatusResponse {
   lastSyncedEventId: string | null;
   syncVersion: number;
   lastSyncedAt: string | null;
-  /** Per-project cursor map. Key is projectId. Present on updated servers. */
+  /** Cursor for the requested localProjectId. */
+  projectCursor?: ProjectCursor | null;
+  /** Per-project cursor map. Key is localProjectId. Present on updated servers. */
   projectCursors?: Record<string, ProjectCursor>;
 }
 
@@ -66,6 +70,7 @@ export class SyncEngine {
   private readonly db: Database.Database;
   private readonly client: CloudClient;
   private readonly projectId: string;
+  private readonly projectName: string;
   private readonly batchSize: number;
   private readonly serverUrl: string;
   private readonly cloudClientId: string;
@@ -76,6 +81,7 @@ export class SyncEngine {
     client: CloudClient,
     config: {
       projectId: string;
+      projectName?: string;
       batchSize: number;
       serverUrl: string;
       cloudClientId: string;
@@ -85,6 +91,7 @@ export class SyncEngine {
     this.db = db;
     this.client = client;
     this.projectId = config.projectId;
+    this.projectName = config.projectName ?? "";
     this.batchSize = config.batchSize;
     this.serverUrl = config.serverUrl;
     this.cloudClientId = config.cloudClientId;
@@ -102,15 +109,18 @@ export class SyncEngine {
       // 1. Get server's current cursor
       const serverStatus = await this.getRemoteStatus();
 
-      // 2. Extract per-project cursor (preferred) or fall back to global cursor.
-      //    The server returns projectCursors[projectId] with the watermark
-      //    for this specific project. If the server hasn't seen any events
-      //    for this project yet, the entry will be absent — meaning send all.
+      // 2. Extract the local-project cursor (preferred) or fall back to legacy
+      //    projectCursors. If the server hasn't seen this local project yet,
+      //    the cursor is null and we send everything.
       let cursor: string | null;
       let lastSyncedAt: string | null;
       let syncVersion = serverStatus.syncVersion;
 
-      const projectEntry = serverStatus.projectCursors?.[this.projectId];
+      const projectEntry = serverStatus.projectCursor ?? serverStatus.projectCursors?.[this.projectId];
+      const supportsProjectCursors =
+        serverStatus.projectCursor !== undefined || serverStatus.projectCursors !== undefined;
+      const isNewProject =
+        supportsProjectCursors && (projectEntry === undefined || projectEntry.serverProjectId === null);
       if (projectEntry !== undefined) {
         // Server has a per-project cursor — use it directly.
         cursor = projectEntry.lastSyncedEventId;
@@ -120,7 +130,7 @@ export class SyncEngine {
             `[adit-cloud] sync: using per-project cursor for ${this.projectId}: ${cursor ?? "null"}\n`,
           );
         }
-      } else if (serverStatus.projectCursors !== undefined) {
+      } else if (supportsProjectCursors) {
         // Server supports per-project cursors but has no entry for this
         // project — it has never seen events for it. Send everything.
         cursor = null;
@@ -169,6 +179,14 @@ export class SyncEngine {
         totalRecords: 0,
       };
 
+      upsertSyncState(this.db, {
+        serverUrl: this.serverUrl,
+        clientId: this.cloudClientId,
+        lastSyncedEventId: cursor,
+        lastSyncedAt,
+        syncVersion,
+      });
+
       // 3. Push batches until no more records
       while (true) {
         const batch = buildSyncBatch(
@@ -187,8 +205,10 @@ export class SyncEngine {
           "/api/sync/push",
           {
             clientId: this.cloudClientId,
+            localProjectId: this.projectId,
             syncVersion,
             batch,
+            ...(isNewProject && this.projectName ? { projectName: this.projectName } : {}),
           },
         );
 
@@ -209,6 +229,16 @@ export class SyncEngine {
         syncVersion = response.newSyncVersion;
         result.newSyncCursor = cursor;
 
+        // Persist progress after each batch (crash-safe), including the
+        // duplicate-only path below so local threshold checks use server truth.
+        upsertSyncState(this.db, {
+          serverUrl: this.serverUrl,
+          clientId: this.cloudClientId,
+          lastSyncedEventId: cursor,
+          lastSyncedAt: new Date().toISOString(),
+          syncVersion,
+        });
+
         // Guard against infinite loop: if all records were duplicates and
         // the cursor didn't advance, the same batch would repeat forever.
         if (response.accepted === 0 && cursor === prevCursor) {
@@ -219,15 +249,6 @@ export class SyncEngine {
           }
           break;
         }
-
-        // Persist progress after each batch (crash-safe)
-        upsertSyncState(this.db, {
-          serverUrl: this.serverUrl,
-          clientId: this.cloudClientId,
-          lastSyncedEventId: cursor,
-          lastSyncedAt: new Date().toISOString(),
-          syncVersion,
-        });
 
         // If batch was smaller than limit, we're done
         if (count < this.batchSize) break;
@@ -245,7 +266,7 @@ export class SyncEngine {
 
   /** Get sync status from server, scoped to this project. */
   async getRemoteStatus(): Promise<StatusResponse> {
-    const params = new URLSearchParams({ projectId: this.projectId });
+    const params = new URLSearchParams({ localProjectId: this.projectId });
     return this.client.get<StatusResponse>(`/api/sync/status?${params.toString()}`);
   }
 

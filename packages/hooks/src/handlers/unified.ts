@@ -9,14 +9,15 @@ import {
   getLatestEnvSnapshot,
   endSession,
   withPerf,
-} from "@adit/core";
+} from "@varveai/adit-core";
 import {
   getChangedFiles,
   createTimelineManager,
   captureEnvironment,
   diffEnvironments,
-} from "@adit/engine";
+} from "@varveai/adit-engine";
 import { initHookContext, type HookContext } from "../common/context.js";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import type { NormalizedHookInput } from "../adapters/types.js";
 
 /**
@@ -68,28 +69,42 @@ export async function dispatchHook(input: NormalizedHookInput): Promise<void> {
       });
     }
 
-    // Auto-sync to cloud on every hook event (fail-open).
-    // Uses dynamic import so @adit/cloud is not a build-time dependency.
+    // Auto-sync to cloud on stable hook boundaries (fail-open).
+    // Uses dynamic import so @varveai/adit-cloud is not a build-time dependency.
     // The module name is constructed to prevent TypeScript from resolving it.
-    // Force sync on session-end (flush all data) and on stop/session.idle
-    // (ensures data is persisted even if /exit doesn't fire a session-end).
-    try {
-      await withPerf(dataDir, "network", "cloud-auto-sync", async () => {
-        const cloudModuleName = ["@adit", "cloud"].join("/");
-        const cloudModule = await import(cloudModuleName) as {
-          triggerAutoSync: (db: unknown, projectId: string, options?: { force?: boolean }) => Promise<void>;
-        };
-        // Awaited so db stays open until it finishes querying.
-        // The actual network push happens inside triggerAutoSync's own fire-and-forget.
-        const force = input.hookType === "session-end" || input.hookType === "stop";
-        await cloudModule.triggerAutoSync(ctx.db, ctx.config.projectId, force ? { force: true } : undefined);
-      });
-    } catch {
-      // @adit/cloud not installed — silently skip
+    // Force sync only on session-end to flush final data. Other hook events,
+    // including stop/session.idle, use the count/time thresholds in triggerAutoSync.
+    // prompt-submit is deliberately skipped so cloud does not receive half a turn
+    // containing a user prompt without its assistant response.
+    if (shouldTriggerCloudAutoSync(input.hookType)) {
+      try {
+        await withPerf(dataDir, "network", "cloud-auto-sync", async () => {
+          const cloudModuleName = ["@varveai", "adit-cloud"].join("/");
+          const cloudModule = await import(cloudModuleName) as {
+            triggerAutoSync: (
+              db: unknown,
+              projectId: string,
+              options?: { force?: boolean; projectRoot?: string },
+            ) => Promise<void>;
+          };
+          // Awaited so db stays open until triggerAutoSync finishes querying and pushing.
+          const force = input.hookType === "session-end";
+          await cloudModule.triggerAutoSync(ctx.db, ctx.config.projectId, {
+            ...(force ? { force: true } : {}),
+            projectRoot: ctx.config.projectRoot,
+          });
+        });
+      } catch {
+        // @varveai/adit-cloud not installed — silently skip
+      }
     }
   } finally {
     ctx.db.close();
   }
+}
+
+function shouldTriggerCloudAutoSync(hookType: NormalizedHookInput["hookType"]): boolean {
+  return hookType !== "prompt-submit";
 }
 
 /** Handle prompt submission (kept lightweight — no git operations) */
@@ -128,9 +143,30 @@ async function handleStopUnified(ctx: HookContext, input: NormalizedHookInput): 
   const lastPrompt = recentPrompts[0]?.promptText ?? null;
 
   // Use last_assistant_message as the response text (what the model actually said).
+  // Cursor sometimes fires stop before transcript text is fully flushed, so
+  // we retry transcript extraction briefly when message text is missing.
+  const recoveredAssistantMessage = input.lastAssistantMessage
+    ?? await recoverAssistantMessageFromTranscript(input.transcriptPath);
   // Fall back to stop_reason for backward compatibility, then to "completed".
-  const responseText = input.lastAssistantMessage ?? input.stopReason ?? "completed";
+  const responseText = recoveredAssistantMessage ?? input.stopReason ?? "completed";
   const checkpointLabel = input.stopReason ?? "completed";
+
+  // Debug: log response resolution chain to trace why "completed" is recorded
+  try {
+    appendFileSync("/tmp/adit-hook-debug.jsonl", JSON.stringify({
+      timestamp: new Date().toISOString(),
+      phase: "stop-response-resolution",
+      hookType: input.hookType,
+      platformCli: input.platformCli,
+      hasLastAssistantMessage: !!input.lastAssistantMessage,
+      hasTranscriptPath: !!input.transcriptPath,
+      transcriptRecoveryResult: recoveredAssistantMessage ? "found" : "not-found",
+      stopReason: input.stopReason,
+      finalResponseText: responseText,
+      rawPlatformDataKeys: input.rawPlatformData ? Object.keys(input.rawPlatformData) : [],
+      rawPlatformData: input.rawPlatformData,
+    }) + "\n");
+  } catch { /* best-effort */ }
 
   const event = await timeline.recordEvent({
     sessionId: ctx.session.id,
@@ -182,6 +218,50 @@ async function handleStopUnified(ctx: HookContext, input: NormalizedHookInput): 
 
 }
 
+function extractLastAssistantTextFromTranscript(transcriptPath: string): string | undefined {
+  if (!transcriptPath || !existsSync(transcriptPath)) return undefined;
+  try {
+    const lines = readFileSync(transcriptPath, "utf-8")
+      .split("\n")
+      .filter((l) => l.trim().length > 0);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const entry = JSON.parse(lines[i]) as {
+          role?: string;
+          message?: { content?: Array<{ type?: string; text?: string }> };
+        };
+        if (entry.role !== "assistant") continue;
+        const content = entry.message?.content;
+        if (!Array.isArray(content)) continue;
+        const text = content
+          .filter((c): c is { type: string; text: string } => c?.type === "text" && typeof c.text === "string")
+          .map((c) => c.text.trim())
+          .filter((t) => t.length > 0)
+          .join("\n");
+        if (text) return text;
+      } catch {
+        // ignore malformed lines
+      }
+    }
+  } catch {
+    // fail-open
+  }
+  return undefined;
+}
+
+async function recoverAssistantMessageFromTranscript(transcriptPath?: string): Promise<string | undefined> {
+  if (!transcriptPath) return undefined;
+  const delaysMs = [0, 120, 240, 480, 800];
+  for (const delayMs of delaysMs) {
+    if (delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+    const text = extractLastAssistantTextFromTranscript(transcriptPath);
+    if (text) return text;
+  }
+  return undefined;
+}
+
 /** Handle session start — capture initial env snapshot and record metadata */
 async function handleSessionStart(ctx: HookContext, input: NormalizedHookInput): Promise<void> {
   const timeline = createTimelineManager(ctx.db, ctx.config);
@@ -212,20 +292,11 @@ async function handleSessionStart(ctx: HookContext, input: NormalizedHookInput):
     }
   }
 
-  // Trigger auto-sync on session start to ensure the Project record
-  // exists server-side before the user runs `/adit link`.
-  try {
-    const { triggerAutoSync } = await import("@adit/cloud");
-    triggerAutoSync(ctx.db, ctx.config.projectId).catch(() => {});
-  } catch {
-    // Fail-open — cloud package may not be available
-  }
-
   // Trigger project-link auto-sync (fire-and-forget, fail-open).
   // Spawns a detached background process to sync branches, commits,
   // and documents — won't be killed by the 10s hook timeout.
   try {
-    const cloudModuleName = ["@adit", "cloud"].join("/");
+    const cloudModuleName = ["@varveai", "adit-cloud"].join("/");
     const { triggerProjectLinkSync } = await import(cloudModuleName) as {
       triggerProjectLinkSync: (db: unknown, projectId: string, projectRoot: string) => Promise<void>;
     };
@@ -277,20 +348,51 @@ async function handleTaskCompleted(ctx: HookContext, input: NormalizedHookInput)
 async function handleNotification(ctx: HookContext, input: NormalizedHookInput): Promise<void> {
   const timeline = createTimelineManager(ctx.db, ctx.config);
 
+  const message = nonEmptyString(input.notificationMessage);
+  const title = nonEmptyString(input.notificationTitle);
+  const notificationType = nonEmptyString(input.notificationType);
+  const toolName = nonEmptyString(input.toolName);
+  const hasToolInput = hasObjectContent(input.toolInput);
+  const hasToolOutput = hasObjectContent(input.toolOutput);
+
+  if (!message && !title && !notificationType && !toolName && !hasToolInput && !hasToolOutput) {
+    return;
+  }
+
   const base: Record<string, unknown> = {
-    message: input.notificationMessage,
-    title: input.notificationTitle,
-    notificationType: input.notificationType,
+    message,
+    title,
+    notificationType,
+    toolName,
+    toolInput: hasToolInput ? input.toolInput : undefined,
   };
+  const responseText =
+    message ??
+    title ??
+    (toolName
+      ? `Tool ${toolName} completed`
+      : notificationType
+        ? `Notification: ${notificationType}`
+        : "Tool notification");
 
   await timeline.recordEvent({
     sessionId: ctx.session.id,
     eventType: "notification",
     actor: "system",
-    responseText: input.notificationMessage ?? "Notification",
-    toolName: input.notificationType ?? null,
+    responseText,
+    toolName: notificationType ?? toolName ?? null,
     toolInputJson: JSON.stringify(base),
+    toolOutputJson: hasToolOutput ? JSON.stringify(input.toolOutput) : null,
   });
+}
+
+function nonEmptyString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function hasObjectContent(value: Record<string, unknown> | undefined): boolean {
+  return value != null && Object.keys(value).length > 0;
 }
 
 /** Handle subagent start — record when a subagent is spawned */
@@ -336,7 +438,7 @@ async function handleSubagentStop(ctx: HookContext, input: NormalizedHookInput):
 /**
  * Trigger transcript upload if cloud is configured.
  *
- * Uses dynamic import so @adit/cloud is not a build-time dependency.
+ * Uses dynamic import so @varveai/adit-cloud is not a build-time dependency.
  * Fully fail-open: errors are silently swallowed.
  *
  * Reuses the existing HookContext to avoid opening a second DB connection.
@@ -348,7 +450,7 @@ async function triggerTranscriptUploadIfEnabled(
   if (!input.transcriptPath) return;
 
   try {
-    const cloudModuleName = ["@adit", "cloud"].join("/");
+    const cloudModuleName = ["@varveai", "adit-cloud"].join("/");
     const cloudModule = (await import(cloudModuleName)) as {
       triggerTranscriptUpload: (
         db: unknown,
@@ -362,6 +464,6 @@ async function triggerTranscriptUploadIfEnabled(
       input.transcriptPath,
     );
   } catch {
-    // @adit/cloud not installed or other error — silently skip
+    // @varveai/adit-cloud not installed or other error — silently skip
   }
 }

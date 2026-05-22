@@ -15,10 +15,12 @@ export type SessionStatus =
 /** Which AI platform is driving this session */
 export type Platform =
   | "claude-code"
+  | "claude-vscode"
   | "cursor"
   | "copilot"
   | "opencode"
   | "codex"
+  | "gemini"
   | "other";
 
 /** Session type */

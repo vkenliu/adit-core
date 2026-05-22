@@ -1,11 +1,11 @@
 /**
- * CLI handlers for `adit cloud project link` and `adit cloud project intent`.
+ * CLI handlers for `adit cloud link` and `adit cloud intent`.
  *
  * These wire up the config/credentials/database lifecycle around the
- * command handlers from @adit/cloud/project-link.
+ * command handlers from @varveai/adit-cloud/project-link.
  */
 
-import { loadConfig, openDatabase, closeDatabase } from "@adit/core";
+import { loadConfig, openDatabase, closeDatabase } from "@varveai/adit-core";
 import {
   loadCloudConfig,
   loadCredentials,
@@ -19,12 +19,12 @@ import {
   formatIntentList,
   formatIntentDetail,
   DEFAULT_SERVER_URL,
-} from "@adit/cloud";
-import type { LinkOptions, IntentOptions } from "@adit/cloud";
-import { isGitRepo } from "@adit/engine";
+} from "@varveai/adit-cloud";
+import type { LinkOptions, IntentOptions } from "@varveai/adit-cloud";
+import { isGitRepo } from "@varveai/adit-engine";
 
 /**
- * `adit cloud project link` — Link this project to adit-cloud.
+ * `adit cloud link` — Link this project to adit-cloud.
  */
 export async function projectLinkCliHandler(opts: LinkOptions): Promise<void> {
   const config = loadConfig();
@@ -40,7 +40,9 @@ export async function projectLinkCliHandler(opts: LinkOptions): Promise<void> {
   const credentials = loadCredentials();
   if (!credentials) {
     console.error("Not logged in to adit-cloud.");
-    console.error("Run 'adit cloud login' to authenticate, or 'adit cloud auth-token <token>' for token auth.");
+    console.error(
+      "Run 'adit cloud login' to authenticate, or 'adit cloud login --token <token>' for token auth.",
+    );
     process.exitCode = 1;
     return;
   }
@@ -52,7 +54,8 @@ export async function projectLinkCliHandler(opts: LinkOptions): Promise<void> {
 
   // Resolve server URL
   const cloudConfig = loadCloudConfig();
-  const serverUrl = cloudConfig.serverUrl ?? credentials.serverUrl ?? DEFAULT_SERVER_URL;
+  const serverUrl =
+    cloudConfig.serverUrl ?? credentials.serverUrl ?? DEFAULT_SERVER_URL;
 
   // Verify connectivity
   const client = new CloudClient(serverUrl, credentials);
@@ -60,12 +63,16 @@ export async function projectLinkCliHandler(opts: LinkOptions): Promise<void> {
     await client.get("/api/sync/health");
   } catch (error) {
     if (error instanceof CloudNetworkError) {
-      console.error(`Cannot reach adit-cloud at ${serverUrl}. Check your network connection.`);
+      console.error(
+        `Cannot reach adit-cloud at ${serverUrl}. Check your network connection.`,
+      );
     } else if (error instanceof CloudAuthError) {
       console.error(`Authentication failed: ${error.message}`);
       console.error("Run 'adit cloud login' to re-authenticate.");
     } else {
-      console.error(`Connection check failed: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(
+        `Connection check failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
     process.exitCode = 1;
     return;
@@ -79,7 +86,14 @@ export async function projectLinkCliHandler(opts: LinkOptions): Promise<void> {
   // Open database and run the link flow
   const db = openDatabase(config.dbPath);
   try {
-    const result = await linkCommand(db, client, config.projectRoot, config.projectId, serverUrl, opts);
+    const result = await linkCommand(
+      db,
+      client,
+      config.projectRoot,
+      config.projectId,
+      serverUrl,
+      opts,
+    );
     if (opts.json) {
       console.log(JSON.stringify(result, null, 2));
     }
@@ -87,9 +101,10 @@ export async function projectLinkCliHandler(opts: LinkOptions): Promise<void> {
     if (error instanceof CloudApiError) {
       console.error(`\nServer error: ${error.status} — ${error.message}`);
       if (error.body) {
-        const bodyStr = typeof error.body === "string"
-          ? error.body
-          : JSON.stringify(error.body, null, 2);
+        const bodyStr =
+          typeof error.body === "string"
+            ? error.body
+            : JSON.stringify(error.body, null, 2);
         console.error(`  Response: ${bodyStr}`);
       }
     } else if (error instanceof CloudNetworkError) {
@@ -98,7 +113,9 @@ export async function projectLinkCliHandler(opts: LinkOptions): Promise<void> {
       console.error(`\nAuthentication failed: ${error.message}`);
       console.error("Run 'adit cloud login' to re-authenticate.");
     } else {
-      console.error(`\nLink failed: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(
+        `\nLink failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
     process.exitCode = 1;
   } finally {
@@ -107,32 +124,31 @@ export async function projectLinkCliHandler(opts: LinkOptions): Promise<void> {
 }
 
 /**
- * `adit cloud project intent` — List or show intents from connected project.
+ * `adit cloud intent` — List or show intents from connected project.
  */
-export async function projectIntentCliHandler(opts: IntentOptions): Promise<void> {
+export async function projectIntentCliHandler(
+  opts: IntentOptions,
+): Promise<void> {
   const config = loadConfig();
 
   // Prerequisite: credentials
   const credentials = loadCredentials();
   if (!credentials) {
-    console.error("Not logged in to adit-cloud. Run 'adit cloud login' to authenticate.");
+    console.error(
+      "Not logged in to adit-cloud. Run 'adit cloud login' to authenticate.",
+    );
     process.exitCode = 1;
     return;
   }
 
   // Resolve server URL and project ID
   const cloudConfig = loadCloudConfig();
-  const serverUrl = cloudConfig.serverUrl ?? credentials.serverUrl ?? DEFAULT_SERVER_URL;
+  const serverUrl =
+    cloudConfig.serverUrl ?? credentials.serverUrl ?? DEFAULT_SERVER_URL;
   const client = new CloudClient(serverUrl, credentials);
 
-  // Check for cached confirmed project ID
-  const db = openDatabase(config.dbPath);
   try {
-    const { getProjectLinkCache } = await import("@adit/cloud");
-    const cache = getProjectLinkCache(db, config.projectId, serverUrl);
-    const projectId = cache?.confirmedProjectId ?? config.projectId;
-
-    const result = await intentCommand(client, projectId, opts);
+    const result = await intentCommand(client, config.projectId, opts);
 
     if (opts.json) {
       console.log(JSON.stringify(result, null, 2));
@@ -146,14 +162,14 @@ export async function projectIntentCliHandler(opts: IntentOptions): Promise<void
     }
   } catch (error) {
     if (error instanceof CloudApiError && error.status === 404) {
-      console.error("No project link found. Run 'adit cloud project link' first.");
+      console.error("No project link found. Run 'adit cloud link' first.");
     } else if (error instanceof CloudApiError) {
       console.error(`Server error: ${error.status} — ${error.message}`);
     } else {
-      console.error(`Failed: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(
+        `Failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
     process.exitCode = 1;
-  } finally {
-    closeDatabase(db);
   }
 }

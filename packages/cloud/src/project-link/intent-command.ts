@@ -16,23 +16,24 @@ import type {
 /**
  * Execute the intent command: list intents or show detail.
  *
- * Requires a linked project with a confirmed project ID.
+ * Requires a linked project. The project ID passed here is the local project ID
+ * from the client config; the server resolves it to the effective cloud project.
  */
 export async function intentCommand(
   client: CloudClient,
-  projectId: string,
+  localProjectId: string,
   options: IntentOptions,
 ): Promise<IntentResult> {
   if (options.id) {
     // Show detail for a specific intent
     const intent = await client.get<{ intent: IntentDetail }>(
-      `/api/project-link/intents/${encodeURIComponent(options.id)}?projectId=${encodeURIComponent(projectId)}`,
+      `/api/project-link/intents/${encodeURIComponent(options.id)}?localProjectId=${encodeURIComponent(localProjectId)}`,
     );
     return { intent: intent.intent };
   }
 
   // List intents
-  let url = `/api/project-link/intents?projectId=${encodeURIComponent(projectId)}`;
+  let url = `/api/project-link/intents?localProjectId=${encodeURIComponent(localProjectId)}`;
   if (options.state) {
     url += `&state=${encodeURIComponent(options.state)}`;
   }
@@ -103,30 +104,58 @@ export function formatIntentDetail(intent: IntentDetail): string {
   if (intent.tasks.length > 0) {
     lines.push("");
     lines.push(`Tasks (${intent.tasks.length}):`);
+
+    // Group tasks by phase, collect phaseChecklist from first task that has it
+    const phases = new Map<number, { title: string | null; checklist: typeof intent.tasks[0]["phaseChecklist"]; tasks: typeof intent.tasks }>();
     for (const task of intent.tasks) {
-      const phase = task.phaseTitle ? `[${task.phaseTitle}]` : `[Phase ${task.phase}]`;
-      const complexity = task.complexityScore !== null ? ` (complexity: ${task.complexityScore})` : "";
-      lines.push(`  ${phase} ${task.title} — ${task.approvalStatus}${complexity}`);
-      if (task.description) {
-        lines.push(`    ${task.description}`);
+      let group = phases.get(task.phase);
+      if (!group) {
+        group = { title: task.phaseTitle, checklist: [], tasks: [] };
+        phases.set(task.phase, group);
       }
+      // Prefer descriptive title over "Phase N"
+      if (task.phaseTitle && !task.phaseTitle.startsWith("Phase ")) {
+        group.title = task.phaseTitle;
+      }
+      // Collect phaseChecklist from first task that has it
+      if (task.phaseChecklist && task.phaseChecklist.length > 0 && group.checklist.length === 0) {
+        group.checklist = task.phaseChecklist;
+      }
+      group.tasks.push(task);
     }
-  }
 
-  if (intent.latestPlan) {
-    lines.push("");
-    lines.push(`Latest Plan (v${intent.latestPlan.version}, ${intent.latestPlan.versionType}):`);
-    if (intent.latestPlan.gatekeeperVerdict) {
-      lines.push(`  Verdict: ${intent.latestPlan.gatekeeperVerdict}`);
-    }
-  }
-
-  if (intent.recentShipNotes.length > 0) {
-    lines.push("");
-    lines.push(`Recent Ship Notes (${intent.recentShipNotes.length}):`);
-    for (const note of intent.recentShipNotes) {
-      const label = note.architecturalDecision ? " [ARCH]" : "";
-      lines.push(`  - ${note.noteBody}${label} (${note.createdBy})`);
+    let taskIndex = 0;
+    for (const [phaseNum, group] of phases) {
+      const phaseLabel = group.title || `Phase ${phaseNum}`;
+      lines.push("");
+      lines.push(`  Phase ${phaseNum} — ${phaseLabel}`);
+      if (group.checklist.length > 0) {
+        lines.push(`    Phase Checklist:`);
+        for (const item of group.checklist) {
+          lines.push(`    ${typeof item === "object" && item.item ? item.item : item}`);
+        }
+      }
+      for (const task of group.tasks) {
+        const complexity = task.complexityScore !== null ? ` (complexity: ${task.complexityScore})` : "";
+        lines.push(`    #${taskIndex} ${task.title} — ${task.approvalStatus}${complexity}`);
+        if (task.description) {
+          lines.push(`      ${task.description}`);
+        }
+        if (task.acceptanceCriteria?.criteria?.length > 0) {
+          lines.push(`      Acceptance Criteria:`);
+          for (const ac of task.acceptanceCriteria.criteria) {
+            lines.push(`      - ${ac}`);
+          }
+        }
+        if (task.acceptanceCriteria?.assertions?.length > 0) {
+          lines.push(`      Verification Assertions:`);
+          for (const a of task.acceptanceCriteria.assertions) {
+            const suffix = a.path ? ` (${a.path})` : "";
+            lines.push(`      - [${a.type}] ${a.description}${suffix}`);
+          }
+        }
+        taskIndex++;
+      }
     }
   }
 

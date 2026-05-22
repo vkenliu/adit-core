@@ -7,7 +7,7 @@
  * and documents what's needed to add support.
  */
 
-import type { Platform } from "@adit/core";
+import type { Platform } from "@varveai/adit-core";
 import type {
   PlatformAdapter,
   HookMapping,
@@ -73,25 +73,11 @@ export function createStubAdapter(
   };
 }
 
-/** Cursor — VS Code-based AI coding assistant */
-export const cursorAdapter = createStubAdapter(
-  "cursor",
-  "Cursor",
-  ["CURSOR_SESSION_ID", "CURSOR"],
-);
-
 /** GitHub Copilot — AI pair programmer */
 export const copilotAdapter = createStubAdapter(
   "copilot",
   "GitHub Copilot",
   ["GITHUB_COPILOT", "COPILOT_SESSION"],
-);
-
-/** Codex — OpenAI's AI coding agent */
-export const codexAdapter = createStubAdapter(
-  "codex",
-  "Codex",
-  ["CODEX", "CODEX_SESSION"],
 );
 
 /** Unknown / undetected platform */

@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { existsSync } from "node:fs";
 
 export type {
   PlatformAdapter,
@@ -12,9 +13,27 @@ export type {
 } from "./types.js";
 
 export { claudeCodeAdapter } from "./claude-code.js";
+export { claudeVscodeAdapter } from "./claude-vscode.js";
 export { opencodeAdapter } from "./opencode.js";
-export { createStubAdapter, cursorAdapter, copilotAdapter, codexAdapter, otherAdapter } from "./stub.js";
-export { getAdapter, listAdapters, registerAdapter, detectPlatform, detectPlatforms } from "./registry.js";
+export { createStubAdapter, copilotAdapter, otherAdapter } from "./stub.js";
+export { cursorAdapter } from "./cursor.js";
+export { codexAdapter } from "./codex.js";
+export {
+  ADIT_CLOUD_CODEX_HOOK_TRUST_BLOCK,
+  ADIT_CODEX_HOOK_TRUST_BLOCK,
+  appendCodexHookTrustBlock,
+  buildCodexHookStatesForEntries,
+  codexHookTrustMarkerForPath,
+  findUntrustedCodexHookStates,
+  installCodexHookTrustConfig,
+  removeCodexHookTrustConfig,
+  resolveCodexHookTrustConfigPath,
+  stripCodexHookTrustBlocks,
+  upsertCodexHookTrustConfig,
+  type CodexHookState,
+} from "./codex-trust.js";
+export { geminiAdapter } from "./gemini.js";
+export { getAdapter, listAdapters, registerAdapter, detectPlatform, detectPlatformFromPayload, detectPlatforms } from "./registry.js";
 
 /**
  * Resolve the absolute path to the adit-hook binary for reliable invocation.
@@ -27,8 +46,12 @@ export function resolveAditHookBinary(): string {
     // The binary entry point is one directory up at <pkg>/dist/index.js.
     const thisDir = dirname(fileURLToPath(import.meta.url));
     const binaryPath = join(thisDir, "..", "index.js");
-    return `node "${binaryPath}"`;
+    if (existsSync(binaryPath)) {
+      return `node "${binaryPath}"`;
+    }
   } catch {
-    return "npx adit-hook";
+    /* fall through */
   }
+  // Fallback: when installed via npm globally, adit-hook is on PATH
+  return "adit-hook";
 }

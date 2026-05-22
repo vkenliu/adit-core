@@ -1,10 +1,10 @@
 /**
- * Tests for `adit list` command utilities.
+ * Tests for `adit timeline` command utilities.
  */
 
 import { describe, it, expect } from "vitest";
 import { sortEvents, type SortField } from "./list.js";
-import type { AditEvent } from "@adit/core";
+import type { AditEvent } from "@varveai/adit-core";
 
 function makeEvent(overrides: Partial<AditEvent>): AditEvent {
   return {

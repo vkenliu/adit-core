@@ -18,9 +18,9 @@ import {
   type AditConfig,
   type AditSession,
   type Platform,
-} from "@adit/core";
+} from "@varveai/adit-core";
 import type Database from "better-sqlite3";
-import { getCurrentBranch, getRemoteUrl } from "@adit/engine";
+import { getCurrentBranch, getRemoteUrl } from "@varveai/adit-engine";
 
 export interface HookContext {
   db: Database.Database;
@@ -41,8 +41,7 @@ export async function initHookContext(
   let session: AditSession | null = null;
   if (platformSessionId) {
     session = getSessionByPlatformSessionId(db, platformSessionId);
-  }
-  if (!session) {
+  } else {
     session = getActiveSession(db, config.projectId, config.clientId);
   }
   if (!session) {

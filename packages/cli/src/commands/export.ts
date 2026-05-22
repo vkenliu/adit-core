@@ -21,8 +21,8 @@ import {
   parseLabels,
   parseDiffStats,
   type AditEvent,
-} from "@adit/core";
-import { createTimelineManager } from "@adit/engine";
+} from "@varveai/adit-core";
+import { createTimelineManager } from "@varveai/adit-engine";
 
 /** `adit export <id>` — export a single event bundle */
 export async function exportCommand(

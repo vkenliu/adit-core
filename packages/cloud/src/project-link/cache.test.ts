@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 import { unlinkSync } from "node:fs";
-import { openDatabase, closeDatabase } from "@adit/core";
+import { openDatabase, closeDatabase } from "@varveai/adit-core";
 import type Database from "better-sqlite3";
 import {
   getProjectLinkCache,

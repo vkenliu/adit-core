@@ -14,7 +14,7 @@ import { TimelineScreen } from "./screens/TimelineScreen.js";
 import { DiffScreen } from "./screens/DiffScreen.js";
 import { SearchScreen } from "./screens/SearchScreen.js";
 import { EnvScreen } from "./screens/EnvScreen.js";
-import type { EnvSnapshot } from "@adit/core";
+import type { EnvSnapshot } from "@varveai/adit-core";
 import { type SortField, sortEvents } from "../commands/list.js";
 
 export function App(): React.ReactElement {

@@ -3,7 +3,7 @@
  *
  * Mocks all external dependencies (DB, engine, cloud) to verify
  * that dispatchHook correctly routes each hook type, handles
- * cloud auto-sync with force flags, and maintains fail-open behavior.
+ * cloud auto-sync with threshold-based and force flags, and maintains fail-open behavior.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -20,13 +20,13 @@ const mockRecordEvent = vi.fn().mockResolvedValue({
 const mockCreateCheckpoint = vi.fn().mockResolvedValue(null);
 const mockList = vi.fn().mockResolvedValue([]);
 
-vi.mock("@adit/core", () => ({
+vi.mock("@varveai/adit-core", () => ({
   getLatestEnvSnapshot: vi.fn(() => null),
   endSession: vi.fn(),
   withPerf: vi.fn((_dir: string, _cat: string, _op: string, fn: () => unknown) => fn()),
 }));
 
-vi.mock("@adit/engine", () => ({
+vi.mock("@varveai/adit-engine", () => ({
   getChangedFiles: vi.fn().mockResolvedValue([]),
   createTimelineManager: vi.fn(() => ({
     recordEvent: mockRecordEvent,
@@ -37,7 +37,7 @@ vi.mock("@adit/engine", () => ({
   diffEnvironments: vi.fn().mockReturnValue({ changes: [], severity: "none" }),
 }));
 
-vi.mock("@adit/cloud", () => ({
+vi.mock("@varveai/adit-cloud", () => ({
   triggerTranscriptUpload: vi.fn().mockResolvedValue(undefined),
   triggerAutoSync: vi.fn().mockResolvedValue(undefined),
 }));
@@ -58,12 +58,15 @@ vi.mock("../common/context.js", () => ({
 }));
 
 import { dispatchHook } from "./unified.js";
-import { endSession } from "@adit/core";
-import { getChangedFiles } from "@adit/engine";
+import { endSession } from "@varveai/adit-core";
+import { getChangedFiles } from "@varveai/adit-engine";
+import { triggerAutoSync, triggerTranscriptUpload } from "@varveai/adit-cloud";
 import type { NormalizedHookInput } from "../adapters/types.js";
 
 const mockEndSession = vi.mocked(endSession);
 const mockGetChangedFiles = vi.mocked(getChangedFiles);
+const mockTriggerAutoSync = vi.mocked(triggerAutoSync);
+const mockTriggerTranscriptUpload = vi.mocked(triggerTranscriptUpload);
 
 describe("dispatchHook", () => {
   beforeEach(() => {
@@ -91,6 +94,18 @@ describe("dispatchHook", () => {
         promptText: "Fix the bug in auth.ts",
       }),
     );
+  });
+
+  it("does not trigger cloud auto-sync on prompt-submit", async () => {
+    const input: NormalizedHookInput = {
+      cwd: "/test",
+      hookType: "prompt-submit",
+      prompt: "Fix the bug in auth.ts",
+    };
+
+    await dispatchHook(input);
+
+    expect(mockTriggerAutoSync).not.toHaveBeenCalled();
   });
 
   it("skips prompt-submit when prompt is empty", async () => {
@@ -123,6 +138,24 @@ describe("dispatchHook", () => {
         actor: "assistant",
         responseText: "Done fixing the bug.",
       }),
+    );
+  });
+
+  it("does not force-sync on stop so threshold and time triggers control pushing", async () => {
+    mockGetChangedFiles.mockResolvedValue([]);
+
+    const input: NormalizedHookInput = {
+      cwd: "/test",
+      hookType: "stop",
+      stopReason: "completed",
+    };
+
+    await dispatchHook(input);
+
+    expect(mockTriggerAutoSync).toHaveBeenCalledWith(
+      expect.anything(),
+      "proj-001",
+      { projectRoot: "/test" },
     );
   });
 
@@ -176,6 +209,56 @@ describe("dispatchHook", () => {
     );
   });
 
+  it("triggers cloud auto-sync once on session-start", async () => {
+    const input: NormalizedHookInput = {
+      cwd: "/test",
+      hookType: "session-start",
+      sessionSource: "startup",
+    };
+
+    await dispatchHook(input);
+
+    expect(mockTriggerAutoSync).toHaveBeenCalledTimes(1);
+    expect(mockTriggerAutoSync).toHaveBeenCalledWith(
+      expect.anything(),
+      "proj-001",
+      { projectRoot: "/test" },
+    );
+  });
+
+  it("force-syncs on session-end before closing the database", async () => {
+    const input: NormalizedHookInput = {
+      cwd: "/test",
+      hookType: "session-end",
+      sessionEndReason: "exit",
+    };
+
+    await dispatchHook(input);
+
+    expect(mockTriggerAutoSync).toHaveBeenCalledWith(
+      expect.anything(),
+      "proj-001",
+      { force: true, projectRoot: "/test" },
+    );
+  });
+
+  it("triggers transcript upload through the cloud package when a transcript path exists", async () => {
+    const input: NormalizedHookInput = {
+      cwd: "/test",
+      hookType: "prompt-submit",
+      prompt: "Fix the bug in auth.ts",
+      transcriptPath: "/tmp/transcript.jsonl",
+    };
+
+    await dispatchHook(input);
+
+    expect(mockTriggerTranscriptUpload).toHaveBeenCalledWith(
+      expect.anything(),
+      "sess-001",
+      "/tmp/transcript.jsonl",
+    );
+  });
+
   it("routes session-end with error reason", async () => {
     const input: NormalizedHookInput = {
       cwd: "/test",
@@ -210,6 +293,44 @@ describe("dispatchHook", () => {
         actor: "system",
         responseText: "Tool result: file created",
         toolName: "tool_result",
+      }),
+    );
+  });
+
+  it("skips empty notification events", async () => {
+    const input: NormalizedHookInput = {
+      cwd: "/test",
+      hookType: "notification",
+    };
+
+    await dispatchHook(input);
+
+    expect(mockRecordEvent).not.toHaveBeenCalled();
+  });
+
+  it("records tool notification metadata when message fields are missing", async () => {
+    const input: NormalizedHookInput = {
+      cwd: "/test",
+      hookType: "notification",
+      toolName: "Bash",
+      toolInput: { command: "git status" },
+      toolOutput: { stdout: "clean" },
+    };
+
+    await dispatchHook(input);
+
+    expect(mockRecordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "sess-001",
+        eventType: "notification",
+        actor: "system",
+        responseText: "Tool Bash completed",
+        toolName: "Bash",
+        toolInputJson: JSON.stringify({
+          toolName: "Bash",
+          toolInput: { command: "git status" },
+        }),
+        toolOutputJson: JSON.stringify({ stdout: "clean" }),
       }),
     );
   });

@@ -2,7 +2,7 @@
  * `adit config` — View and manage ADIT configuration.
  */
 
-import { loadConfig, type AditConfig } from "@adit/core";
+import { loadConfig, type AditConfig } from "@varveai/adit-core";
 
 /** `adit config` — show current config */
 export async function configCommand(

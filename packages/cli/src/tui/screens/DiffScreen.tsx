@@ -5,7 +5,7 @@
 import React, { useState, useEffect } from "react";
 import { Box, Text } from "ink";
 import { DiffView } from "../components/DiffView.js";
-import type { AditEvent } from "@adit/core";
+import type { AditEvent } from "@varveai/adit-core";
 
 interface DiffScreenProps {
   event: AditEvent | null;

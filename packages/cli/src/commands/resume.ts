@@ -23,8 +23,8 @@ import {
   getRecentCheckpointsExcludingBranch,
   getSessionById,
   getEventsBySession,
-} from "@adit/core";
-import type { AditEvent, AditSession } from "@adit/core";
+} from "@varveai/adit-core";
+import type { AditEvent, AditSession } from "@varveai/adit-core";
 import {
   createTimelineManager,
   hasUncommittedChanges,
@@ -33,8 +33,8 @@ import {
   branchExists,
   shaExists,
   runGitOrThrow,
-} from "@adit/engine";
-import { listAdapters } from "@adit/hooks/adapters";
+} from "@varveai/adit-engine";
+import { listAdapters } from "@varveai/adit-hooks/adapters";
 import { getEventSummary } from "../utils/summary.js";
 import {
   checkDependencyChanges,
