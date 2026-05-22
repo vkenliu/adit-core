@@ -272,15 +272,12 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     this.detachReclaimInput();
     this.stopCapabilityProbe();
     process.stderr.write("\n[adit cloud claude] releasing Web control back to local Claude CLI...\n");
-    this.finishWebPrompts(new Error("Web control released to local CLI"));
-    this.rejectPendingRequests(new Error("Web control released to local CLI"));
-    this.remoteAbortController?.abort();
-    try {
-      await this.remoteQuery?.interrupt?.();
-    } catch {}
-    this.remoteQuery?.close?.();
-    this.remoteQuery = null;
-    this.remoteAbortController = null;
+    this.remoteLoopGeneration++;
+    await this.finishActiveRunAsAborted({
+      errorMessage: "Web control released to local CLI",
+      eventMessage: "Web control released to local CLI.",
+      interruptRemote: true,
+    });
     this.mergeRemoteTranscriptsIntoActive();
     const resumeId = this.pickResumeSessionId({ fallbackToLatest: true });
     this.startLocal(resumeId ? ["--resume", resumeId] : []);
@@ -300,6 +297,24 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       });
     }
 
+    if (this.ownerValue === "web") {
+      const generation = ++this.remoteLoopGeneration;
+      await this.finishActiveRunAsAborted({
+        errorMessage: "Claude session switched",
+        eventMessage: "Claude session switched.",
+        interruptRemote: true,
+      });
+      this.activeSessionId = sessionId;
+      this.resumeSessionId = sessionId;
+      this.sdkSessionId = null;
+      this.remoteSdkSessionId = null;
+      this.applyStoredContextUsageForSession(sessionId);
+      this.refreshActiveModel({ sessionId });
+      this.emitState();
+      void this.runRemoteLoop(generation);
+      return;
+    }
+
     this.activeSessionId = sessionId;
     this.resumeSessionId = sessionId;
     this.sdkSessionId = null;
@@ -317,21 +332,6 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       } catch {}
       this.startLocal(["--resume", sessionId]);
       return;
-    }
-
-    if (this.ownerValue === "web") {
-      const generation = ++this.remoteLoopGeneration;
-      this.finishWebPrompts(new Error("Claude session switched"));
-      this.remoteAbortController?.abort();
-      try {
-        await this.remoteQuery?.interrupt?.();
-      } catch {}
-      this.remoteQuery?.close?.();
-      this.remoteQuery = null;
-      this.remoteAbortController = null;
-      this.setThinking(false);
-      this.setBusy(false);
-      void this.runRemoteLoop(generation);
     }
   }
 
@@ -679,40 +679,20 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
 
   async abort(): Promise<void> {
     if (this.ownerValue !== "web") return;
-    const abortError = new Error("Claude run aborted");
-    this.finishWebPrompts(abortError);
-    this.rejectPendingRequests(abortError);
-    this.remoteAbortController?.abort();
-    try {
-      await this.remoteQuery?.interrupt?.();
-    } catch {}
-    this.remoteQuery?.close?.();
-    this.remoteQuery = null;
-    this.remoteAbortController = null;
-    this.setThinking(false);
-    this.setBusy(false);
-    this.pushEvent("run.aborted", {
-      message: "Claude run aborted.",
-      sessionId: this.activeSessionId ?? this.resumeSessionId,
-      createdAt: Date.now(),
+    await this.finishActiveRunAsAborted({
+      errorMessage: "Claude run aborted",
+      eventMessage: "Claude run aborted.",
+      interruptRemote: true,
     });
   }
 
   stop(): void {
-    this.finishWebPrompts(new Error("Claude provider stopped"));
+    this.finishActiveRunAsAborted({
+      errorMessage: "Claude provider stopped",
+      eventMessage: "Claude provider stopped.",
+      interruptRemote: false,
+    });
     this.stopCapabilityProbe();
-    this.remoteAbortController?.abort();
-    this.remoteQuery?.close?.();
-    this.remoteQuery = null;
-    this.remoteAbortController = null;
-    for (const pending of this.pendingPermissions.values()) {
-      pending.reject(new Error("Claude provider stopped"));
-    }
-    this.pendingPermissions.clear();
-    for (const pending of this.pendingQuestions.values()) {
-      pending.reject(new Error("Claude provider stopped"));
-    }
-    this.pendingQuestions.clear();
     this.pendingRewinds.clear();
     this.detachReclaimInput();
     try {
@@ -1088,6 +1068,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
   }
 
   private rejectPendingRequests(error: Error): void {
+    const hadPendingRequests = this.pendingPermissions.size > 0 || this.pendingQuestions.size > 0;
     for (const pending of this.pendingPermissions.values()) {
       this.emitPendingToolError(pending.request, error.message);
       pending.reject(error);
@@ -1103,6 +1084,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       pending.reject(error);
     }
     this.pendingQuestions.clear();
+    if (!hadPendingRequests) return;
     this.pushEvent("permission-resolved", { id: "all", approved: false });
     this.pushEvent("question.rejected", { id: "all" });
   }
@@ -1130,6 +1112,85 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       status: "error",
       createdAt,
     });
+  }
+
+  private currentRunSessionId(): string | null {
+    return this.activeSessionId ??
+      this.resumeSessionId ??
+      this.sdkSessionId ??
+      this.remoteSdkSessionId ??
+      this.activePromptInput?.displaySessionId ??
+      null;
+  }
+
+  private hasActiveWebRun(): boolean {
+    return this.ownerValue === "web" && (
+      this.busyValue ||
+      this.thinkingValue ||
+      this.remoteQuery !== null ||
+      this.remoteAbortController !== null ||
+      this.activePromptInput !== null ||
+      this.activePromptEvent !== null ||
+      this.startingPrompt !== null ||
+      this.pendingPermissions.size > 0 ||
+      this.pendingQuestions.size > 0
+    );
+  }
+
+  private finishActiveRunAsAborted(input: {
+    errorMessage: string;
+    eventMessage: string;
+    interruptRemote: false;
+  }): void;
+  private finishActiveRunAsAborted(input: {
+    errorMessage: string;
+    eventMessage: string;
+    interruptRemote: true;
+  }): Promise<void>;
+  private finishActiveRunAsAborted(input: {
+    errorMessage: string;
+    eventMessage: string;
+    interruptRemote: boolean;
+  }): void | Promise<void> {
+    const sessionId = this.currentRunSessionId();
+    const hadActiveRun = this.hasActiveWebRun();
+    const remoteQuery = this.remoteQuery;
+    const error = new Error(input.errorMessage);
+
+    this.finishWebPrompts(error);
+    this.rejectPendingRequests(error);
+    this.remoteAbortController?.abort();
+    this.remoteQuery = null;
+    this.remoteAbortController = null;
+    this.setThinking(false);
+    this.setBusy(false);
+
+    const emitAbortEvent = () => {
+      if (!hadActiveRun) return;
+      this.pushEvent("run.aborted", {
+        message: input.eventMessage,
+        ...(sessionId ? { sessionId } : {}),
+        createdAt: Date.now(),
+      });
+    };
+
+    if (!input.interruptRemote) {
+      try {
+        remoteQuery?.close?.();
+      } catch {}
+      emitAbortEvent();
+      return;
+    }
+
+    return (async () => {
+      try {
+        await remoteQuery?.interrupt?.();
+      } catch {}
+      try {
+        remoteQuery?.close?.();
+      } catch {}
+      emitAbortEvent();
+    })();
   }
 
   private acceptsSteerSessionId(

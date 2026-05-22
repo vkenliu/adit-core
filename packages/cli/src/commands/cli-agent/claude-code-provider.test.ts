@@ -239,6 +239,99 @@ describe("ClaudeCodeProvider abort", () => {
       provider.stop();
     }
   });
+
+  it("interrupts the active run and emits run.aborted before switching sessions", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const oldSessionId = "11111111-1111-1111-1111-111111111111";
+    const newSessionId = "22222222-2222-2222-2222-222222222222";
+    const provider = new ClaudeCodeProvider({
+      bin: "claude",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    try {
+      provider.noteLocalSession(oldSessionId);
+      await provider.takeover();
+      await provider.sendPrompt("hello");
+      mocks.remoteInterrupt.mockClear();
+
+      await provider.switchSession(newSessionId);
+
+      expect(mocks.remoteInterrupt).toHaveBeenCalledTimes(1);
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "run.aborted",
+        payload: expect.objectContaining({
+          message: "Claude session switched.",
+          sessionId: oldSessionId,
+        }),
+      }));
+      expect(provider.state.activeSessionId).toBe(newSessionId);
+    } finally {
+      provider.stop();
+    }
+  });
+
+  it("emits run.aborted when releasing Web control during an active run", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const sessionId = "11111111-1111-1111-1111-111111111111";
+    const provider = new ClaudeCodeProvider({
+      bin: "claude",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    try {
+      provider.noteLocalSession(sessionId);
+      await provider.takeover();
+      await provider.sendPrompt("hello");
+      mocks.remoteInterrupt.mockClear();
+
+      await provider.releaseToLocal();
+
+      expect(mocks.remoteInterrupt).toHaveBeenCalledTimes(1);
+      expect(events).toContainEqual(expect.objectContaining({
+        type: "run.aborted",
+        payload: expect.objectContaining({
+          message: "Web control released to local CLI.",
+          sessionId,
+        }),
+      }));
+      expect(provider.state.owner).toBe("local");
+    } finally {
+      provider.stop();
+    }
+  });
+
+  it("emits run.aborted when the provider stops during an active run", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const sessionId = "11111111-1111-1111-1111-111111111111";
+    const provider = new ClaudeCodeProvider({
+      bin: "claude",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    provider.noteLocalSession(sessionId);
+    await provider.takeover();
+    await provider.sendPrompt("hello");
+    mocks.remoteInterrupt.mockClear();
+
+    provider.stop();
+
+    expect(mocks.remoteInterrupt).not.toHaveBeenCalled();
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "run.aborted",
+      payload: expect.objectContaining({
+        message: "Claude provider stopped.",
+        sessionId,
+      }),
+    }));
+    expect(provider.state.owner).toBe("stopped");
+  });
 });
 
 describe("ClaudeCodeProvider takeover", () => {
