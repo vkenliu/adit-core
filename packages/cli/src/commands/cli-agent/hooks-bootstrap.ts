@@ -18,6 +18,25 @@ const EVENTS = [
   "SessionEnd",
 ] as const;
 
+const HOOK_POST_SCRIPT = [
+  "try{",
+  "const u=new URL(process.argv[1]);",
+  "const m=u.protocol==='https:'?require('https'):require('http');",
+  "let d='';",
+  "let done=false;",
+  "const finish=()=>{if(done)return;done=true;process.exit(0)};",
+  "process.stdin.setEncoding('utf8');",
+  "process.stdin.on('data',c=>{d+=c});",
+  "process.stdin.on('end',()=>{try{",
+  "const r=m.request(u,{method:'POST',headers:{'content-type':'application/json','content-length':Buffer.byteLength(d)},timeout:3000},res=>{res.resume();res.on('end',finish)});",
+  "r.on('timeout',()=>{r.destroy();finish()});",
+  "r.on('error',finish);",
+  "r.end(d)",
+  "}catch{finish()}});",
+  "setTimeout(finish,3500).unref();",
+  "}catch{process.exit(0)}",
+].join("");
+
 interface HookCommand {
   type?: string;
   command?: string;
@@ -115,7 +134,7 @@ export function installClaudeHooks(opts: {
   const baseSettingsPath = path.join(claudeDir, "settings.local.json");
   const settingsPath = opts.settingsPath ?? baseSettingsPath;
   const managedSettingsFile = settingsPath !== baseSettingsPath;
-  const command = `curl -sS --fail --max-time 3 -X POST -H 'content-type: application/json' --data-binary @- '${opts.endpoint}?${opts.marker}' >/dev/null || true`;
+  const command = buildCloudHookCommand(opts.endpoint, opts.marker);
 
   const dirExisted = fs.existsSync(claudeDir);
   const fileExisted = fs.existsSync(settingsPath);
@@ -298,7 +317,7 @@ export function installCodexHooks(opts: {
   const codexDir = path.join(opts.cwd, ".codex");
   const hooksPath = path.join(codexDir, "hooks.json");
   const configPath = path.join(codexDir, "config.toml");
-  const command = `curl -sS --fail --max-time 3 -X POST -H 'content-type: application/json' --data-binary @- '${opts.endpoint}?${opts.marker}' >/dev/null || true`;
+  const command = buildCloudHookCommand(opts.endpoint, opts.marker);
   const dirExisted = fs.existsSync(codexDir);
   const fileExisted = fs.existsSync(hooksPath);
   const originalContent = fileExisted ? readFile(hooksPath) : null;
@@ -411,6 +430,22 @@ function setCodexHook(
     ...existing.filter((item) => !codexEntryHasMarker(item, marker)),
     entry,
   ];
+}
+
+function buildCloudHookCommand(endpoint: string, marker: string): string {
+  return [
+    "node",
+    "-e",
+    quoteHookCommandArg(HOOK_POST_SCRIPT),
+    quoteHookCommandArg(`${endpoint}?${marker}`),
+  ].join(" ");
+}
+
+function quoteHookCommandArg(value: string): string {
+  if (value.includes("\"")) {
+    throw new Error("Hook command arguments cannot contain double quotes");
+  }
+  return `"${value}"`;
 }
 
 function codexEntryHasMarker(entry: unknown, marker: string): boolean {

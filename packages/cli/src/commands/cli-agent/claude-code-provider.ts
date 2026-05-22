@@ -273,16 +273,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
     this.stopCapabilityProbe();
     process.stderr.write("\n[adit cloud claude] releasing Web control back to local Claude CLI...\n");
     this.finishWebPrompts(new Error("Web control released to local CLI"));
-    for (const pending of this.pendingPermissions.values()) {
-      pending.reject(new Error("Web control released to local CLI"));
-    }
-    this.pendingPermissions.clear();
-    for (const pending of this.pendingQuestions.values()) {
-      pending.reject(new Error("Web control released to local CLI"));
-    }
-    this.pendingQuestions.clear();
-    this.pushEvent("permission-resolved", { id: "all", approved: false });
-    this.pushEvent("question.rejected", { id: "all" });
+    this.rejectPendingRequests(new Error("Web control released to local CLI"));
     this.remoteAbortController?.abort();
     try {
       await this.remoteQuery?.interrupt?.();
@@ -1098,15 +1089,47 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
 
   private rejectPendingRequests(error: Error): void {
     for (const pending of this.pendingPermissions.values()) {
+      this.emitPendingToolError(pending.request, error.message);
       pending.reject(error);
     }
     this.pendingPermissions.clear();
     for (const pending of this.pendingQuestions.values()) {
+      this.emitPendingToolError({
+        id: pending.request.id,
+        toolName: ASK_USER_QUESTION_TOOL,
+        input: pending.request.input,
+        createdAt: pending.request.createdAt,
+      }, error.message);
       pending.reject(error);
     }
     this.pendingQuestions.clear();
     this.pushEvent("permission-resolved", { id: "all", approved: false });
     this.pushEvent("question.rejected", { id: "all" });
+  }
+
+  private emitPendingToolError(
+    request: CliPermissionRequest & { toolName: string },
+    message: string,
+  ): void {
+    const sessionId = this.activeSessionId ??
+      this.resumeSessionId ??
+      this.sdkSessionId ??
+      this.remoteSdkSessionId;
+    const createdAt = Date.now();
+    this.pushEvent("tool", {
+      ...(sessionId ? { sessionId } : {}),
+      messageId: sessionId
+        ? this.lastAssistantMessageBySession.get(sessionId) ?? `cli-tool-${request.id}`
+        : `cli-tool-${request.id}`,
+      toolUseId: request.id,
+      toolName: request.toolName,
+      input: request.input && typeof request.input === "object" && !Array.isArray(request.input)
+        ? request.input
+        : {},
+      error: message,
+      status: "error",
+      createdAt,
+    });
   }
 
   private acceptsSteerSessionId(
@@ -1444,6 +1467,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       const abort = () => {
         this.pendingPermissions.delete(id);
         this.pushEvent("permission-resolved", { id, approved: false });
+        this.emitPendingToolError(request, "Permission request aborted.");
         reject(new Error("permission request aborted"));
       };
       signal.addEventListener("abort", abort, { once: true });
@@ -1490,6 +1514,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
           approved: false,
           sessionId: this.activeSessionId ?? this.resumeSessionId,
         });
+        this.emitPendingToolError(request, "Plan approval request aborted.");
         reject(new Error("plan approval request aborted"));
       };
       signal.addEventListener("abort", abort, { once: true });
@@ -1560,6 +1585,12 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
           requestID: id,
           sessionId: this.activeSessionId ?? this.resumeSessionId,
         });
+        this.emitPendingToolError({
+          id,
+          toolName: ASK_USER_QUESTION_TOOL,
+          input: inputRecord,
+          createdAt: request.createdAt,
+        }, "Question request aborted.");
         reject(new Error("question request aborted"));
       };
       signal.addEventListener("abort", abort, { once: true });

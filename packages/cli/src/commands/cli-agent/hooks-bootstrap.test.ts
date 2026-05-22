@@ -68,8 +68,15 @@ describe("installClaudeHooks", () => {
       });
 
       expect(installed.settingsPath).toBe(managedSettingsPath);
-      expect(readFileSync(managedSettingsPath, "utf8")).toContain("claude-sonnet");
-      expect(readFileSync(managedSettingsPath, "utf8")).toContain("from=adit-cloud-cli-1234");
+      const managedSettingsText = readFileSync(managedSettingsPath, "utf8");
+      const managedSettings = JSON.parse(managedSettingsText);
+      const command = managedSettings.hooks.SessionStart[0].hooks[0].command as string;
+      expect(managedSettingsText).toContain("claude-sonnet");
+      expect(managedSettingsText).toContain("from=adit-cloud-cli-1234");
+      expect(command).toMatch(/^node -e /u);
+      expect(command).not.toContain("curl ");
+      expect(command).not.toContain("||");
+      expect(command).not.toContain("/dev/null");
 
       installed.cleanup();
       expect(existsSync(managedSettingsPath)).toBe(false);
@@ -154,6 +161,14 @@ describe("installCodexHooks", () => {
       expect(config).toContain("hooks = true");
       expect(config).not.toContain("codex_hooks");
       expect(readFileSync(installed.settingsPath, "utf8")).toContain("UserPromptSubmit");
+      const hooksConfig = JSON.parse(readFileSync(installed.settingsPath, "utf8"));
+      const command = hooksConfig.hooks.UserPromptSubmit[0].hooks[0].command as string;
+      expect(command).toMatch(/^node -e /u);
+      expect(command).toContain("from=adit-cloud-codex-test");
+      expect(command).not.toContain("curl ");
+      expect(command).not.toContain("||");
+      expect(command).not.toContain("/dev/null");
+      expect(command).toContain("require('http')");
       expect(userConfig).toContain("# >>> adit-cloud-codex from=adit-cloud-codex-test");
       expect(userConfig).toContain("[hooks.state.");
       expect(userConfig).toContain(".codex/hooks.json:post_tool_use:0:0");
