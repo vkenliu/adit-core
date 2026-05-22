@@ -100,6 +100,7 @@ export type {
 export {
   loadConfig,
   findGitRoot,
+  projectNameFromRoot,
   redactSensitiveKeys,
   type AditConfig,
 } from "./config/index.js";

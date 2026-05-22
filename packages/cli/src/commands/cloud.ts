@@ -9,7 +9,12 @@
  *   auth reset        — Force-clear all credentials and sync state
  */
 
-import { loadConfig, openDatabase, closeDatabase } from "@varveai/adit-core";
+import {
+  loadConfig,
+  openDatabase,
+  closeDatabase,
+  projectNameFromRoot,
+} from "@varveai/adit-core";
 import {
   loadCloudConfig,
   loadCredentials,
@@ -30,7 +35,6 @@ import {
 } from "@varveai/adit-cloud";
 import type { DeviceAuthOptions } from "@varveai/adit-cloud";
 import { createHash } from "node:crypto";
-import { basename } from "node:path";
 import { hostname } from "node:os";
 import { CLI_VERSION } from "../version.js";
 
@@ -201,7 +205,7 @@ export async function cloudSyncCommand(opts?: {
   const db = openDatabase(config.dbPath);
   try {
     const client = new CloudClient(serverUrl, credentials);
-    const projectName = basename(process.cwd());
+    const projectName = projectNameFromRoot(config.projectRoot);
     const engine = new SyncEngine(db, client, {
       projectId: config.projectId,
       projectName,
