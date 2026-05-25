@@ -13,6 +13,7 @@ import type {
   CliAgentTokenUsage,
 } from "./types.js";
 import {
+  CODEX_DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE,
   CodexAppServerClient,
   type CodexJsonRpcMessage,
 } from "./codex-app-server-client.js";
@@ -102,6 +103,10 @@ const CODEX_CLOUD_SLASH_COMMAND_SPECS: CodexSlashCommandSpec[] = [
 ];
 const CODEX_MCP_SLASH_COMMAND_PREFIX = "mcp.";
 const BRANCH_REFRESH_INTERVAL_MS = 5_000;
+const CODEX_SYSTEM_SKILLS_RETRY_DELAYS_MS = [250, 1_000];
+const CODEX_ADIT_THREAD_CONFIG = {
+  [`features.${CODEX_DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE}`]: true,
+};
 const CODEX_MODEL_CONTEXT_WINDOWS: Array<[RegExp, number]> = [
   [/^gpt-5\.5(?:$|[-_\s])/, 1_050_000],
   [/^gpt-5(?:\.\d+)?(?:-codex(?:-max|-mini)?|-chat-latest)?(?:$|[-_\s])/, 400_000],
@@ -189,6 +194,13 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       currentBranch: this.currentBranch,
       contextUsage: this.contextUsage,
       lastTokenUsage: this.lastTokenUsage,
+      metadata: {
+        codex: {
+          bin: this.opts.bin,
+          defaultModeRequestUserInput: true,
+          systemSkillsRetry: true,
+        },
+      },
     };
   }
 
@@ -498,11 +510,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
 
     if (name === "skills") {
       await this.ensureAppServer();
-      const result = await this.appServer?.request("skills/list", {
-        cwds: [this.opts.cwd],
-        forceReload: false,
-      });
-      const skills = extractCodexSkills(result);
+      const skills = await this.fetchCodexSkillsWithRetry();
       this.codexSkills = skills;
       this.refreshSlashCommands();
       this.pushNotice({
@@ -1432,7 +1440,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
 
       const [skills, mcpServers] = await Promise.all([
         methods.has("skills/list")
-          ? this.fetchCodexSkills().catch(() => [] as Array<Record<string, unknown>>)
+          ? this.fetchCodexSkillsWithRetry().catch(() => [] as Array<Record<string, unknown>>)
           : Promise.resolve([] as Array<Record<string, unknown>>),
         methods.has("mcpServerStatus/list")
           ? this.fetchCodexMcpServers().catch(() => [] as Array<Record<string, unknown>>)
@@ -1464,6 +1472,45 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     return extractCodexSkills(result);
   }
 
+  private async fetchCodexSkillsWithRetry(): Promise<Array<Record<string, unknown>>> {
+    let lastSkills: Array<Record<string, unknown>> = [];
+    let lastError: unknown = null;
+
+    for (let attempt = 0; attempt <= CODEX_SYSTEM_SKILLS_RETRY_DELAYS_MS.length; attempt += 1) {
+      const sawDeferredBeforeRequest = this.appServer?.hasDeferredSystemSkillsStderr?.() ?? false;
+      try {
+        const skills = await this.fetchCodexSkills();
+        const sawDeferredAfterRequest = this.appServer?.hasDeferredSystemSkillsStderr?.() ?? false;
+        const sawTransientSystemSkillsError = sawDeferredBeforeRequest || sawDeferredAfterRequest;
+        if (!sawTransientSystemSkillsError) return skills;
+
+        lastSkills = skills;
+        if (attempt < CODEX_SYSTEM_SKILLS_RETRY_DELAYS_MS.length) {
+          this.appServer?.clearDeferredSystemSkillsStderr?.();
+          await delay(CODEX_SYSTEM_SKILLS_RETRY_DELAYS_MS[attempt]);
+          continue;
+        }
+
+        this.appServer?.flushDeferredSystemSkillsStderr?.();
+        return skills;
+      } catch (error) {
+        lastError = error;
+        const sawDeferredAfterRequest = this.appServer?.hasDeferredSystemSkillsStderr?.() ?? false;
+        const sawTransientSystemSkillsError = sawDeferredBeforeRequest || sawDeferredAfterRequest;
+        if (sawTransientSystemSkillsError && attempt < CODEX_SYSTEM_SKILLS_RETRY_DELAYS_MS.length) {
+          this.appServer?.clearDeferredSystemSkillsStderr?.();
+          await delay(CODEX_SYSTEM_SKILLS_RETRY_DELAYS_MS[attempt]);
+          continue;
+        }
+        this.appServer?.flushDeferredSystemSkillsStderr?.();
+        throw error;
+      }
+    }
+
+    if (lastError) throw lastError;
+    return lastSkills;
+  }
+
   private async fetchCodexMcpServers(): Promise<Array<Record<string, unknown>>> {
     const result = await this.appServer?.request("mcpServerStatus/list", {
       detail: "toolsAndAuthOnly",
@@ -1474,7 +1521,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   private async resolveSkillSlashCommand(name: string): Promise<Record<string, unknown> | null> {
     if (!this.skillSlashCommandsByName.has(name)) return null;
     await this.ensureAppServer();
-    this.codexSkills = await this.fetchCodexSkills();
+    this.codexSkills = await this.fetchCodexSkillsWithRetry();
     this.refreshSlashCommands();
     return this.skillSlashCommandsByName.get(name) ?? null;
   }
@@ -1718,6 +1765,7 @@ export function codexThreadModeOverrides(
     approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: mode === "plan" ? "read-only" : "danger-full-access",
+    config: { ...CODEX_ADIT_THREAD_CONFIG },
   };
 }
 
@@ -1746,6 +1794,10 @@ export function codexTurnModeOverrides(
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function readDeltaString(value: unknown): string | null {

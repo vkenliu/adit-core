@@ -32,6 +32,7 @@ export interface CliAgentState {
   currentBranch: string | null;
   contextUsage: CliAgentContextUsage | null;
   lastTokenUsage: CliAgentTokenUsage | null;
+  metadata?: Record<string, unknown>;
 }
 
 export interface CliPermissionRequest {
@@ -132,4 +133,5 @@ export interface CliAgentConnectionState {
   currentBranch: string | null;
   contextUsage: CliAgentContextUsage | null;
   lastTokenUsage: CliAgentTokenUsage | null;
+  metadata?: Record<string, unknown>;
 }

@@ -30,10 +30,26 @@ interface CodexAppServerClientOptions {
 }
 
 const REQUEST_TIMEOUT_MS = 60_000;
+export const CODEX_DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE = "default_mode_request_user_input";
+const CODEX_APP_SERVER_ARGS = [
+  "app-server",
+  "--enable",
+  CODEX_DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE,
+  "--listen",
+  "stdio://",
+];
+const CODEX_SYSTEM_SKILLS_TRANSIENT_ERROR_RE =
+  /codex_core_skills::loader: failed to (?:read skills dir|stat skills path) .*[\/\\]skills[\/\\]\.system[\/\\].*No such file or directory/i;
+
+export function isTransientCodexSystemSkillsError(line: string): boolean {
+  return CODEX_SYSTEM_SKILLS_TRANSIENT_ERROR_RE.test(line);
+}
 
 export class CodexAppServerClient extends EventEmitter {
   private child: ChildProcess | null = null;
   private stdoutBuffer = "";
+  private stderrBuffer = "";
+  private deferredSystemSkillsStderr: string[] = [];
   private nextId = 1;
   private readonly pending = new Map<string | number, PendingRequest>();
   private stopped = false;
@@ -49,7 +65,7 @@ export class CodexAppServerClient extends EventEmitter {
   async start(): Promise<void> {
     if (this.child) return;
     this.stopped = false;
-    const child = spawnCliProcess(this.opts.bin, ["app-server", "--listen", "stdio://"], {
+    const child = spawnCliProcess(this.opts.bin, CODEX_APP_SERVER_ARGS, {
       cwd: this.opts.cwd,
       env: this.opts.env,
       stdio: ["pipe", "pipe", "pipe"],
@@ -59,14 +75,14 @@ export class CodexAppServerClient extends EventEmitter {
     child.stdout?.setEncoding("utf8");
     child.stdout?.on("data", (chunk: string) => this.handleStdout(chunk));
     child.stderr?.setEncoding("utf8");
-    child.stderr?.on("data", (chunk: string) => {
-      if (chunk.trim()) process.stderr.write(`[codex app-server] ${chunk}`);
-    });
+    child.stderr?.on("data", (chunk: string) => this.handleStderr(chunk));
     child.on("error", (error) => {
       this.opts.onError?.(error);
       this.rejectAll(error);
     });
     child.on("exit", (code, signal) => {
+      this.flushStderrBuffer();
+      this.flushDeferredSystemSkillsStderr();
       this.child = null;
       this.rejectAll(new Error(`Codex app-server exited (${signal ?? code ?? "unknown"})`));
       this.emit("exit", { code, signal });
@@ -81,6 +97,20 @@ export class CodexAppServerClient extends EventEmitter {
         experimentalApi: true,
       },
     });
+  }
+
+  hasDeferredSystemSkillsStderr(): boolean {
+    return this.deferredSystemSkillsStderr.length > 0;
+  }
+
+  clearDeferredSystemSkillsStderr(): void {
+    this.deferredSystemSkillsStderr = [];
+  }
+
+  flushDeferredSystemSkillsStderr(): void {
+    const lines = this.deferredSystemSkillsStderr;
+    this.deferredSystemSkillsStderr = [];
+    for (const line of lines) this.writeStderrLine(line);
   }
 
   async request(method: string, params: unknown): Promise<unknown> {
@@ -135,6 +165,33 @@ export class CodexAppServerClient extends EventEmitter {
       if (!trimmed) continue;
       this.handleLine(trimmed);
     }
+  }
+
+  private handleStderr(chunk: string): void {
+    this.stderrBuffer += chunk;
+    const lines = this.stderrBuffer.split("\n");
+    this.stderrBuffer = lines.pop() ?? "";
+    for (const line of lines) this.handleStderrLine(line);
+  }
+
+  private flushStderrBuffer(): void {
+    const line = this.stderrBuffer;
+    this.stderrBuffer = "";
+    if (line.trim()) this.handleStderrLine(line);
+  }
+
+  private handleStderrLine(line: string): void {
+    if (!line.trim()) return;
+    if (isTransientCodexSystemSkillsError(line)) {
+      this.deferredSystemSkillsStderr.push(line);
+      return;
+    }
+    this.writeStderrLine(line);
+  }
+
+  private writeStderrLine(line: string): void {
+    if (!line.trim()) return;
+    process.stderr.write(`[codex app-server] ${line}\n`);
   }
 
   private handleLine(line: string): void {
