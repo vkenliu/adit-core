@@ -950,6 +950,94 @@ describe("CodexCliProvider abort", () => {
 
     provider.stop();
   });
+
+  it("interrupts the active turn and emits run.aborted before switching sessions", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    await provider.takeover();
+    await provider.sendPrompt("hello");
+    mocks.appRequest.mockClear();
+
+    await provider.switchSession("019e0000-0000-7000-8000-000000000001");
+
+    expect(mocks.appRequest).toHaveBeenCalledWith("turn/interrupt", {
+      threadId: "019e2110-d96f-7e40-882e-b524fa9148e4",
+      turnId: "turn-1",
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "run.aborted",
+      payload: expect.objectContaining({
+        message: "Codex session switched.",
+        sessionId: "019e2110-d96f-7e40-882e-b524fa9148e4",
+      }),
+    }));
+    expect(provider.state.activeSessionId).toBe("019e0000-0000-7000-8000-000000000001");
+
+    provider.stop();
+  });
+
+  it("emits run.aborted when releasing Web control during an active turn", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    await provider.takeover();
+    await provider.sendPrompt("hello");
+    mocks.appRequest.mockClear();
+
+    await provider.releaseToLocal();
+
+    expect(mocks.appRequest).toHaveBeenCalledWith("turn/interrupt", {
+      threadId: "019e2110-d96f-7e40-882e-b524fa9148e4",
+      turnId: "turn-1",
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "run.aborted",
+      payload: expect.objectContaining({
+        message: "Web control released to local CLI.",
+        sessionId: "019e2110-d96f-7e40-882e-b524fa9148e4",
+      }),
+    }));
+    expect(provider.state.owner).toBe("local");
+
+    provider.stop();
+  });
+
+  it("emits run.aborted when the provider stops during an active turn", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    await provider.takeover();
+    await provider.sendPrompt("hello");
+    mocks.appRequest.mockClear();
+
+    provider.stop();
+
+    expect(mocks.appRequest).not.toHaveBeenCalledWith("turn/interrupt", expect.anything());
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "run.aborted",
+      payload: expect.objectContaining({
+        message: "Codex provider stopped.",
+        sessionId: "019e2110-d96f-7e40-882e-b524fa9148e4",
+      }),
+    }));
+    expect(provider.state.owner).toBe("stopped");
+  });
 });
 
 describe("CodexCliProvider steerPrompt", () => {

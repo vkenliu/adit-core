@@ -243,8 +243,11 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     if (this.ownerValue !== "web") return;
     this.detachReclaimInput();
     process.stderr.write("\n[adit cloud codex] releasing Web control back to local Codex CLI...\n");
-    this.finishWebPrompts(new Error("Web control released to local CLI"));
-    this.rejectPendingRequests(new Error("Web control released to local CLI"));
+    await this.finishActiveRunAsAborted({
+      errorMessage: "Web control released to local CLI",
+      eventMessage: "Web control released to local CLI.",
+      interruptTurn: true,
+    });
     this.appServer?.stop();
     this.appServer = null;
     this.loadedThreadIds = new Set<string>();
@@ -277,13 +280,17 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     }
 
     if (this.ownerValue === "web") {
+      await this.finishActiveRunAsAborted({
+        errorMessage: "Codex session switched",
+        eventMessage: "Codex session switched.",
+        interruptTurn: true,
+      });
       await this.ensureAppServer();
       if (this.loadedThreadIds.has(sessionId)) {
         this.noteThread({ id: sessionId }, null);
       } else {
         await this.resumeThread(sessionId);
       }
-      this.finishWebPrompts(new Error("Codex session switched"));
       this.setBusy(false);
       this.setThinking(false);
       return;
@@ -614,28 +621,19 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
 
   async abort(): Promise<void> {
     if (this.ownerValue !== "web") return;
-    const threadId = this.activeSessionId ?? this.resumeSessionId;
-    const turnId = this.activeTurnId;
-    this.finishWebPrompts(new Error("Codex run aborted"));
-    this.rejectPendingRequests(new Error("Codex run aborted"));
-    if (threadId && turnId) {
-      try {
-        await this.appServer?.request("turn/interrupt", { threadId, turnId });
-      } catch {}
-    }
-    this.activeTurnId = null;
-    this.setThinking(false);
-    this.setBusy(false);
-    this.pushEvent("run.aborted", {
-      message: "Codex run aborted.",
-      sessionId: threadId,
-      createdAt: Date.now(),
+    await this.finishActiveRunAsAborted({
+      errorMessage: "Codex run aborted",
+      eventMessage: "Codex run aborted.",
+      interruptTurn: true,
     });
   }
 
   stop(): void {
-    this.finishWebPrompts(new Error("Codex provider stopped"));
-    this.rejectPendingRequests(new Error("Codex provider stopped"));
+    this.finishActiveRunAsAborted({
+      errorMessage: "Codex provider stopped",
+      eventMessage: "Codex provider stopped.",
+      interruptTurn: false,
+    });
     this.detachReclaimInput();
     this.appServer?.stop();
     this.appServer = null;
@@ -1187,6 +1185,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   }
 
   private rejectPendingRequests(error: Error): void {
+    const hadPendingRequests = this.pendingPermissions.size > 0 || this.pendingQuestions.size > 0;
     for (const pending of this.pendingPermissions.values()) {
       pending.reject(error);
     }
@@ -1195,8 +1194,70 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       pending.reject(error);
     }
     this.pendingQuestions.clear();
+    if (!hadPendingRequests) return;
     this.pushEvent("permission-resolved", { id: "all", approved: false });
     this.pushEvent("question.rejected", { id: "all" });
+  }
+
+  private hasActiveWebRun(): boolean {
+    return this.ownerValue === "web" && (
+      this.busyValue ||
+      this.thinkingValue ||
+      this.promptActive ||
+      this.activeTurnId !== null ||
+      this.pendingPermissions.size > 0 ||
+      this.pendingQuestions.size > 0
+    );
+  }
+
+  private finishActiveRunAsAborted(input: {
+    errorMessage: string;
+    eventMessage: string;
+    interruptTurn: false;
+  }): void;
+  private finishActiveRunAsAborted(input: {
+    errorMessage: string;
+    eventMessage: string;
+    interruptTurn: true;
+  }): Promise<void>;
+  private finishActiveRunAsAborted(input: {
+    errorMessage: string;
+    eventMessage: string;
+    interruptTurn: boolean;
+  }): void | Promise<void> {
+    const sessionId = this.activeSessionId ?? this.resumeSessionId;
+    const turnId = this.activeTurnId;
+    const hadActiveRun = this.hasActiveWebRun();
+    const error = new Error(input.errorMessage);
+
+    this.finishWebPrompts(error);
+    this.rejectPendingRequests(error);
+    this.activeTurnId = null;
+    this.setThinking(false);
+    this.setBusy(false);
+
+    const emitAbortEvent = () => {
+      if (!hadActiveRun) return;
+      this.pushEvent("run.aborted", {
+        message: input.eventMessage,
+        ...(sessionId ? { sessionId } : {}),
+        createdAt: Date.now(),
+      });
+    };
+
+    if (!input.interruptTurn) {
+      emitAbortEvent();
+      return;
+    }
+
+    return (async () => {
+      if (sessionId && turnId) {
+        try {
+          await this.appServer?.request("turn/interrupt", { threadId: sessionId, turnId });
+        } catch {}
+      }
+      emitAbortEvent();
+    })();
   }
 
   private acceptsSteerSessionId(sessionIdInput: string, threadId: string): boolean {
