@@ -62,6 +62,13 @@ interface CodexCliProviderOptions {
 }
 
 export type CodexPromptMode = "build" | "plan";
+type CliToolScope =
+  | "approval"
+  | "internal"
+  | "internal_plan"
+  | "shell"
+  | "workspace_read"
+  | "workspace_write";
 
 const RECLAIM_COMMAND = "/local";
 const CLEAR_TERMINAL_LINE = "\r\x1b[2K";
@@ -100,6 +107,32 @@ const CODEX_MODEL_CONTEXT_WINDOWS: Array<[RegExp, number]> = [
   [/^gpt-5(?:\.\d+)?(?:-codex(?:-max|-mini)?|-chat-latest)?(?:$|[-_\s])/, 400_000],
 ];
 
+function codexToolScope(toolName: string, mode: CodexPromptMode | null): CliToolScope {
+  const normalized = toolName.trim().toLowerCase();
+  if (normalized === CODEX_UPDATE_PLAN_TOOL.toLowerCase() || normalized === "update_plan") {
+    return mode === "plan" ? "internal_plan" : "internal";
+  }
+  if (
+    normalized === "bash" ||
+    normalized === "commandexecution" ||
+    normalized === "exec_command"
+  ) {
+    return "shell";
+  }
+  if (
+    normalized === "read" ||
+    normalized === "grep" ||
+    normalized === "glob" ||
+    normalized === "ls"
+  ) {
+    return "workspace_read";
+  }
+  if (normalized === "apply_patch" || normalized === "filechange") {
+    return mode === "plan" ? "internal_plan" : "workspace_write";
+  }
+  return "internal";
+}
+
 export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   readonly provider = "codex" as const;
   private local: ChildProcess | null = null;
@@ -121,6 +154,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   private promptQueue: PendingPrompt[] = [];
   private promptActive = false;
   private activeTurnId: string | null = null;
+  private activePromptMode: CodexPromptMode | null = null;
   private loadedThreadIds = new Set<string>();
   private emptyThreadIds = new Set<string>();
   private boundPendingSessionIds = new Set<string>();
@@ -324,7 +358,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
 
   async steerPrompt(
     prompt: string,
-    opts: { sessionId?: string | null; localMessageId?: string | null } = {},
+    opts: { sessionId?: string | null; localMessageId?: string | null; mode?: CodexPromptMode } = {},
   ): Promise<void> {
     if (this.ownerValue !== "web") {
       throw Object.assign(new Error("Web has not taken over this Codex session"), {
@@ -364,6 +398,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       ...(opts.localMessageId ? { messageId: opts.localMessageId } : {}),
       text: trimmed,
       inputKind: "steer",
+      mode: opts.mode ?? this.activePromptMode ?? "build",
       createdAt: Date.now(),
     });
   }
@@ -695,6 +730,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     const item = this.promptQueue.shift();
     if (!item) return;
     this.promptActive = true;
+    this.activePromptMode = item.mode;
     try {
       await this.ensureAppServer();
       const threadId = await this.ensureThreadForPrompt(item.pendingSessionId, item.mode);
@@ -703,6 +739,8 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
         sessionId: threadId,
         ...(item.localMessageId ? { messageId: item.localMessageId } : {}),
         text: item.message,
+        inputKind: "prompt",
+        mode: item.mode,
         createdAt: Date.now(),
       });
       const result = asRecord(await this.appServer?.request("turn/start", {
@@ -724,6 +762,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       this.setThinking(true);
       item.resolve();
     } catch (error) {
+      this.activePromptMode = null;
       item.reject(error instanceof Error ? error : new Error(String(error)));
       this.pushEvent("error", {
         message: error instanceof Error ? error.message : String(error),
@@ -847,6 +886,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
         });
       }
       this.activeTurnId = null;
+      this.activePromptMode = null;
       this.setThinking(false);
       this.setBusy(false);
       void this.drainPromptQueue();
@@ -986,6 +1026,9 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
           id,
           toolName,
           input: params,
+          tool_scope: codexToolScope(toolName, this.activePromptMode),
+          mode: this.activePromptMode ?? undefined,
+          inputKind: "prompt",
           createdAt: request.createdAt,
           sessionId,
         });
@@ -1034,6 +1077,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
         messageId: id,
         modelId: this.activeModelId ?? undefined,
         text,
+        mode: this.activePromptMode ?? undefined,
         createdAt,
       });
       return;
@@ -1049,6 +1093,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
         sessionId,
         messageId: id,
         text: content,
+        mode: this.activePromptMode ?? undefined,
         createdAt,
       });
       return;
@@ -1068,6 +1113,9 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
           source: item.source,
           commandActions: item.commandActions,
         },
+        tool_scope: codexToolScope("Bash", this.activePromptMode),
+        mode: this.activePromptMode ?? undefined,
+        inputKind: "prompt",
         output: readString(item.aggregatedOutput) ?? undefined,
         error: status === "failed" ? readString(item.aggregatedOutput) ?? "Command failed" : undefined,
         status: opts.running || status === "inProgress"
@@ -1088,6 +1136,9 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
         toolUseId: id,
         toolName: "apply_patch",
         input: { changes: item.changes },
+        tool_scope: codexToolScope("apply_patch", this.activePromptMode),
+        mode: this.activePromptMode ?? undefined,
+        inputKind: "prompt",
         output: status === "completed" ? safeJson(item.changes) : undefined,
         error: status === "failed" || status === "declined" ? `File change ${status}` : undefined,
         status: opts.running || status === "inProgress"
@@ -1121,6 +1172,9 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
         toolUseId: id,
         toolName,
         input,
+        tool_scope: codexToolScope(toolName, this.activePromptMode),
+        mode: this.activePromptMode ?? undefined,
+        inputKind: "prompt",
         output: item.result !== undefined ? safeJson(item.result) : undefined,
         error: item.error !== undefined ? safeJson(item.error) : undefined,
         status: opts.running || status === "inProgress" || status === "running"

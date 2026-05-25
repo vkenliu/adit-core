@@ -86,6 +86,7 @@ export interface CliAgentProvider {
   steerPrompt?(prompt: string, opts?: {
     sessionId?: string | null;
     localMessageId?: string | null;
+    mode?: "build" | "plan";
   }): Promise<void>;
   handleSlashCommand(command: CliSlashCommand): Promise<void>;
   answerRewind?(response: CliRewindResponse): Promise<void>;

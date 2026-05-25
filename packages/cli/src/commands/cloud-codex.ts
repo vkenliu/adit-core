@@ -143,10 +143,19 @@ async function processCommand(
   if (command.type === "steer") {
     const text = readString(command.payload.text);
     if (!text) return;
-    await provider.steerPrompt(text, {
-      sessionId: readString(command.payload.sessionId),
-      localMessageId: readString(command.payload.localMessageId),
-    });
+    const sessionId = readString(command.payload.sessionId);
+    const localMessageId = readString(command.payload.localMessageId);
+    const mode = readString(command.payload.mode) === "plan" ? "plan" : "build";
+    try {
+      await provider.steerPrompt(text, { sessionId, localMessageId, mode });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/not currently accepting steering input/i.test(message)) {
+        await provider.sendPrompt(text, { mode, localMessageId });
+        return;
+      }
+      throw error;
+    }
     return;
   }
 
