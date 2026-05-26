@@ -113,6 +113,7 @@ function appServerMethodsError(methods = DEFAULT_APP_SERVER_METHODS): Error {
 }
 
 beforeEach(() => {
+  vi.unstubAllGlobals();
   vi.clearAllMocks();
   mocks.deferredSystemSkillsStderr = false;
   mocks.appServerOptions = null;
@@ -1002,6 +1003,55 @@ describe("CodexCliProvider takeover", () => {
       }),
     );
     expect(provider.state.activeSessionId).toBe("019e2110-d96f-7e40-882e-b524fa9148e4");
+
+    provider.stop();
+  });
+
+  it("sends prompt image attachments to app-server input", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    await provider.takeover();
+    mocks.appRequest.mockClear();
+
+    const attachment = {
+      id: "att-1",
+      kind: "image" as const,
+      url: "https://storage.example.invalid/coding-attachments/u/2026/05/a.png",
+      mimeType: "image/png",
+      fileName: "a.png",
+      sizeBytes: 1234,
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      headers: new Headers({ "content-type": "image/png" }),
+      arrayBuffer: async () => Buffer.from("png-bytes").buffer,
+    })));
+
+    await provider.sendPrompt("", { attachments: [attachment] });
+
+    expect(mocks.appRequest).toHaveBeenCalledWith("turn/start", expect.objectContaining({
+      input: [
+        {
+          type: "image",
+          url: expect.stringMatching(/^data:image\/png;base64,/),
+          detail: "high",
+        },
+      ],
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "message",
+      payload: expect.objectContaining({
+        role: "user",
+        text: "",
+        attachments: [attachment],
+      }),
+    }));
 
     provider.stop();
   });

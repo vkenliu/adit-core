@@ -921,6 +921,40 @@ describe("ClaudeCodeProvider takeover", () => {
 });
 
 describe("ClaudeCodeProvider steerPrompt", () => {
+  it("sends image attachments as Claude content blocks", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new ClaudeCodeProvider({
+      bin: "claude",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    const attachment = {
+      id: "att-1",
+      kind: "image" as const,
+      url: "https://storage.example.invalid/coding-attachments/u/2026/05/a.png",
+      mimeType: "image/png",
+      fileName: "a.png",
+      sizeBytes: 1234,
+    };
+
+    await provider.takeover();
+    await provider.sendPrompt("describe this", {
+      localMessageId: "local-image-1",
+      attachments: [attachment],
+    });
+
+    const iterator = findRemotePromptStream()[Symbol.asyncIterator]();
+    const first = await iterator.next();
+    expect((first.value.message as { content?: unknown }).content).toEqual([
+      { type: "text", text: "describe this" },
+      { type: "image", source: { type: "url", url: attachment.url } },
+    ]);
+    await provider.abort();
+    provider.stop();
+  });
+
   it("pushes steering input into the active SDK prompt stream", async () => {
     const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
     const provider = new ClaudeCodeProvider({

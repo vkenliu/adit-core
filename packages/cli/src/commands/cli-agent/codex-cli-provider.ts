@@ -11,6 +11,7 @@ import type {
   CliSlashCommandInfo,
   CliAgentContextUsage,
   CliAgentTokenUsage,
+  PromptImageAttachment,
 } from "./types.js";
 import {
   CODEX_DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE,
@@ -26,6 +27,7 @@ import { spawnCliProcess } from "./cli-process.js";
 
 interface PendingPrompt {
   message: string;
+  attachments: PromptImageAttachment[];
   mode: CodexPromptMode;
   pendingSessionId: string | null;
   localMessageId: string | null;
@@ -345,7 +347,12 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
 
   async sendPrompt(
     prompt: string,
-    opts: { mode?: "build" | "plan"; pendingSessionId?: string | null; localMessageId?: string | null } = {},
+    opts: {
+      mode?: "build" | "plan";
+      pendingSessionId?: string | null;
+      localMessageId?: string | null;
+      attachments?: PromptImageAttachment[];
+    } = {},
   ): Promise<void> {
     if (this.ownerValue !== "web") {
       throw Object.assign(new Error("Web has not taken over this Codex session"), {
@@ -353,11 +360,13 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       });
     }
     const trimmed = prompt.trim();
-    if (!trimmed) return;
+    const attachments = opts.attachments ?? [];
+    if (!trimmed && attachments.length === 0) return;
 
     await new Promise<void>((resolve, reject) => {
       this.promptQueue.push({
         message: trimmed,
+        attachments,
         mode: opts.mode === "plan" ? "plan" : "build",
         pendingSessionId: opts.pendingSessionId ?? null,
         localMessageId: opts.localMessageId ?? null,
@@ -370,7 +379,12 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
 
   async steerPrompt(
     prompt: string,
-    opts: { sessionId?: string | null; localMessageId?: string | null; mode?: CodexPromptMode } = {},
+    opts: {
+      sessionId?: string | null;
+      localMessageId?: string | null;
+      mode?: CodexPromptMode;
+      attachments?: PromptImageAttachment[];
+    } = {},
   ): Promise<void> {
     if (this.ownerValue !== "web") {
       throw Object.assign(new Error("Web has not taken over this Codex session"), {
@@ -378,7 +392,8 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       });
     }
     const trimmed = prompt.trim();
-    if (!trimmed) return;
+    const attachments = opts.attachments ?? [];
+    if (!trimmed && attachments.length === 0) return;
     const threadId = this.activeSessionId ?? this.resumeSessionId;
     const turnId = this.activeTurnId;
     if (!threadId || !turnId || (!this.busyValue && !this.thinkingValue)) {
@@ -396,19 +411,14 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     await this.appServer?.request("turn/steer", {
       threadId,
       expectedTurnId: turnId,
-      input: [
-        {
-          type: "text",
-          text: trimmed,
-          text_elements: [],
-        },
-      ],
+      input: await codexInputItems(trimmed, "build", attachments),
     });
     this.pushEvent("message", {
       role: "user",
       sessionId: threadId,
       ...(opts.localMessageId ? { messageId: opts.localMessageId } : {}),
       text: trimmed,
+      attachments,
       inputKind: "steer",
       mode: opts.mode ?? this.activePromptMode ?? "build",
       createdAt: Date.now(),
@@ -747,19 +757,14 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
         sessionId: threadId,
         ...(item.localMessageId ? { messageId: item.localMessageId } : {}),
         text: item.message,
+        attachments: item.attachments,
         inputKind: "prompt",
         mode: item.mode,
         createdAt: Date.now(),
       });
       const result = asRecord(await this.appServer?.request("turn/start", {
         threadId,
-        input: [
-          {
-            type: "text",
-            text: promptInputForCodexMode(item.message, item.mode),
-            text_elements: [],
-          },
-        ],
+        input: await codexInputItems(item.message, item.mode, item.attachments),
         cwd: this.opts.cwd,
         ...codexTurnModeOverrides(item.mode),
       }));
@@ -1756,6 +1761,45 @@ export function promptInputForCodexMode(
 ): string {
   if (mode !== "plan") return prompt;
   return `${CODEX_PLAN_MODE_INSTRUCTION}\n\nUser request:\n${prompt}`;
+}
+
+async function codexInputItems(
+  prompt: string,
+  mode: CodexPromptMode,
+  attachments: PromptImageAttachment[] = [],
+): Promise<Array<Record<string, unknown>>> {
+  const imageItems = await Promise.all(attachments.map(codexImageInputItem));
+  return [
+    ...(prompt || mode === "plan"
+      ? [{
+          type: "text",
+          text: promptInputForCodexMode(prompt, mode),
+          text_elements: [],
+        }]
+      : []),
+    ...imageItems,
+  ];
+}
+
+async function codexImageInputItem(
+  attachment: PromptImageAttachment,
+): Promise<Record<string, unknown>> {
+  return {
+    type: "image",
+    url: await imageAttachmentDataUrl(attachment),
+    detail: "high",
+  };
+}
+
+async function imageAttachmentDataUrl(attachment: PromptImageAttachment): Promise<string> {
+  if (attachment.url.startsWith("data:image/")) return attachment.url;
+  const response = await fetch(attachment.url);
+  if (!response.ok) {
+    throw new Error(`Failed to load image attachment ${attachment.fileName ?? attachment.id} (${response.status})`);
+  }
+  const contentType = response.headers.get("content-type")?.split(";")[0]?.trim() || attachment.mimeType;
+  const data = Buffer.from(await response.arrayBuffer()).toString("base64");
+  return `data:${contentType};base64,${data}`;
 }
 
 export function codexThreadModeOverrides(

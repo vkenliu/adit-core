@@ -72,6 +72,15 @@ export interface CliSlashCommandInfo {
   aliases?: string[];
 }
 
+export interface PromptImageAttachment {
+  id: string;
+  kind: "image";
+  url: string;
+  mimeType: string;
+  fileName?: string | null;
+  sizeBytes: number;
+}
+
 export interface CliAgentProvider {
   readonly provider: CliAgentProviderName;
   readonly state: CliAgentState;
@@ -83,11 +92,13 @@ export interface CliAgentProvider {
     mode?: "build" | "plan";
     pendingSessionId?: string | null;
     localMessageId?: string | null;
+    attachments?: PromptImageAttachment[];
   }): Promise<void>;
   steerPrompt?(prompt: string, opts?: {
     sessionId?: string | null;
     localMessageId?: string | null;
     mode?: "build" | "plan";
+    attachments?: PromptImageAttachment[];
   }): Promise<void>;
   handleSlashCommand(command: CliSlashCommand): Promise<void>;
   answerRewind?(response: CliRewindResponse): Promise<void>;
