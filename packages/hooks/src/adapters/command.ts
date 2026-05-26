@@ -57,7 +57,7 @@ export function parseHookArgs(args: readonly string[]): ParsedHookArgs {
 
 /** Check whether a command string invokes the ADIT hook dispatcher. */
 export function isAditHookCommand(command: string): boolean {
-  const normalized = command.replace(/\\/gu, "/");
+  const normalized = command.replace(/\\/gu, "/").toLowerCase();
   return normalized.includes("adit-hook") || normalized.includes("hooks/dist/index.js");
 }
 

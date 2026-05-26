@@ -27,4 +27,32 @@ describe("stripCodexHookTrustBlocks", () => {
     expect(stripped).toContain("model = \"gpt-5.5\"");
     expect(stripped).toContain("[projects.\"/tmp/project\"]");
   });
+
+  it("preserves adjacent user hook state while removing a managed marker block", () => {
+    const text = [
+      "model = \"gpt-5.5\"",
+      "",
+      "[hooks.state.\"/tmp/other/hooks.json:stop:0:0\"]",
+      "enabled = true",
+      "trusted_hash = \"sha256:user\"",
+      "",
+      "# >>> adit-codex-hooks project=abc",
+      "[hooks.state.\"/tmp/project/.codex/hooks.json:stop:1:0\"]",
+      "enabled = true",
+      "trusted_hash = \"sha256:adit\"",
+      "# <<< adit-codex-hooks project=abc",
+      "",
+    ].join("\n");
+
+    const stripped = stripCodexHookTrustBlocks(text, {
+      blockName: "adit-codex-hooks",
+      marker: "project=abc",
+    });
+
+    expect(stripped).toContain("model = \"gpt-5.5\"");
+    expect(stripped).toContain("/tmp/other/hooks.json:stop:0:0");
+    expect(stripped).toContain("sha256:user");
+    expect(stripped).not.toContain("adit-codex-hooks");
+    expect(stripped).not.toContain("sha256:adit");
+  });
 });

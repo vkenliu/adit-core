@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 import { codexAdapter } from "./codex.js";
+import { codexHookTrustMarkerForPath } from "./codex-trust.js";
 
 /** Create a unique temp directory for each test */
 function tempProjectRoot(): string {
@@ -270,6 +271,52 @@ describe("Codex CLI Hook Chaining", () => {
     expect(sessionEntries[0].hooks[0].command).toContain("my-formatter");
 
     expect(readFileSync(join(codexHome, "config.toml"), "utf-8")).not.toContain("adit-codex-hooks");
+  });
+
+  it("preserves user Codex config and unrelated trusted hook state during uninstall", async () => {
+    writeHooks(projectRoot, {
+      hooks: {
+        Stop: [
+          { hooks: [{ type: "command", command: "other-tool stop", timeout: 10 }] },
+          { hooks: [{ type: "command", command: "npx adit-hook --platform codex stop", timeout: 30 }] },
+        ],
+      },
+    });
+    const hooksPath = join(projectRoot, ".codex", "hooks.json");
+    const aditMarker = codexHookTrustMarkerForPath(hooksPath);
+    writeFileSync(join(codexHome, "config.toml"), [
+      'model = "gpt-5.5"',
+      "",
+      "[features]",
+      "hooks = true",
+      "",
+      '[hooks.state."/tmp/other/hooks.json:stop:0:0"]',
+      "enabled = true",
+      'trusted_hash = "sha256:user"',
+      "",
+      `# >>> adit-codex-hooks ${aditMarker}`,
+      `[hooks.state.${JSON.stringify(`${hooksPath}:stop:1:0`)}]`,
+      "enabled = true",
+      'trusted_hash = "sha256:adit"',
+      `# <<< adit-codex-hooks ${aditMarker}`,
+      "",
+    ].join("\n"));
+
+    await codexAdapter.uninstallHooks(projectRoot);
+
+    const hooksConfig = readHooks(projectRoot);
+    const stopEntries = (hooksConfig.hooks as Record<string, unknown[]>).Stop as Array<{
+      hooks: Array<{ command: string }>;
+    }>;
+    expect(stopEntries).toHaveLength(1);
+    expect(stopEntries[0].hooks[0].command).toBe("other-tool stop");
+
+    const userConfig = readFileSync(join(codexHome, "config.toml"), "utf-8");
+    expect(userConfig).toContain('model = "gpt-5.5"');
+    expect(userConfig).toContain("[features]");
+    expect(userConfig).toContain("hooks = true");
+    expect(userConfig).toContain('/tmp/other/hooks.json:stop:0:0');
+    expect(userConfig).not.toContain("adit-codex-hooks");
   });
 
   it("uninstallHooks cleans up empty event arrays and hooks object", async () => {

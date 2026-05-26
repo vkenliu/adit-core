@@ -310,50 +310,69 @@ export const codexAdapter: PlatformAdapter = {
     return "codex --continue";
   },
 
+  async hasHooks(projectRoot: string): Promise<boolean> {
+    const hooksPath = join(projectRoot, ".codex", "hooks.json");
+    if (configHasAditHooks(hooksPath)) return true;
+
+    const trustConfig = readTextFile(resolveCodexHookTrustConfigPath());
+    const marker = codexHookTrustMarkerForPath(hooksPath);
+    return trustConfig !== null && trustConfig.includes(`>>> ${ADIT_CODEX_HOOK_TRUST_BLOCK} ${marker}`);
+  },
+
   async uninstallHooks(projectRoot: string): Promise<void> {
     const hooksPath = join(projectRoot, ".codex", "hooks.json");
-    if (!existsSync(hooksPath)) return;
 
-    try {
-      const hooksConfig = JSON.parse(readFileSync(hooksPath, "utf-8"));
-      if (!hooksConfig.hooks) return;
+    if (existsSync(hooksPath)) {
+      try {
+        const hooksConfig = JSON.parse(readFileSync(hooksPath, "utf-8"));
+        if (hooksConfig.hooks && typeof hooksConfig.hooks === "object" && !Array.isArray(hooksConfig.hooks)) {
+          // Remove ADIT hook entries
+          for (const hookName of Object.keys(hooksConfig.hooks)) {
+            const entries = hooksConfig.hooks[hookName];
+            if (!Array.isArray(entries)) continue;
 
-      // Remove ADIT hook entries
-      for (const hookName of Object.keys(hooksConfig.hooks)) {
-        const entries = hooksConfig.hooks[hookName];
-        if (!Array.isArray(entries)) continue;
+            hooksConfig.hooks[hookName] = entries.filter((entry: unknown) => !entryContainsAditHook(entry));
 
-        hooksConfig.hooks[hookName] = entries.filter(
-          (entry: { command?: string; hooks?: Array<{ command?: string }> }) => {
-            if (typeof entry.command === "string" && isAditHookCommand(entry.command)) return false;
-            if (Array.isArray(entry.hooks)) {
-              return !entry.hooks.some((h) => typeof h.command === "string" && isAditHookCommand(h.command));
+            // Clean up empty arrays
+            if (hooksConfig.hooks[hookName].length === 0) {
+              delete hooksConfig.hooks[hookName];
             }
-            return true;
-          },
-        );
+          }
 
-        // Clean up empty arrays
-        if (hooksConfig.hooks[hookName].length === 0) {
-          delete hooksConfig.hooks[hookName];
+          // Clean up empty hooks object
+          if (Object.keys(hooksConfig.hooks).length === 0) {
+            delete hooksConfig.hooks;
+          }
         }
-      }
 
-      // Clean up empty hooks object
-      if (Object.keys(hooksConfig.hooks).length === 0) {
-        delete hooksConfig.hooks;
+        writeFileSync(hooksPath, JSON.stringify(hooksConfig, null, 2) + "\n");
+      } catch {
+        // Ignore parse errors
       }
-
-      writeFileSync(hooksPath, JSON.stringify(hooksConfig, null, 2) + "\n");
-      removeCodexHookTrustConfig({
-        blockName: ADIT_CODEX_HOOK_TRUST_BLOCK,
-        marker: codexHookTrustMarkerForPath(hooksPath),
-      });
-    } catch {
-      // Ignore parse errors
     }
+
+    removeCodexHookTrustConfig({
+      blockName: ADIT_CODEX_HOOK_TRUST_BLOCK,
+      marker: codexHookTrustMarkerForPath(hooksPath),
+    });
   },
 };
+
+function configHasAditHooks(hooksPath: string): boolean {
+  if (!existsSync(hooksPath)) return false;
+
+  try {
+    const hooksConfig = JSON.parse(readFileSync(hooksPath, "utf-8")) as { hooks?: unknown };
+    if (!hooksConfig.hooks || typeof hooksConfig.hooks !== "object" || Array.isArray(hooksConfig.hooks)) {
+      return false;
+    }
+    return Object.values(hooksConfig.hooks).some((entries) =>
+      Array.isArray(entries) && entries.some(entryContainsAditHook),
+    );
+  } catch {
+    return false;
+  }
+}
 
 function readHooksForTrust(hooksPath: string): Record<string, unknown> {
   try {
