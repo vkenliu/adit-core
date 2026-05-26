@@ -20,7 +20,7 @@
  */
 
 import type Database from "better-sqlite3";
-import { getSyncState } from "@varveai/adit-core";
+import { getSyncState, loadConfig, projectNameFromRoot } from "@varveai/adit-core";
 import { loadCloudConfig, DEFAULT_SERVER_URL } from "../config.js";
 import {
   loadCredentials,
@@ -57,7 +57,7 @@ import { countUnsyncedRecords } from "./serializer.js";
 export async function triggerAutoSync(
   db: Database.Database,
   projectId: string,
-  options?: { force?: boolean },
+  options?: { force?: boolean; projectRoot?: string },
 ): Promise<void> {
   const cloudConfig = loadCloudConfig();
 
@@ -73,7 +73,7 @@ export async function triggerAutoSync(
     // Prefer stored credentials' clientId (set by `auth-token` verification)
     // over the local config clientId, since the server assigns its own UUID.
     const stored = loadCredentials();
-    const clientId = stored?.clientId ?? (await import("@varveai/adit-core")).loadConfig().clientId;
+    const clientId = stored?.clientId ?? loadConfig().clientId;
     credentials = credentialsFromEnvToken(serverUrl, clientId);
   }
   if (!credentials) {
@@ -131,9 +131,11 @@ export async function triggerAutoSync(
   }
 
   try {
+    const projectRoot = options?.projectRoot ?? loadConfig().projectRoot;
     const client = new CloudClient(serverUrl, credentials);
     const engine = new SyncEngine(db, client, {
       projectId,
+      projectName: projectNameFromRoot(projectRoot),
       batchSize: cloudConfig.batchSize,
       serverUrl,
       cloudClientId: credentials.clientId,

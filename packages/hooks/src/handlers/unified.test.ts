@@ -155,7 +155,7 @@ describe("dispatchHook", () => {
     expect(mockTriggerAutoSync).toHaveBeenCalledWith(
       expect.anything(),
       "proj-001",
-      undefined,
+      { projectRoot: "/test" },
     );
   });
 
@@ -222,7 +222,7 @@ describe("dispatchHook", () => {
     expect(mockTriggerAutoSync).toHaveBeenCalledWith(
       expect.anything(),
       "proj-001",
-      undefined,
+      { projectRoot: "/test" },
     );
   });
 
@@ -238,7 +238,7 @@ describe("dispatchHook", () => {
     expect(mockTriggerAutoSync).toHaveBeenCalledWith(
       expect.anything(),
       "proj-001",
-      { force: true },
+      { force: true, projectRoot: "/test" },
     );
   });
 

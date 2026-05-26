@@ -1,6 +1,6 @@
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { loadConfig, findGitRoot } from "@varveai/adit-core";
+import { loadConfig, findGitRoot, projectNameFromRoot } from "@varveai/adit-core";
 import {
   CloudApiError,
   CloudAuthError,
@@ -263,7 +263,7 @@ export async function cloudClaudeCommand(opts?: CloudClaudeOptions): Promise<voi
   const serverUrl = cloudConfig.serverUrl ?? credentials.serverUrl ?? DEFAULT_SERVER_URL;
   const client = new CloudClient(serverUrl, credentials);
   const terminalId = randomUUID();
-  const projectName = basename(config.projectRoot);
+  const projectName = projectNameFromRoot(config.projectRoot);
   const panelName = projectName;
 
   try {

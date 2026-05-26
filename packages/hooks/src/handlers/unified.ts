@@ -81,11 +81,18 @@ export async function dispatchHook(input: NormalizedHookInput): Promise<void> {
         await withPerf(dataDir, "network", "cloud-auto-sync", async () => {
           const cloudModuleName = ["@varveai", "adit-cloud"].join("/");
           const cloudModule = await import(cloudModuleName) as {
-            triggerAutoSync: (db: unknown, projectId: string, options?: { force?: boolean }) => Promise<void>;
+            triggerAutoSync: (
+              db: unknown,
+              projectId: string,
+              options?: { force?: boolean; projectRoot?: string },
+            ) => Promise<void>;
           };
           // Awaited so db stays open until triggerAutoSync finishes querying and pushing.
           const force = input.hookType === "session-end";
-          await cloudModule.triggerAutoSync(ctx.db, ctx.config.projectId, force ? { force: true } : undefined);
+          await cloudModule.triggerAutoSync(ctx.db, ctx.config.projectId, {
+            ...(force ? { force: true } : {}),
+            projectRoot: ctx.config.projectRoot,
+          });
         });
       } catch {
         // @varveai/adit-cloud not installed — silently skip

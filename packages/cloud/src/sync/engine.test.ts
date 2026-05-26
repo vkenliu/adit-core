@@ -32,7 +32,9 @@ const mockBatchRecordCount = vi.mocked(batchRecordCount);
 const mockCountUnsyncedRecords = vi.mocked(countUnsyncedRecords);
 const mockUpsertSyncState = vi.mocked(upsertSyncState);
 
-function createEngine(overrides: { batchSize?: number; projectId?: string } = {}) {
+function createEngine(
+  overrides: { batchSize?: number; projectId?: string; projectName?: string } = {},
+) {
   const projectId = overrides.projectId ?? "proj-001";
   const mockClient = {
     get: vi.fn().mockResolvedValue({
@@ -57,6 +59,7 @@ function createEngine(overrides: { batchSize?: number; projectId?: string } = {}
 
   const engine = new SyncEngine({} as never, mockClient as never, {
     projectId,
+    projectName: overrides.projectName,
     batchSize: overrides.batchSize ?? 500,
     serverUrl: "https://cloud.example.com",
     cloudClientId: "client-001",
@@ -272,7 +275,10 @@ describe("SyncEngine", () => {
     });
 
     it("does full push when projectCursors exists but project has no entry", async () => {
-      const { engine, mockClient } = createEngine({ batchSize: 500 });
+      const { engine, mockClient } = createEngine({
+        batchSize: 500,
+        projectName: "new-project",
+      });
       mockClient.get.mockResolvedValue({
         lastSyncedEventId: "global-cursor-999",
         syncVersion: 5,
@@ -310,6 +316,50 @@ describe("SyncEngine", () => {
         "proj-001",
         "client-001",
         500,
+      );
+      expect(mockClient.post).toHaveBeenCalledWith(
+        "/api/sync/push",
+        expect.objectContaining({
+          localProjectId: "proj-001",
+          projectName: "new-project",
+        }),
+      );
+    });
+
+    it("does not send projectName for an existing project", async () => {
+      const { engine, mockClient } = createEngine({
+        batchSize: 500,
+        projectName: "local-name",
+      });
+      mockClient.get.mockResolvedValue({
+        lastSyncedEventId: "global-cursor-999",
+        syncVersion: 5,
+        lastSyncedAt: "2025-01-01T00:00:00Z",
+        projectCursor: {
+          localProjectId: "proj-001",
+          serverProjectId: "server-project-001",
+          lastSyncedEventId: null,
+          lastSyncedAt: null,
+        },
+      });
+
+      mockBuildSyncBatch.mockReturnValue({ events: [{}], sessions: [] } as never);
+      mockBatchRecordCount.mockReturnValue(1);
+      mockClient.post.mockResolvedValue({
+        accepted: 1,
+        duplicates: 0,
+        conflicts: [],
+        newSyncCursor: "new-cursor",
+        newSyncVersion: 6,
+      });
+
+      await engine.sync();
+
+      expect(mockClient.post).toHaveBeenCalledWith(
+        "/api/sync/push",
+        expect.not.objectContaining({
+          projectName: expect.any(String),
+        }),
       );
     });
 
