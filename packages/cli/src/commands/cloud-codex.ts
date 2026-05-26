@@ -614,6 +614,18 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
     while (!stopping) {
       try {
         if (ws.isOpen && ws.currentConnectionId) {
+          const flushEvents = () => {
+            if (eventQueue.length === 0) return;
+            const batch = eventQueue.splice(0, 50);
+            const sent = ws.sendEvents(batch);
+            if (!sent) eventQueue.unshift(...batch);
+          };
+          await drainCommandQueue({
+            provider,
+            commands: commandQueue,
+            enqueueEvent,
+            ws,
+          });
           ws.sendHeartbeat(provider.state);
           const state = provider.state;
           const now = Date.now();
@@ -621,23 +633,7 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
             lastTranscriptDrainAt = now;
             enqueueEvents(transcriptSync.drainSession(state.activeSessionId));
           }
-          const flushEvents = () => {
-            if (eventQueue.length === 0) return;
-            const batch = eventQueue.splice(0, 50);
-            const sent = ws.sendEvents(batch);
-            if (!sent) eventQueue.unshift(...batch);
-          };
           flushEvents();
-          const processedCommands = await drainCommandQueue({
-            provider,
-            commands: commandQueue,
-            enqueueEvent,
-            ws,
-          });
-          if (processedCommands) {
-            ws.sendHeartbeat(provider.state);
-            flushEvents();
-          }
         } else {
           ws.connect();
         }

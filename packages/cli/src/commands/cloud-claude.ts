@@ -443,18 +443,18 @@ export async function cloudClaudeCommand(opts?: CloudClaudeOptions): Promise<voi
     while (!stopping) {
       try {
         if (ws.isOpen && ws.currentConnectionId) {
-          ws.sendHeartbeat(provider.state);
-          if (eventQueue.length > 0) {
-            const batch = eventQueue.splice(0, 50);
-            const sent = ws.sendEvents(batch);
-            if (!sent) eventQueue.unshift(...batch);
-          }
           await drainCommandQueue({
             provider,
             commands: commandQueue,
             eventQueue,
             ws,
           });
+          ws.sendHeartbeat(provider.state);
+          if (eventQueue.length > 0) {
+            const batch = eventQueue.splice(0, 50);
+            const sent = ws.sendEvents(batch);
+            if (!sent) eventQueue.unshift(...batch);
+          }
         } else {
           ws.connect();
         }
