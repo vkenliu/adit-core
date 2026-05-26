@@ -1,6 +1,6 @@
 {
   "name": "@varveai/adit-core",
-  "version": "0.4.8",
+  "version": "0.4.13",
   "description": "Core types, database, and sync primitives for ADIT",
   "type": "module",
   "files": [

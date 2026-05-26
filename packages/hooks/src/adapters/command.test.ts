@@ -36,4 +36,9 @@ describe("Hook Command Helpers", () => {
   it("identifies ADIT hook commands with Windows paths", () => {
     expect(isAditHookCommand('node "C:\\tools\\hooks\\dist\\index.js" stop')).toBe(true);
   });
+
+  it("identifies ADIT hook commands with mixed-case Windows paths", () => {
+    expect(isAditHookCommand('node "C:\\Users\\me\\AppData\\Roaming\\npm\\ADIT-HOOK.CMD" stop')).toBe(true);
+    expect(isAditHookCommand('node "C:\\tools\\Hooks\\Dist\\Index.js" stop')).toBe(true);
+  });
 });

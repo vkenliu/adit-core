@@ -340,44 +340,18 @@ export const claudeCodeAdapter: PlatformAdapter = {
     return "claude --continue";
   },
 
+  async hasHooks(projectRoot: string): Promise<boolean> {
+    if (configHasAditHooks(join(projectRoot, ".claude", "settings.local.json"))) return true;
+    if (configHasAditHooks(join(projectRoot, ".claude", "settings.json"))) return true;
+    if (existsSync(join(projectRoot, ".claude", "commands", ADIT_COMMAND.filename))) return true;
+    return LEGACY_COMMAND_FILES.some((legacy) =>
+      existsSync(join(projectRoot, ".claude", "commands", legacy)),
+    );
+  },
+
   async uninstallHooks(projectRoot: string): Promise<void> {
-    const settingsPath = join(projectRoot, ".claude", "settings.local.json");
-    if (!existsSync(settingsPath)) return;
-
-    try {
-      const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
-      if (!settings.hooks) return;
-
-      // Remove ADIT hook entries
-      for (const hookName of Object.keys(settings.hooks)) {
-        const entries = settings.hooks[hookName];
-        if (!Array.isArray(entries)) continue;
-
-        settings.hooks[hookName] = entries.filter(
-          (entry: { command?: string; hooks?: Array<{ command?: string }> }) => {
-            if (typeof entry.command === "string" && isAditHookCommand(entry.command)) return false;
-            if (Array.isArray(entry.hooks)) {
-              return !entry.hooks.some((h) => typeof h.command === "string" && isAditHookCommand(h.command));
-            }
-            return true;
-          },
-        );
-
-        // Clean up empty arrays
-        if (settings.hooks[hookName].length === 0) {
-          delete settings.hooks[hookName];
-        }
-      }
-
-      // Clean up empty hooks object
-      if (Object.keys(settings.hooks).length === 0) {
-        delete settings.hooks;
-      }
-
-      writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
-    } catch {
-      // Ignore parse errors
-    }
+    removeAditHooksFromConfig(join(projectRoot, ".claude", "settings.local.json"));
+    removeAditHooksFromConfig(join(projectRoot, ".claude", "settings.json"));
 
     // Remove slash command
     const commandsDir = join(projectRoot, ".claude", "commands");
@@ -389,3 +363,58 @@ export const claudeCodeAdapter: PlatformAdapter = {
     }
   },
 };
+
+function configHasAditHooks(settingsPath: string): boolean {
+  if (!existsSync(settingsPath)) return false;
+
+  try {
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as { hooks?: unknown };
+    if (!settings.hooks || typeof settings.hooks !== "object" || Array.isArray(settings.hooks)) {
+      return false;
+    }
+    return Object.values(settings.hooks).some((entries) =>
+      Array.isArray(entries) && entries.some(entryContainsAditHook),
+    );
+  } catch {
+    return false;
+  }
+}
+
+function removeAditHooksFromConfig(settingsPath: string): void {
+  if (!existsSync(settingsPath)) return;
+
+  try {
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as { hooks?: Record<string, unknown> };
+    if (!settings.hooks || typeof settings.hooks !== "object" || Array.isArray(settings.hooks)) {
+      return;
+    }
+
+    for (const hookName of Object.keys(settings.hooks)) {
+      const entries = settings.hooks[hookName];
+      if (!Array.isArray(entries)) continue;
+
+      const filtered = entries.filter((entry) => !entryContainsAditHook(entry));
+      if (filtered.length === 0) {
+        delete settings.hooks[hookName];
+      } else {
+        settings.hooks[hookName] = filtered;
+      }
+    }
+
+    if (Object.keys(settings.hooks).length === 0) {
+      delete settings.hooks;
+    }
+
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+  } catch {
+    // Ignore parse errors
+  }
+}
+
+function entryContainsAditHook(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+  const raw = entry as { command?: string; hooks?: Array<{ command?: string }> };
+  if (typeof raw.command === "string" && isAditHookCommand(raw.command)) return true;
+  return Array.isArray(raw.hooks) &&
+    raw.hooks.some((hook) => typeof hook.command === "string" && isAditHookCommand(hook.command));
+}

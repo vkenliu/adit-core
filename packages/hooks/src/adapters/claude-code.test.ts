@@ -255,6 +255,45 @@ describe("Claude Code Hook Chaining", () => {
     expect(settings.hooks).toBeUndefined();
   });
 
+  it("detects and removes partial Windows ADIT hooks from settings files", async () => {
+    const claudeDir = join(projectRoot, ".claude");
+    mkdirSync(claudeDir, { recursive: true });
+    writeFileSync(join(claudeDir, "settings.json"), JSON.stringify({
+      hooks: {
+        Stop: [
+          {
+            hooks: [
+              {
+                type: "command",
+                command: 'node "C:\\Users\\me\\AppData\\Roaming\\npm\\ADIT-HOOK.CMD" --platform claude stop',
+              },
+            ],
+          },
+        ],
+        SessionStart: [
+          {
+            hooks: [
+              {
+                type: "command",
+                command: "other-tool session-start",
+              },
+            ],
+          },
+        ],
+      },
+    }, null, 2) + "\n");
+
+    await expect(claudeCodeAdapter.hasHooks?.(projectRoot)).resolves.toBe(true);
+
+    await claudeCodeAdapter.uninstallHooks(projectRoot);
+
+    const settings = JSON.parse(readFileSync(join(claudeDir, "settings.json"), "utf-8")) as {
+      hooks?: Record<string, Array<{ hooks: Array<{ command: string }> }>>;
+    };
+    expect(settings.hooks?.Stop).toBeUndefined();
+    expect(settings.hooks?.SessionStart?.[0].hooks[0].command).toBe("other-tool session-start");
+  });
+
   it("handles flat command entries from other tools", async () => {
     // Some tools may use flat command format instead of nested hooks array
     writeSettings(projectRoot, {
