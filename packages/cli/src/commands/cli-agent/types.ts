@@ -32,6 +32,7 @@ export interface CliAgentState {
   currentBranch: string | null;
   contextUsage: CliAgentContextUsage | null;
   lastTokenUsage: CliAgentTokenUsage | null;
+  metadata?: Record<string, unknown>;
 }
 
 export interface CliPermissionRequest {
@@ -86,6 +87,7 @@ export interface CliAgentProvider {
   steerPrompt?(prompt: string, opts?: {
     sessionId?: string | null;
     localMessageId?: string | null;
+    mode?: "build" | "plan";
   }): Promise<void>;
   handleSlashCommand(command: CliSlashCommand): Promise<void>;
   answerRewind?(response: CliRewindResponse): Promise<void>;
@@ -131,4 +133,5 @@ export interface CliAgentConnectionState {
   currentBranch: string | null;
   contextUsage: CliAgentContextUsage | null;
   lastTokenUsage: CliAgentTokenUsage | null;
+  metadata?: Record<string, unknown>;
 }

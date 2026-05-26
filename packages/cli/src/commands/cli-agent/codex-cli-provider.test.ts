@@ -7,6 +7,9 @@ const mocks = vi.hoisted(() => ({
   appStart: vi.fn(),
   appRequest: vi.fn(),
   appStop: vi.fn(),
+  deferredSystemSkillsStderr: false,
+  clearDeferredSystemSkillsStderr: vi.fn(),
+  flushDeferredSystemSkillsStderr: vi.fn(),
   appServerOptions: null as null | {
     onNotification?: (message: unknown) => void;
   },
@@ -18,6 +21,7 @@ vi.mock("node:child_process", () => ({
 }));
 
 vi.mock("./codex-app-server-client.js", () => ({
+  CODEX_DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE: "default_mode_request_user_input",
   CodexAppServerClient: class {
     constructor(options: unknown) {
       mocks.appServerOptions = options as typeof mocks.appServerOptions;
@@ -37,6 +41,20 @@ vi.mock("./codex-app-server-client.js", () => ({
 
     stop() {
       return mocks.appStop();
+    }
+
+    hasDeferredSystemSkillsStderr() {
+      return mocks.deferredSystemSkillsStderr;
+    }
+
+    clearDeferredSystemSkillsStderr() {
+      mocks.clearDeferredSystemSkillsStderr();
+      mocks.deferredSystemSkillsStderr = false;
+    }
+
+    flushDeferredSystemSkillsStderr() {
+      mocks.flushDeferredSystemSkillsStderr();
+      mocks.deferredSystemSkillsStderr = false;
     }
   },
 }));
@@ -96,6 +114,7 @@ function appServerMethodsError(methods = DEFAULT_APP_SERVER_METHODS): Error {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.deferredSystemSkillsStderr = false;
   mocks.appServerOptions = null;
   mocks.spawn.mockImplementation(() => mockChildProcess());
   mocks.appStart.mockResolvedValue(undefined);
@@ -213,6 +232,9 @@ describe("Codex prompt modes", () => {
       approvalPolicy: "never",
       approvalsReviewer: "user",
       sandbox: "read-only",
+      config: {
+        "features.default_mode_request_user_input": true,
+      },
     });
     expect(codexTurnModeOverrides("plan")).toEqual({
       approvalPolicy: "never",
@@ -229,6 +251,9 @@ describe("Codex prompt modes", () => {
       approvalPolicy: "never",
       approvalsReviewer: "user",
       sandbox: "danger-full-access",
+      config: {
+        "features.default_mode_request_user_input": true,
+      },
     });
     expect(codexTurnModeOverrides("build")).toEqual({
       approvalPolicy: "never",
@@ -382,6 +407,64 @@ describe("CodexCliProvider takeover", () => {
     expect(slashEvent?.payload.commands).toEqual([]);
 
     provider.stop();
+  });
+
+  it("retries skill hydration when Codex rewrites the system skills cache", async () => {
+    vi.useFakeTimers();
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    let skillListCalls = 0;
+    mocks.appRequest.mockImplementation(async (method: string, params: unknown) => {
+      if (method === "adit/capabilities/discover") {
+        throw appServerMethodsError();
+      }
+      if (method === "thread/start") {
+        return {
+          model: "gpt-test",
+          thread: { id: "019e2110-d96f-7e40-882e-b524fa9148e4" },
+        };
+      }
+      if (method === "skills/list") {
+        skillListCalls += 1;
+        if (skillListCalls === 1) mocks.deferredSystemSkillsStderr = true;
+        return {
+          data: [
+            {
+              cwd: (params as { cwds?: string[] }).cwds?.[0] ?? "/tmp/project",
+              skills: [
+                {
+                  name: skillListCalls === 1 ? "partial-skill" : "imagegen",
+                  description: "Generate images",
+                  enabled: true,
+                },
+              ],
+            },
+          ],
+        };
+      }
+      if (method === "mcpServerStatus/list") return { data: [] };
+      return {};
+    });
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    try {
+      const takeover = provider.takeover();
+      await vi.advanceTimersByTimeAsync(250);
+      await takeover;
+
+      expect(skillListCalls).toBe(2);
+      expect(mocks.clearDeferredSystemSkillsStderr).toHaveBeenCalledTimes(1);
+      expect(mocks.flushDeferredSystemSkillsStderr).not.toHaveBeenCalled();
+      expect(events.filter((event) => event.type === "slash-commands").at(-1)?.payload.commands)
+        .toContainEqual({ name: "imagegen", description: "Use Codex skill: Generate images" });
+    } finally {
+      provider.stop();
+      vi.useRealTimers();
+    }
   });
 
   it("starts a real empty thread when Web takes over without an active session", async () => {

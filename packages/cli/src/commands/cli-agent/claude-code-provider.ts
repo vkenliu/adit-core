@@ -31,9 +31,18 @@ import type {
 } from "./types.js";
 import { spawnCliProcess, spawnClaudeCliProcess } from "./cli-process.js";
 
+type CliPromptMode = "build" | "plan";
+type CliToolScope =
+  | "approval"
+  | "internal"
+  | "internal_plan"
+  | "shell"
+  | "workspace_read"
+  | "workspace_write";
+
 interface PendingPrompt {
   message: string;
-  mode: "build" | "plan";
+  mode: CliPromptMode;
   pendingSessionId: string | null;
   localMessageId: string | null;
   promptEvent: PendingPromptEvent;
@@ -43,7 +52,7 @@ interface PendingPrompt {
 
 interface QueuedSdkPrompt {
   message: string;
-  mode: "build" | "plan";
+  mode: CliPromptMode;
   pendingSessionId: string | null;
   localMessageId: string | null;
   promptEvent: PendingPromptEvent;
@@ -63,6 +72,7 @@ interface ActiveClaudePromptInput {
 interface PendingPromptEvent {
   text: string;
   messageId?: string;
+  mode: CliPromptMode;
   createdAt: number;
 }
 
@@ -85,6 +95,67 @@ const TODO_WRITE_TOOL = "TodoWrite";
 const CLAUDE_CLOUD_NATIVE_SLASH_COMMANDS = ["rewind"] as const;
 const BRANCH_REFRESH_INTERVAL_MS = 5_000;
 const CONTEXT_USAGE_REFRESH_INTERVAL_MS = 10_000;
+
+function hasClaudeWorkspacePath(input: unknown): boolean {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return false;
+  const record = input as Record<string, unknown>;
+  return typeof record.file_path === "string" ||
+    typeof record.filePath === "string" ||
+    typeof record.path === "string";
+}
+
+function claudeToolScope(
+  toolName: string,
+  mode: CliPromptMode | null,
+  input?: unknown,
+): CliToolScope {
+  const normalized = toolName.trim().toLowerCase();
+  if (normalized === EXIT_PLAN_MODE_TOOL.toLowerCase()) return "approval";
+  if (
+    normalized === "write" ||
+    normalized === "edit" ||
+    normalized === "multiedit" ||
+    normalized === "notebookedit"
+  ) {
+    return hasClaudeWorkspacePath(input)
+      ? "workspace_write"
+      : mode === "plan"
+        ? "internal_plan"
+        : "workspace_write";
+  }
+  if (
+    mode === "plan" &&
+    (normalized === "write" ||
+      normalized === "edit" ||
+      normalized === "multiedit" ||
+      normalized === "notebookedit")
+  ) {
+    return "internal_plan";
+  }
+  if (normalized === TODO_WRITE_TOOL.toLowerCase()) {
+    return mode === "plan" ? "internal_plan" : "internal";
+  }
+  if (normalized === "bash") return "shell";
+  if (
+    normalized === "read" ||
+    normalized === "grep" ||
+    normalized === "glob" ||
+    normalized === "ls" ||
+    normalized === "webfetch" ||
+    normalized === "websearch"
+  ) {
+    return "workspace_read";
+  }
+  if (
+    normalized === "write" ||
+    normalized === "edit" ||
+    normalized === "multiedit" ||
+    normalized === "notebookedit"
+  ) {
+    return "workspace_write";
+  }
+  return "internal";
+}
 
 export const CLAUDE_CLOUD_RELAY_ADIT_ENV: Readonly<Record<string, string>> = {
   ADIT_CLOUD_AUTO_SYNC: "false",
@@ -153,6 +224,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
   private startingPrompt: QueuedSdkPrompt | null = null;
   private activePromptInput: ActiveClaudePromptInput | null = null;
   private activePromptEvent: PendingPromptEvent | null = null;
+  private activePromptMode: CliPromptMode | null = null;
   private pendingPermissions = new Map<string, {
     request: CliPermissionRequest;
     resolve: (result: PermissionResult) => void;
@@ -340,7 +412,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
 
   async sendPrompt(
     prompt: string,
-    opts: { mode?: "build" | "plan"; pendingSessionId?: string | null; localMessageId?: string | null } = {},
+    opts: { mode?: CliPromptMode; pendingSessionId?: string | null; localMessageId?: string | null } = {},
   ): Promise<void> {
     if (this.ownerValue !== "web") {
       throw Object.assign(new Error("Web has not taken over this Claude session"), {
@@ -361,6 +433,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
         promptEvent: {
           text: trimmed,
           ...(opts.localMessageId ? { messageId: opts.localMessageId } : {}),
+          mode: opts.mode === "plan" ? "plan" : "build",
           createdAt: Date.now(),
         },
         resolve,
@@ -372,7 +445,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
 
   async steerPrompt(
     prompt: string,
-    opts: { sessionId?: string | null; localMessageId?: string | null } = {},
+    opts: { sessionId?: string | null; localMessageId?: string | null; mode?: CliPromptMode } = {},
   ): Promise<void> {
     if (this.ownerValue !== "web") {
       throw Object.assign(new Error("Web has not taken over this Claude session"), {
@@ -386,6 +459,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       !input ||
       input.generation !== this.remoteLoopGeneration ||
       !this.remoteQuery ||
+      input.stream.isClosed() ||
       (!this.busyValue && !this.thinkingValue)
     ) {
       throw Object.assign(new Error("Claude Code is not currently accepting steering input"), {
@@ -420,6 +494,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       ...(opts.localMessageId ? { messageId: opts.localMessageId } : {}),
       text: trimmed,
       inputKind: "steer",
+      mode: opts.mode ?? this.activePromptMode ?? "build",
       createdAt: Date.now(),
     });
   }
@@ -855,6 +930,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       this.remoteAbortController = abortController;
       this.startingPrompt = first;
       this.activePromptEvent = first.promptEvent;
+      this.activePromptMode = first.mode;
       const permissionMode: PermissionMode = first.mode === "plan" ? "plan" : "bypassPermissions";
       const explicitSessionId = !resumeId && canonicalSessionId && isUuid(canonicalSessionId)
         ? canonicalSessionId
@@ -986,6 +1062,9 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
         if (this.activePromptEvent === first.promptEvent) {
           this.activePromptEvent = null;
         }
+        if (this.activePromptMode === first.mode) {
+          this.activePromptMode = null;
+        }
         if (this.startingPrompt === first) {
           this.rejectStartingPrompt(first, new Error("Claude run ended before it started"));
         }
@@ -1056,6 +1135,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
 
   private finishWebPrompts(error: Error): void {
     this.activePromptEvent = null;
+    this.activePromptMode = null;
     this.activePromptInput?.stream.close();
     this.activePromptInput = null;
     if (this.startingPrompt) {
@@ -1124,6 +1204,8 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       input: request.input && typeof request.input === "object" && !Array.isArray(request.input)
         ? request.input
         : {},
+      tool_scope: claudeToolScope(request.toolName, this.activePromptMode, request.input),
+      mode: this.activePromptMode ?? undefined,
       error: message,
       status: "error",
       createdAt,
@@ -1381,6 +1463,8 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       sessionId,
       ...(prompt.messageId ? { messageId: prompt.messageId } : {}),
       text: prompt.text,
+      inputKind: "prompt",
+      mode: prompt.mode,
       createdAt: prompt.createdAt,
     });
   }
@@ -1405,6 +1489,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
           modelId,
           usage,
           text: part.text,
+          mode: this.activePromptMode ?? undefined,
           createdAt: Date.now(),
         });
       } else if (part.type === "thinking" && typeof part.thinking === "string") {
@@ -1415,6 +1500,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
           modelId,
           usage,
           text: part.thinking,
+          mode: this.activePromptMode ?? undefined,
           createdAt: Date.now(),
         });
       } else if (part.type === "tool_use" || part.type === "server_tool_use") {
@@ -1430,6 +1516,9 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
           toolUseId,
           toolName,
           input,
+          tool_scope: claudeToolScope(toolName, this.activePromptMode, input),
+          mode: this.activePromptMode ?? undefined,
+          inputKind: "prompt",
           status: "running",
           createdAt,
         });
@@ -1511,6 +1600,9 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
         toolUseId,
         toolName: "tool",
         input: {},
+        tool_scope: "internal",
+        mode: this.activePromptMode ?? undefined,
+        inputKind: "prompt",
         output: formatToolResult(part.content),
         status: "completed",
         createdAt: Date.now(),
@@ -1560,6 +1652,9 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
         id,
         toolName,
         input,
+        tool_scope: claudeToolScope(toolName, this.activePromptMode, input),
+        mode: this.activePromptMode ?? undefined,
+        inputKind: "prompt",
         createdAt: request.createdAt,
         sessionId: this.activeSessionId ?? this.resumeSessionId,
       });
@@ -1611,6 +1706,9 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
         sessionId: this.activeSessionId ?? this.resumeSessionId,
         input: inputRecord,
         plan: readString(inputRecord.plan),
+        mode: "plan",
+        inputKind: "prompt",
+        tool_scope: "approval",
         allowedPrompts: Array.isArray(inputRecord.allowedPrompts)
           ? inputRecord.allowedPrompts
           : undefined,
@@ -1624,6 +1722,9 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
         id,
         toolName: EXIT_PLAN_MODE_TOOL,
         input,
+        tool_scope: "approval",
+        mode: "plan",
+        inputKind: "prompt",
         createdAt: request.createdAt,
         sessionId: this.activeSessionId ?? this.resumeSessionId,
       });
@@ -1972,6 +2073,10 @@ class PushableSdkPromptStream implements AsyncIterable<SDKUserMessage> {
       return;
     }
     this.queue.push(message);
+  }
+
+  isClosed(): boolean {
+    return this.closed || this.error !== null;
   }
 
   close(): void {

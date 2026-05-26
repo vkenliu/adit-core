@@ -75,7 +75,7 @@ describe("cloud CLI agent command passthrough", () => {
       parseCloudAgentCommand(["cloud", "codex", "resume"]),
     ).resolves.toEqual({
       provider: "codex",
-      bin: "codex",
+      bin: undefined,
       arg: ["resume"],
     });
   });
@@ -85,7 +85,7 @@ describe("cloud CLI agent command passthrough", () => {
       parseCloudAgentCommand(["cloud", "codex", "resume", "--last"]),
     ).resolves.toEqual({
       provider: "codex",
-      bin: "codex",
+      bin: undefined,
       arg: ["resume", "--last"],
     });
   });
