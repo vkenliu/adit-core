@@ -1075,8 +1075,30 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
           process.stderr.write(`\n[adit cloud claude] SDK error: ${messageText}\n`);
         }
       } finally {
+        const normalizeRelatedTranscripts = () => {
+          const sessionIds = new Set(
+            [
+              pendingClaudeSessionId,
+              canonicalSessionId,
+              resumeId,
+              observedSdkSessionId,
+              this.activeSessionId,
+              this.resumeSessionId,
+              this.sdkSessionId,
+              this.remoteSdkSessionId,
+            ].filter((id): id is string => Boolean(id)),
+          );
+          for (const sessionId of sessionIds) {
+            normalizeClaudeSdkTranscriptEntrypoints({
+              cwd: this.opts.cwd,
+              sessionId,
+            });
+          }
+        };
+        normalizeRelatedTranscripts();
         if (!pendingSessionId) {
           this.mergeRemoteTranscriptsIntoActive(canonicalSessionId, observedSdkSessionId);
+          normalizeRelatedTranscripts();
         }
         if (this.activePromptEvent === first.promptEvent) {
           this.activePromptEvent = null;
@@ -2732,10 +2754,46 @@ function normalizeTranscriptLineForSession(
   const obj = asRecord(parsed);
   if (readString(obj.sessionId) !== sourceSessionId) return null;
   obj.sessionId = targetSessionId;
+  if (obj.entrypoint === "sdk-ts") {
+    obj.entrypoint = "cli";
+  }
   if (obj.parentUuid === null && fallbackParentUuid) {
     obj.parentUuid = fallbackParentUuid;
   }
   return JSON.stringify(obj);
+}
+
+export function normalizeClaudeSdkTranscriptEntrypoints(input: {
+  cwd: string;
+  sessionId?: string | null;
+}): void {
+  if (!input.sessionId || !isUuid(input.sessionId)) return;
+  const file = path.join(getClaudeProjectDir(input.cwd), `${input.sessionId}.jsonl`);
+  let text: string;
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch {
+    return;
+  }
+
+  let changed = false;
+  const lines = text.split("\n").map((line) => {
+    if (!line.trim()) return line;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      return line;
+    }
+    const obj = asRecord(parsed);
+    if (obj.entrypoint !== "sdk-ts") return line;
+    obj.entrypoint = "cli";
+    changed = true;
+    return JSON.stringify(obj);
+  });
+
+  if (!changed) return;
+  fs.writeFileSync(file, lines.join("\n"));
 }
 
 function transcriptLineKey(line: string): string | null {

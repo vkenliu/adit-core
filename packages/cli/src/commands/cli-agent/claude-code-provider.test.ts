@@ -1,4 +1,7 @@
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
@@ -30,6 +33,7 @@ vi.mock("@varveai/adit-engine", () => ({
 import {
   ClaudeCodeProvider,
   buildClaudeCloudRelayEnv,
+  normalizeClaudeSdkTranscriptEntrypoints,
   normalizeClaudeTodoWriteInput,
 } from "./claude-code-provider.js";
 
@@ -157,6 +161,56 @@ describe("normalizeClaudeTodoWriteInput", () => {
     expect(normalizeClaudeTodoWriteInput({ todos: [] })).toEqual([]);
     expect(normalizeClaudeTodoWriteInput({ todos: [{ status: "pending" }] })).toBeNull();
     expect(normalizeClaudeTodoWriteInput({})).toBeNull();
+  });
+});
+
+describe("normalizeClaudeSdkTranscriptEntrypoints", () => {
+  it("rewrites TypeScript SDK transcript entrypoints for Claude resume picker compatibility", () => {
+    const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    const configDir = fs.mkdtempSync(path.join(tmpdir(), "adit-claude-config-"));
+    const cwd = "/tmp/adit-entrypoint-project";
+    const sessionId = "11111111-2222-4333-8444-555555555555";
+    const projectId = path.resolve(cwd).replace(/[^a-zA-Z0-9-]/g, "-");
+    const projectDir = path.join(configDir, "projects", projectId);
+    const transcriptFile = path.join(projectDir, `${sessionId}.jsonl`);
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(
+      transcriptFile,
+      [
+        JSON.stringify({
+          type: "user",
+          entrypoint: "sdk-ts",
+          sessionId,
+          message: { role: "user", content: "hello" },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          entrypoint: "sdk-cli",
+          sessionId,
+          message: { role: "assistant", content: [] },
+        }),
+        "{not-json",
+        "",
+      ].join("\n"),
+    );
+
+    try {
+      process.env.CLAUDE_CONFIG_DIR = configDir;
+
+      normalizeClaudeSdkTranscriptEntrypoints({ cwd, sessionId });
+
+      const lines = fs.readFileSync(transcriptFile, "utf8").split("\n");
+      expect(JSON.parse(lines[0] ?? "{}").entrypoint).toBe("cli");
+      expect(JSON.parse(lines[1] ?? "{}").entrypoint).toBe("sdk-cli");
+      expect(lines[2]).toBe("{not-json");
+    } finally {
+      if (originalConfigDir === undefined) {
+        delete process.env.CLAUDE_CONFIG_DIR;
+      } else {
+        process.env.CLAUDE_CONFIG_DIR = originalConfigDir;
+      }
+      fs.rmSync(configDir, { recursive: true, force: true });
+    }
   });
 });
 
