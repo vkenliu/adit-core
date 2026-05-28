@@ -13,6 +13,12 @@ const mocks = vi.hoisted(() => ({
   appServerOptions: null as null | {
     onNotification?: (message: unknown) => void;
   },
+  resumeWatcherOptions: null as null | {
+    cwd: string;
+    onResume: (threadId: string) => void;
+  },
+  resumeWatcherStop: vi.fn(),
+  startResumeWatcher: vi.fn(),
 }));
 
 vi.mock("node:child_process", () => ({
@@ -56,6 +62,16 @@ vi.mock("./codex-app-server-client.js", () => ({
       mocks.flushDeferredSystemSkillsStderr();
       mocks.deferredSystemSkillsStderr = false;
     }
+  },
+}));
+
+vi.mock("./codex-resume-log-watcher.js", () => ({
+  startCodexResumeLogWatcher: (options: unknown) => {
+    mocks.resumeWatcherOptions = options as typeof mocks.resumeWatcherOptions;
+    mocks.startResumeWatcher(options);
+    return {
+      stop: mocks.resumeWatcherStop,
+    };
   },
 }));
 
@@ -117,6 +133,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.deferredSystemSkillsStderr = false;
   mocks.appServerOptions = null;
+  mocks.resumeWatcherOptions = null;
   mocks.spawn.mockImplementation(() => mockChildProcess());
   mocks.appStart.mockResolvedValue(undefined);
   mocks.appRequest.mockImplementation(async (method: string, params: unknown) => {
@@ -267,6 +284,49 @@ describe("Codex prompt modes", () => {
 });
 
 describe("CodexCliProvider takeover", () => {
+  it("updates local session state when Codex resume is detected before hooks run", () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(mocks.startResumeWatcher).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: "/tmp/project" }),
+    );
+    expect(provider.state.activeSessionId).toBeNull();
+
+    mocks.resumeWatcherOptions?.onResume("019e2110-d96f-7e40-882e-b524fa9148e4");
+
+    expect(provider.state.activeSessionId).toBe("019e2110-d96f-7e40-882e-b524fa9148e4");
+    expect(provider.state.resumeSessionId).toBe("019e2110-d96f-7e40-882e-b524fa9148e4");
+    expect(provider.state.sdkSessionId).toBe("019e2110-d96f-7e40-882e-b524fa9148e4");
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "state",
+      payload: expect.objectContaining({
+        activeSessionId: "019e2110-d96f-7e40-882e-b524fa9148e4",
+      }),
+    }));
+
+    provider.stop();
+  });
+
+  it("stops local resume watcher when Web takes over", async () => {
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+    });
+
+    await provider.takeover();
+
+    expect(mocks.resumeWatcherStop).toHaveBeenCalled();
+
+    provider.stop();
+  });
+
   it("does not emit fixed slash commands on construction", () => {
     const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
     const provider = new CodexCliProvider({

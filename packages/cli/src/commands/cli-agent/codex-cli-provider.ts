@@ -24,6 +24,10 @@ import {
   parseCodexToolInput,
 } from "./codex-plan-normalizer.js";
 import { spawnCliProcess } from "./cli-process.js";
+import {
+  startCodexResumeLogWatcher,
+  type CodexResumeLogWatcher,
+} from "./codex-resume-log-watcher.js";
 
 interface PendingPrompt {
   message: string;
@@ -177,6 +181,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   private mcpSlashCommandsByName = new Map<string, Record<string, unknown>>();
   private codexSkills: Array<Record<string, unknown>> = [];
   private codexMcpServers: Array<Record<string, unknown>> = [];
+  private localResumeLogWatcher: CodexResumeLogWatcher | null = null;
 
   constructor(private readonly opts: CodexCliProviderOptions) {
     super();
@@ -315,6 +320,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       this.suppressNextLocalExit = true;
       const oldLocal = this.local;
       this.local = null;
+      this.stopLocalResumeLogWatcher();
       try {
         oldLocal?.kill("SIGTERM");
       } catch {}
@@ -693,6 +699,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     try {
       this.local?.kill("SIGTERM");
     } catch {}
+    this.stopLocalResumeLogWatcher();
     this.local = null;
     this.ownerValue = "stopped";
     this.setThinking(false);
@@ -702,6 +709,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
 
   private startLocal(extraArgs: string[] = []): void {
     const wasWeb = this.ownerValue === "web";
+    this.stopLocalResumeLogWatcher();
     this.detachReclaimInput();
     this.finishWebPrompts(new Error("local mode active"));
     this.resetAppServerCapabilities();
@@ -715,6 +723,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     });
     this.local = child;
     this.ownerValue = "local";
+    this.startLocalResumeLogWatcher(child);
     this.emitState();
 
     child.on("error", (error) => {
@@ -722,6 +731,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       process.stderr.write(`\n[adit cloud codex] failed to start Codex CLI: ${error.message}\n`);
       if (this.local === child) {
         this.local = null;
+        this.stopLocalResumeLogWatcher();
         this.ownerValue = "stopped";
         this.emitState();
         this.emit("exit", { code: null, signal: null });
@@ -730,6 +740,9 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     child.on("exit", (code, signal) => {
       this.setThinking(false);
       this.setBusy(false);
+      if (this.local === child || this.suppressNextLocalExit) {
+        this.stopLocalResumeLogWatcher();
+      }
       if (this.suppressNextLocalExit) {
         this.suppressNextLocalExit = false;
         return;
@@ -741,6 +754,23 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
         this.emit("exit", { code, signal });
       }
     });
+  }
+
+  private startLocalResumeLogWatcher(child: ChildProcess): void {
+    this.localResumeLogWatcher = startCodexResumeLogWatcher({
+      cwd: this.opts.cwd,
+      onResume: (threadId) => {
+        if (this.ownerValue !== "local" || this.local !== child) return;
+        this.noteLocalSession(threadId);
+      },
+    });
+  }
+
+  private stopLocalResumeLogWatcher(): void {
+    try {
+      this.localResumeLogWatcher?.stop();
+    } catch {}
+    this.localResumeLogWatcher = null;
   }
 
   private async drainPromptQueue(): Promise<void> {
