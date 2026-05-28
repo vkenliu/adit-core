@@ -951,6 +951,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
       this.activePromptEvent = first.promptEvent;
       this.activePromptMode = first.mode;
       const permissionMode: PermissionMode = first.mode === "plan" ? "plan" : "bypassPermissions";
+      const disallowedTools = first.mode === "build" ? [ASK_USER_QUESTION_TOOL] : undefined;
       const explicitSessionId = !resumeId && canonicalSessionId && isUuid(canonicalSessionId)
         ? canonicalSessionId
         : undefined;
@@ -985,6 +986,7 @@ export class ClaudeCodeProvider extends EventEmitter implements CliAgentProvider
         sessionId: explicitSessionId,
         settings: this.opts.hookSettingsPath,
         permissionMode,
+        ...(disallowedTools ? { disallowedTools } : {}),
         ...(permissionMode === "bypassPermissions" ? { allowDangerouslySkipPermissions: true } : {}),
         forkSession: false,
         enableFileCheckpointing: true,
