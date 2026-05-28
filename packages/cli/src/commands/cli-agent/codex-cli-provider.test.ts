@@ -216,6 +216,11 @@ describe("normalizeCodexReclaimInput", () => {
 
     expect(normalizeCodexReclaimInput(encoded)).toBe("/local");
   });
+
+  it("decodes CSI-u Ctrl+C left by Codex terminal mode", () => {
+    expect(normalizeCodexReclaimInput("\x1b[99;5u")).toBe("\u0003");
+    expect(normalizeCodexReclaimInput("\x1b[99;1:5u")).toBe("\u0003");
+  });
 });
 
 describe("formatCodexTerminalNotice", () => {
@@ -325,6 +330,52 @@ describe("CodexCliProvider takeover", () => {
     expect(mocks.resumeWatcherStop).toHaveBeenCalled();
 
     provider.stop();
+  });
+
+  it("waits for the local Codex process to exit before Web owns the terminal", async () => {
+    const child = mockChildProcess();
+    child.kill = vi.fn(() => {
+      child.killed = true;
+      return true;
+    });
+    mocks.spawn.mockReturnValueOnce(child);
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+    });
+
+    let settled = false;
+    const takeover = provider.takeover().then(() => {
+      settled = true;
+    });
+
+    await tick();
+    expect(settled).toBe(false);
+    expect(provider.state.owner).toBe("local");
+
+    child.emit("exit", 0, null);
+    await takeover;
+
+    expect(provider.state.owner).toBe("web");
+
+    provider.stop();
+  });
+
+  it("emits SIGINT exit when reclaim input receives CSI-u Ctrl+C", async () => {
+    const exits: unknown[] = [];
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+    });
+    provider.on("exit", (event) => exits.push(event));
+
+    await provider.takeover();
+    (provider as unknown as { onReclaimInput: (chunk: string) => void }).onReclaimInput("\x1b[99;5u");
+
+    expect(exits).toContainEqual({ code: null, signal: "SIGINT" });
+    expect(provider.state.owner).toBe("stopped");
   });
 
   it("does not emit fixed slash commands on construction", () => {

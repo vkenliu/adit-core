@@ -637,8 +637,8 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
     process.on("SIGINT", () => cleanup("SIGINT"));
     process.on("SIGTERM", () => cleanup("SIGTERM"));
 
-    provider.on("exit", () => {
-      cleanup("Codex CLI exit");
+    provider.on("exit", (info: { signal?: string | null } | undefined) => {
+      cleanup(info?.signal ?? "Codex CLI exit");
     });
 
     while (!stopping) {
