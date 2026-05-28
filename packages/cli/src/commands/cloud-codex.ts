@@ -20,7 +20,11 @@ import {
 } from "./cli-agent/hooks-bootstrap.js";
 import { startCliAgentHookServer, type HookServer } from "./cli-agent/hook-server.js";
 import { CliAgentRelayWebSocket } from "./cli-agent/relay-client.js";
-import type { CliAgentRelayEvent, RelayCommand } from "./cli-agent/types.js";
+import type {
+  CliAgentRelayEvent,
+  PromptImageAttachment,
+  RelayCommand,
+} from "./cli-agent/types.js";
 
 interface CloudCodexOptions {
   bin?: string;
@@ -197,6 +201,30 @@ function readStringArray(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === "string" && item.length > 0);
 }
 
+function readImageAttachments(value: unknown): PromptImageAttachment[] {
+  if (!Array.isArray(value)) return [];
+  const attachments: PromptImageAttachment[] = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const item = raw as Record<string, unknown>;
+    const id = readString(item.id);
+    const url = readString(item.url);
+    const mimeType = readString(item.mimeType);
+    if (!id || !url || !mimeType?.startsWith("image/")) continue;
+    attachments.push({
+      id,
+      kind: "image",
+      url,
+      mimeType,
+      fileName: readString(item.fileName),
+      sizeBytes: typeof item.sizeBytes === "number" && Number.isFinite(item.sizeBytes)
+        ? item.sizeBytes
+        : 0,
+    });
+  }
+  return attachments;
+}
+
 function isPendingSessionId(value: string | null | undefined): boolean {
   return value?.startsWith("pending_") ?? false;
 }
@@ -250,7 +278,8 @@ async function processCommand(
 
   if (command.type === "prompt") {
     const text = readString(command.payload.text);
-    if (!text) return;
+    const attachments = readImageAttachments(command.payload.attachments);
+    if (!text && attachments.length === 0) return;
     const sessionId = readString(command.payload.sessionId);
     const pendingSessionId = readString(command.payload.pendingSessionId);
     const localMessageId = readString(command.payload.localMessageId);
@@ -258,22 +287,23 @@ async function processCommand(
     if (!pendingSessionId && sessionId && provider.state.activeSessionId !== sessionId) {
       await provider.switchSession(sessionId);
     }
-    await provider.sendPrompt(text, { mode, pendingSessionId, localMessageId });
+    await provider.sendPrompt(text ?? "", { mode, pendingSessionId, localMessageId, attachments });
     return;
   }
 
   if (command.type === "steer") {
     const text = readString(command.payload.text);
-    if (!text) return;
+    const attachments = readImageAttachments(command.payload.attachments);
+    if (!text && attachments.length === 0) return;
     const sessionId = readString(command.payload.sessionId);
     const localMessageId = readString(command.payload.localMessageId);
     const mode = readString(command.payload.mode) === "plan" ? "plan" : "build";
     try {
-      await provider.steerPrompt(text, { sessionId, localMessageId, mode });
+      await provider.steerPrompt(text ?? "", { sessionId, localMessageId, mode, attachments });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (/not currently accepting steering input/i.test(message)) {
-        await provider.sendPrompt(text, { mode, localMessageId });
+        await provider.sendPrompt(text ?? "", { mode, localMessageId, attachments });
         return;
       }
       throw error;
@@ -607,13 +637,25 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
     process.on("SIGINT", () => cleanup("SIGINT"));
     process.on("SIGTERM", () => cleanup("SIGTERM"));
 
-    provider.on("exit", () => {
-      cleanup("Codex CLI exit");
+    provider.on("exit", (info: { signal?: string | null } | undefined) => {
+      cleanup(info?.signal ?? "Codex CLI exit");
     });
 
     while (!stopping) {
       try {
         if (ws.isOpen && ws.currentConnectionId) {
+          const flushEvents = () => {
+            if (eventQueue.length === 0) return;
+            const batch = eventQueue.splice(0, 50);
+            const sent = ws.sendEvents(batch);
+            if (!sent) eventQueue.unshift(...batch);
+          };
+          await drainCommandQueue({
+            provider,
+            commands: commandQueue,
+            enqueueEvent,
+            ws,
+          });
           ws.sendHeartbeat(provider.state);
           const state = provider.state;
           const now = Date.now();
@@ -621,23 +663,7 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
             lastTranscriptDrainAt = now;
             enqueueEvents(transcriptSync.drainSession(state.activeSessionId));
           }
-          const flushEvents = () => {
-            if (eventQueue.length === 0) return;
-            const batch = eventQueue.splice(0, 50);
-            const sent = ws.sendEvents(batch);
-            if (!sent) eventQueue.unshift(...batch);
-          };
           flushEvents();
-          const processedCommands = await drainCommandQueue({
-            provider,
-            commands: commandQueue,
-            enqueueEvent,
-            ws,
-          });
-          if (processedCommands) {
-            ws.sendHeartbeat(provider.state);
-            flushEvents();
-          }
         } else {
           ws.connect();
         }

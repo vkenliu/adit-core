@@ -86,8 +86,8 @@ export const codexAdapter: PlatformAdapter = {
       cwd,
       hookType: aditHookType,
       platformCli: "codex",
-      platformSessionId: raw.session_id as string | undefined,
-      transcriptPath: raw.transcript_path as string | undefined,
+      platformSessionId: readStringField(raw, "session_id", "sessionId", "thread_id", "threadId"),
+      transcriptPath: readStringField(raw, "transcript_path", "transcriptPath"),
       // Prompt
       prompt: raw.prompt as string | undefined,
       // Stop

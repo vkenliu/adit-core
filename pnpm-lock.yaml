@@ -35,6 +35,9 @@ importers:
       '@varveai/adit-plans':
         specifier: workspace:*
         version: link:../plans
+      better-sqlite3:
+        specifier: 12.6.2
+        version: 12.6.2
       commander:
         specifier: ^13.0.0
         version: 13.1.0
@@ -54,6 +57,9 @@ importers:
         specifier: ^8.20.0
         version: 8.20.0
     devDependencies:
+      '@types/better-sqlite3':
+        specifier: ^7.6.13
+        version: 7.6.13
       '@types/react':
         specifier: ^18.3.28
         version: 18.3.28

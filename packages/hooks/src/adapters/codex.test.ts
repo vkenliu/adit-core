@@ -447,6 +447,21 @@ describe("Codex CLI Hook Chaining", () => {
       });
     });
 
+    it("parses Codex thread_id aliases as platform session IDs", () => {
+      const raw = {
+        thread_id: "thread123",
+        transcriptPath: "/path/to/transcript",
+        cwd: "/project",
+        hook_event_name: "SessionStart",
+        model: "gpt-4"
+      };
+
+      const result = codexAdapter.parseInput(raw, "SessionStart");
+
+      expect(result.platformSessionId).toBe("thread123");
+      expect(result.transcriptPath).toBe("/path/to/transcript");
+    });
+
     it("parses UserPromptSubmit input correctly", () => {
       const raw = {
         session_id: "session123",

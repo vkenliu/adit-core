@@ -1,4 +1,7 @@
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
@@ -30,6 +33,7 @@ vi.mock("@varveai/adit-engine", () => ({
 import {
   ClaudeCodeProvider,
   buildClaudeCloudRelayEnv,
+  normalizeClaudeSdkTranscriptEntrypoints,
   normalizeClaudeTodoWriteInput,
 } from "./claude-code-provider.js";
 
@@ -157,6 +161,56 @@ describe("normalizeClaudeTodoWriteInput", () => {
     expect(normalizeClaudeTodoWriteInput({ todos: [] })).toEqual([]);
     expect(normalizeClaudeTodoWriteInput({ todos: [{ status: "pending" }] })).toBeNull();
     expect(normalizeClaudeTodoWriteInput({})).toBeNull();
+  });
+});
+
+describe("normalizeClaudeSdkTranscriptEntrypoints", () => {
+  it("rewrites TypeScript SDK transcript entrypoints for Claude resume picker compatibility", () => {
+    const originalConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    const configDir = fs.mkdtempSync(path.join(tmpdir(), "adit-claude-config-"));
+    const cwd = "/tmp/adit-entrypoint-project";
+    const sessionId = "11111111-2222-4333-8444-555555555555";
+    const projectId = path.resolve(cwd).replace(/[^a-zA-Z0-9-]/g, "-");
+    const projectDir = path.join(configDir, "projects", projectId);
+    const transcriptFile = path.join(projectDir, `${sessionId}.jsonl`);
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(
+      transcriptFile,
+      [
+        JSON.stringify({
+          type: "user",
+          entrypoint: "sdk-ts",
+          sessionId,
+          message: { role: "user", content: "hello" },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          entrypoint: "sdk-cli",
+          sessionId,
+          message: { role: "assistant", content: [] },
+        }),
+        "{not-json",
+        "",
+      ].join("\n"),
+    );
+
+    try {
+      process.env.CLAUDE_CONFIG_DIR = configDir;
+
+      normalizeClaudeSdkTranscriptEntrypoints({ cwd, sessionId });
+
+      const lines = fs.readFileSync(transcriptFile, "utf8").split("\n");
+      expect(JSON.parse(lines[0] ?? "{}").entrypoint).toBe("cli");
+      expect(JSON.parse(lines[1] ?? "{}").entrypoint).toBe("sdk-cli");
+      expect(lines[2]).toBe("{not-json");
+    } finally {
+      if (originalConfigDir === undefined) {
+        delete process.env.CLAUDE_CONFIG_DIR;
+      } else {
+        process.env.CLAUDE_CONFIG_DIR = originalConfigDir;
+      }
+      fs.rmSync(configDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -921,6 +975,40 @@ describe("ClaudeCodeProvider takeover", () => {
 });
 
 describe("ClaudeCodeProvider steerPrompt", () => {
+  it("sends image attachments as Claude content blocks", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new ClaudeCodeProvider({
+      bin: "claude",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    const attachment = {
+      id: "att-1",
+      kind: "image" as const,
+      url: "https://storage.example.invalid/coding-attachments/u/2026/05/a.png",
+      mimeType: "image/png",
+      fileName: "a.png",
+      sizeBytes: 1234,
+    };
+
+    await provider.takeover();
+    await provider.sendPrompt("describe this", {
+      localMessageId: "local-image-1",
+      attachments: [attachment],
+    });
+
+    const iterator = findRemotePromptStream()[Symbol.asyncIterator]();
+    const first = await iterator.next();
+    expect((first.value.message as { content?: unknown }).content).toEqual([
+      { type: "text", text: "describe this" },
+      { type: "image", source: { type: "url", url: attachment.url } },
+    ]);
+    await provider.abort();
+    provider.stop();
+  });
+
   it("pushes steering input into the active SDK prompt stream", async () => {
     const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
     const provider = new ClaudeCodeProvider({

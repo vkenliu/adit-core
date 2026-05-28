@@ -13,6 +13,12 @@ const mocks = vi.hoisted(() => ({
   appServerOptions: null as null | {
     onNotification?: (message: unknown) => void;
   },
+  resumeWatcherOptions: null as null | {
+    cwd: string;
+    onResume: (threadId: string) => void;
+  },
+  resumeWatcherStop: vi.fn(),
+  startResumeWatcher: vi.fn(),
 }));
 
 vi.mock("node:child_process", () => ({
@@ -56,6 +62,16 @@ vi.mock("./codex-app-server-client.js", () => ({
       mocks.flushDeferredSystemSkillsStderr();
       mocks.deferredSystemSkillsStderr = false;
     }
+  },
+}));
+
+vi.mock("./codex-resume-log-watcher.js", () => ({
+  startCodexResumeLogWatcher: (options: unknown) => {
+    mocks.resumeWatcherOptions = options as typeof mocks.resumeWatcherOptions;
+    mocks.startResumeWatcher(options);
+    return {
+      stop: mocks.resumeWatcherStop,
+    };
   },
 }));
 
@@ -113,9 +129,11 @@ function appServerMethodsError(methods = DEFAULT_APP_SERVER_METHODS): Error {
 }
 
 beforeEach(() => {
+  vi.unstubAllGlobals();
   vi.clearAllMocks();
   mocks.deferredSystemSkillsStderr = false;
   mocks.appServerOptions = null;
+  mocks.resumeWatcherOptions = null;
   mocks.spawn.mockImplementation(() => mockChildProcess());
   mocks.appStart.mockResolvedValue(undefined);
   mocks.appRequest.mockImplementation(async (method: string, params: unknown) => {
@@ -198,6 +216,11 @@ describe("normalizeCodexReclaimInput", () => {
 
     expect(normalizeCodexReclaimInput(encoded)).toBe("/local");
   });
+
+  it("decodes CSI-u Ctrl+C left by Codex terminal mode", () => {
+    expect(normalizeCodexReclaimInput("\x1b[99;5u")).toBe("\u0003");
+    expect(normalizeCodexReclaimInput("\x1b[99;1:5u")).toBe("\u0003");
+  });
 });
 
 describe("formatCodexTerminalNotice", () => {
@@ -266,6 +289,95 @@ describe("Codex prompt modes", () => {
 });
 
 describe("CodexCliProvider takeover", () => {
+  it("updates local session state when Codex resume is detected before hooks run", () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(mocks.startResumeWatcher).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: "/tmp/project" }),
+    );
+    expect(provider.state.activeSessionId).toBeNull();
+
+    mocks.resumeWatcherOptions?.onResume("019e2110-d96f-7e40-882e-b524fa9148e4");
+
+    expect(provider.state.activeSessionId).toBe("019e2110-d96f-7e40-882e-b524fa9148e4");
+    expect(provider.state.resumeSessionId).toBe("019e2110-d96f-7e40-882e-b524fa9148e4");
+    expect(provider.state.sdkSessionId).toBe("019e2110-d96f-7e40-882e-b524fa9148e4");
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "state",
+      payload: expect.objectContaining({
+        activeSessionId: "019e2110-d96f-7e40-882e-b524fa9148e4",
+      }),
+    }));
+
+    provider.stop();
+  });
+
+  it("stops local resume watcher when Web takes over", async () => {
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+    });
+
+    await provider.takeover();
+
+    expect(mocks.resumeWatcherStop).toHaveBeenCalled();
+
+    provider.stop();
+  });
+
+  it("waits for the local Codex process to exit before Web owns the terminal", async () => {
+    const child = mockChildProcess();
+    child.kill = vi.fn(() => {
+      child.killed = true;
+      return true;
+    });
+    mocks.spawn.mockReturnValueOnce(child);
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+    });
+
+    let settled = false;
+    const takeover = provider.takeover().then(() => {
+      settled = true;
+    });
+
+    await tick();
+    expect(settled).toBe(false);
+    expect(provider.state.owner).toBe("local");
+
+    child.emit("exit", 0, null);
+    await takeover;
+
+    expect(provider.state.owner).toBe("web");
+
+    provider.stop();
+  });
+
+  it("emits SIGINT exit when reclaim input receives CSI-u Ctrl+C", async () => {
+    const exits: unknown[] = [];
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+    });
+    provider.on("exit", (event) => exits.push(event));
+
+    await provider.takeover();
+    (provider as unknown as { onReclaimInput: (chunk: string) => void }).onReclaimInput("\x1b[99;5u");
+
+    expect(exits).toContainEqual({ code: null, signal: "SIGINT" });
+    expect(provider.state.owner).toBe("stopped");
+  });
+
   it("does not emit fixed slash commands on construction", () => {
     const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
     const provider = new CodexCliProvider({
@@ -1002,6 +1114,55 @@ describe("CodexCliProvider takeover", () => {
       }),
     );
     expect(provider.state.activeSessionId).toBe("019e2110-d96f-7e40-882e-b524fa9148e4");
+
+    provider.stop();
+  });
+
+  it("sends prompt image attachments to app-server input", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    await provider.takeover();
+    mocks.appRequest.mockClear();
+
+    const attachment = {
+      id: "att-1",
+      kind: "image" as const,
+      url: "https://storage.example.invalid/coding-attachments/u/2026/05/a.png",
+      mimeType: "image/png",
+      fileName: "a.png",
+      sizeBytes: 1234,
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      headers: new Headers({ "content-type": "image/png" }),
+      arrayBuffer: async () => Buffer.from("png-bytes").buffer,
+    })));
+
+    await provider.sendPrompt("", { attachments: [attachment] });
+
+    expect(mocks.appRequest).toHaveBeenCalledWith("turn/start", expect.objectContaining({
+      input: [
+        {
+          type: "image",
+          url: expect.stringMatching(/^data:image\/png;base64,/),
+          detail: "high",
+        },
+      ],
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "message",
+      payload: expect.objectContaining({
+        role: "user",
+        text: "",
+        attachments: [attachment],
+      }),
+    }));
 
     provider.stop();
   });
