@@ -204,11 +204,17 @@ export function stripCodexHookTrustBlocks(
       if (stateKey !== null) {
         const block = [line];
         while (index + 1 < lines.length) {
+          const nextLine = lines[index + 1] ?? "";
+          if (
+            /^\s*\[[^\]]+\]\s*$/u.test(nextLine) ||
+            startPattern.test(nextLine) ||
+            endPattern.test(nextLine)
+          ) {
+            break;
+          }
           index++;
           const blockLine = lines[index] ?? "";
           block.push(blockLine);
-          const nextLine = lines[index + 1] ?? "";
-          if (/^\s*\[[^\]]+\]\s*$/u.test(nextLine)) break;
         }
         const blockText = block.join("\n");
         const matchesKey = keys.includes(stateKey);

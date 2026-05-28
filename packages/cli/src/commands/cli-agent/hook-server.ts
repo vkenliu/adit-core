@@ -21,7 +21,10 @@ function readSessionId(body: Record<string, unknown>): string | null {
   return (
     readString(body.session_id) ??
     readString(body.sessionId) ??
-    readString(body.transcript_path)?.match(/([0-9a-f-]{36})\.jsonl$/i)?.[1] ??
+    readString(body.thread_id) ??
+    readString(body.threadId) ??
+    (readString(body.transcript_path) ?? readString(body.transcriptPath))
+      ?.match(/([0-9a-f-]{8}-[0-9a-f-]{4}-[0-9a-f-]{4}-[0-9a-f-]{4}-[0-9a-f-]{12})\.jsonl$/i)?.[1] ??
     null
   );
 }

@@ -39,6 +39,10 @@ export const claudeVscodeAdapter: PlatformAdapter = {
     return claudeCodeAdapter.validateInstallation(projectRoot);
   },
 
+  async hasHooks(projectRoot: string): Promise<boolean> {
+    return claudeCodeAdapter.hasHooks?.(projectRoot) ?? false;
+  },
+
   async installHooks(projectRoot: string, aditBinaryPath: string): Promise<void> {
     return claudeCodeAdapter.installHooks(projectRoot, aditBinaryPath);
   },

@@ -1,0 +1,182 @@
+name: Deploy production
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Exact semver version to publish for all ADIT packages"
+        required: true
+        type: string
+      dist_tag:
+        description: "npm dist-tag to assign"
+        required: true
+        default: "develop"
+        type: choice
+        options:
+          - "develop"
+          - "latest"
+          - "next"
+          - "beta"
+          - "alpha"
+      dry_run:
+        description: "Validate and pack without publishing"
+        required: true
+        default: true
+        type: boolean
+
+jobs:
+  publish-npm:
+    name: Publish npm packages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      DIST_TAG: ${{ inputs.dist_tag }}
+      DRY_RUN: ${{ inputs.dry_run }}
+
+    steps:
+      - name: Require develop branch
+        run: |
+          if [ "${GITHUB_REF_NAME}" != "develop" ]; then
+            echo "This workflow only publishes from the develop branch." >&2
+            echo "Selected ref: ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: "https://registry.npmjs.org"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate requested version
+        run: |
+          node <<'NODE'
+          const version = process.env.RELEASE_VERSION ?? "";
+          const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+          if (!semver.test(version)) {
+            console.error(`Invalid release version: ${version}`);
+            console.error("Use an exact semver version, for example 0.4.14 or 0.5.0-beta.1.");
+            process.exit(1);
+          }
+          NODE
+
+      - name: Apply requested package version
+        run: |
+          node <<'NODE'
+          const { readFileSync, writeFileSync } = require("node:fs");
+
+          const version = process.env.RELEASE_VERSION;
+          const internalPackageNames = new Set([
+            "@varveai/adit-core",
+            "@varveai/adit-engine",
+            "@varveai/adit-hooks",
+            "@varveai/adit-cli",
+            "@varveai/adit-cloud",
+            "@varveai/adit-plans",
+          ]);
+          const packageJsonPaths = [
+            "packages/core/package.json",
+            "packages/engine/package.json",
+            "packages/hooks/package.json",
+            "packages/cli/package.json",
+            "packages/cloud/package.json",
+            "packages/plans/package.json",
+          ];
+
+          for (const path of packageJsonPaths) {
+            const packageJson = JSON.parse(readFileSync(path, "utf8"));
+            packageJson.version = version;
+            for (const field of ["dependencies", "peerDependencies", "optionalDependencies"]) {
+              const dependencies = packageJson[field];
+              if (dependencies === undefined) continue;
+
+              for (const dependencyName of Object.keys(dependencies)) {
+                if (internalPackageNames.has(dependencyName)) {
+                  dependencies[dependencyName] = version;
+                }
+              }
+            }
+            writeFileSync(path, `${JSON.stringify(packageJson, null, 2)}\n`);
+            console.log(`${packageJson.name}@${version}`);
+          }
+          NODE
+
+      - name: Verify package versions are unpublished
+        run: |
+          set -euo pipefail
+
+          node <<'NODE' > /tmp/adit-package-names.txt
+          const { readFileSync } = require("node:fs");
+          const packageJsonPaths = [
+            "packages/core/package.json",
+            "packages/engine/package.json",
+            "packages/hooks/package.json",
+            "packages/cli/package.json",
+            "packages/cloud/package.json",
+            "packages/plans/package.json",
+          ];
+          for (const path of packageJsonPaths) {
+            console.log(JSON.parse(readFileSync(path, "utf8")).name);
+          }
+          NODE
+
+          while IFS= read -r package_name; do
+            if npm view "${package_name}@${RELEASE_VERSION}" version >/dev/null 2>&1; then
+              echo "${package_name}@${RELEASE_VERSION} already exists on npm." >&2
+              exit 1
+            fi
+          done < /tmp/adit-package-names.txt
+
+      - name: Build packages
+        run: pnpm build
+
+      - name: Run tests
+        run: pnpm test
+
+      - name: Require npm token for publish
+        if: ${{ inputs.dry_run == false }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "Missing NPM_TOKEN secret. Add an npm automation token as NPM_TOKEN." >&2
+            exit 1
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish packages
+        run: |
+          set -euo pipefail
+
+          publish_args=(
+            "-r"
+            "--access"
+            "public"
+            "--tag"
+            "${DIST_TAG}"
+            "--no-git-checks"
+            "--ignore-scripts"
+          )
+
+          if [ "${DRY_RUN}" = "true" ]; then
+            publish_args+=("--dry-run")
+          fi
+
+          pnpm publish "${publish_args[@]}"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

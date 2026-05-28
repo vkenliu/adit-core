@@ -1,6 +1,6 @@
 {
   "name": "@varveai/adit-cli",
-  "version": "0.4.8",
+  "version": "0.4.13",
   "description": "AI Development Intent Tracker — Transparent Time Machine for your codebase",
   "type": "module",
   "main": "./dist/index.js",
@@ -37,6 +37,7 @@
     "@varveai/adit-engine": "workspace:*",
     "@varveai/adit-hooks": "workspace:*",
     "@varveai/adit-plans": "workspace:*",
+    "better-sqlite3": "12.6.2",
     "commander": "^13.0.0",
     "ink": "^5.2.1",
     "ink-spinner": "^5.0.0",
@@ -45,6 +46,7 @@
     "ws": "^8.20.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/react": "^18.3.28",
     "@types/ws": "^8.18.1",
     "typescript": "^5.7.2"

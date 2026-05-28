@@ -338,6 +338,23 @@ export const cursorAdapter: PlatformAdapter = {
     return null;
   },
 
+  async hasHooks(projectRoot: string): Promise<boolean> {
+    const hooksPath = join(projectRoot, ".cursor", "hooks.json");
+    if (!existsSync(hooksPath)) return false;
+
+    try {
+      const hooksConfig = JSON.parse(readFileSync(hooksPath, "utf-8")) as { hooks?: unknown };
+      if (!hooksConfig.hooks || typeof hooksConfig.hooks !== "object" || Array.isArray(hooksConfig.hooks)) {
+        return false;
+      }
+      return Object.values(hooksConfig.hooks).some((entries) =>
+        Array.isArray(entries) && entries.some(entryContainsAditHook),
+      );
+    } catch {
+      return false;
+    }
+  },
+
   async uninstallHooks(projectRoot: string): Promise<void> {
     const hooksPath = join(projectRoot, ".cursor", "hooks.json");
     if (!existsSync(hooksPath)) return;
@@ -381,3 +398,11 @@ export const cursorAdapter: PlatformAdapter = {
     }
   },
 };
+
+function entryContainsAditHook(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+  const raw = entry as { command?: string; hooks?: Array<{ command?: string }> };
+  if (typeof raw.command === "string" && isAditHookCommand(raw.command)) return true;
+  return Array.isArray(raw.hooks) &&
+    raw.hooks.some((hook) => typeof hook.command === "string" && isAditHookCommand(hook.command));
+}

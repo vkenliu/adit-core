@@ -30,6 +30,13 @@ export interface PlatformAdapter {
   /** Validate that the platform is properly configured */
   validateInstallation(projectRoot: string): Promise<ValidationResult>;
 
+  /**
+   * Detect whether this platform has any ADIT-managed hook configuration
+   * or companion files to remove. This is intentionally looser than
+   * validateInstallation() so uninstall can clean partial/broken installs.
+   */
+  hasHooks?(projectRoot: string): Promise<boolean>;
+
   /** Install/register hooks for this platform */
   installHooks(projectRoot: string, aditBinaryPath: string): Promise<void>;
 

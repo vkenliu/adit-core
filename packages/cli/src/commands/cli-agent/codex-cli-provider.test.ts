@@ -7,9 +7,18 @@ const mocks = vi.hoisted(() => ({
   appStart: vi.fn(),
   appRequest: vi.fn(),
   appStop: vi.fn(),
+  deferredSystemSkillsStderr: false,
+  clearDeferredSystemSkillsStderr: vi.fn(),
+  flushDeferredSystemSkillsStderr: vi.fn(),
   appServerOptions: null as null | {
     onNotification?: (message: unknown) => void;
   },
+  resumeWatcherOptions: null as null | {
+    cwd: string;
+    onResume: (threadId: string) => void;
+  },
+  resumeWatcherStop: vi.fn(),
+  startResumeWatcher: vi.fn(),
 }));
 
 vi.mock("node:child_process", () => ({
@@ -18,6 +27,7 @@ vi.mock("node:child_process", () => ({
 }));
 
 vi.mock("./codex-app-server-client.js", () => ({
+  CODEX_DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE: "default_mode_request_user_input",
   CodexAppServerClient: class {
     constructor(options: unknown) {
       mocks.appServerOptions = options as typeof mocks.appServerOptions;
@@ -38,6 +48,30 @@ vi.mock("./codex-app-server-client.js", () => ({
     stop() {
       return mocks.appStop();
     }
+
+    hasDeferredSystemSkillsStderr() {
+      return mocks.deferredSystemSkillsStderr;
+    }
+
+    clearDeferredSystemSkillsStderr() {
+      mocks.clearDeferredSystemSkillsStderr();
+      mocks.deferredSystemSkillsStderr = false;
+    }
+
+    flushDeferredSystemSkillsStderr() {
+      mocks.flushDeferredSystemSkillsStderr();
+      mocks.deferredSystemSkillsStderr = false;
+    }
+  },
+}));
+
+vi.mock("./codex-resume-log-watcher.js", () => ({
+  startCodexResumeLogWatcher: (options: unknown) => {
+    mocks.resumeWatcherOptions = options as typeof mocks.resumeWatcherOptions;
+    mocks.startResumeWatcher(options);
+    return {
+      stop: mocks.resumeWatcherStop,
+    };
   },
 }));
 
@@ -95,8 +129,11 @@ function appServerMethodsError(methods = DEFAULT_APP_SERVER_METHODS): Error {
 }
 
 beforeEach(() => {
+  vi.unstubAllGlobals();
   vi.clearAllMocks();
+  mocks.deferredSystemSkillsStderr = false;
   mocks.appServerOptions = null;
+  mocks.resumeWatcherOptions = null;
   mocks.spawn.mockImplementation(() => mockChildProcess());
   mocks.appStart.mockResolvedValue(undefined);
   mocks.appRequest.mockImplementation(async (method: string, params: unknown) => {
@@ -179,6 +216,11 @@ describe("normalizeCodexReclaimInput", () => {
 
     expect(normalizeCodexReclaimInput(encoded)).toBe("/local");
   });
+
+  it("decodes CSI-u Ctrl+C left by Codex terminal mode", () => {
+    expect(normalizeCodexReclaimInput("\x1b[99;5u")).toBe("\u0003");
+    expect(normalizeCodexReclaimInput("\x1b[99;1:5u")).toBe("\u0003");
+  });
 });
 
 describe("formatCodexTerminalNotice", () => {
@@ -213,6 +255,9 @@ describe("Codex prompt modes", () => {
       approvalPolicy: "never",
       approvalsReviewer: "user",
       sandbox: "read-only",
+      config: {
+        "features.default_mode_request_user_input": true,
+      },
     });
     expect(codexTurnModeOverrides("plan")).toEqual({
       approvalPolicy: "never",
@@ -229,6 +274,9 @@ describe("Codex prompt modes", () => {
       approvalPolicy: "never",
       approvalsReviewer: "user",
       sandbox: "danger-full-access",
+      config: {
+        "features.default_mode_request_user_input": true,
+      },
     });
     expect(codexTurnModeOverrides("build")).toEqual({
       approvalPolicy: "never",
@@ -241,6 +289,95 @@ describe("Codex prompt modes", () => {
 });
 
 describe("CodexCliProvider takeover", () => {
+  it("updates local session state when Codex resume is detected before hooks run", () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(mocks.startResumeWatcher).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: "/tmp/project" }),
+    );
+    expect(provider.state.activeSessionId).toBeNull();
+
+    mocks.resumeWatcherOptions?.onResume("019e2110-d96f-7e40-882e-b524fa9148e4");
+
+    expect(provider.state.activeSessionId).toBe("019e2110-d96f-7e40-882e-b524fa9148e4");
+    expect(provider.state.resumeSessionId).toBe("019e2110-d96f-7e40-882e-b524fa9148e4");
+    expect(provider.state.sdkSessionId).toBe("019e2110-d96f-7e40-882e-b524fa9148e4");
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "state",
+      payload: expect.objectContaining({
+        activeSessionId: "019e2110-d96f-7e40-882e-b524fa9148e4",
+      }),
+    }));
+
+    provider.stop();
+  });
+
+  it("stops local resume watcher when Web takes over", async () => {
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+    });
+
+    await provider.takeover();
+
+    expect(mocks.resumeWatcherStop).toHaveBeenCalled();
+
+    provider.stop();
+  });
+
+  it("waits for the local Codex process to exit before Web owns the terminal", async () => {
+    const child = mockChildProcess();
+    child.kill = vi.fn(() => {
+      child.killed = true;
+      return true;
+    });
+    mocks.spawn.mockReturnValueOnce(child);
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+    });
+
+    let settled = false;
+    const takeover = provider.takeover().then(() => {
+      settled = true;
+    });
+
+    await tick();
+    expect(settled).toBe(false);
+    expect(provider.state.owner).toBe("local");
+
+    child.emit("exit", 0, null);
+    await takeover;
+
+    expect(provider.state.owner).toBe("web");
+
+    provider.stop();
+  });
+
+  it("emits SIGINT exit when reclaim input receives CSI-u Ctrl+C", async () => {
+    const exits: unknown[] = [];
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+    });
+    provider.on("exit", (event) => exits.push(event));
+
+    await provider.takeover();
+    (provider as unknown as { onReclaimInput: (chunk: string) => void }).onReclaimInput("\x1b[99;5u");
+
+    expect(exits).toContainEqual({ code: null, signal: "SIGINT" });
+    expect(provider.state.owner).toBe("stopped");
+  });
+
   it("does not emit fixed slash commands on construction", () => {
     const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
     const provider = new CodexCliProvider({
@@ -382,6 +519,64 @@ describe("CodexCliProvider takeover", () => {
     expect(slashEvent?.payload.commands).toEqual([]);
 
     provider.stop();
+  });
+
+  it("retries skill hydration when Codex rewrites the system skills cache", async () => {
+    vi.useFakeTimers();
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    let skillListCalls = 0;
+    mocks.appRequest.mockImplementation(async (method: string, params: unknown) => {
+      if (method === "adit/capabilities/discover") {
+        throw appServerMethodsError();
+      }
+      if (method === "thread/start") {
+        return {
+          model: "gpt-test",
+          thread: { id: "019e2110-d96f-7e40-882e-b524fa9148e4" },
+        };
+      }
+      if (method === "skills/list") {
+        skillListCalls += 1;
+        if (skillListCalls === 1) mocks.deferredSystemSkillsStderr = true;
+        return {
+          data: [
+            {
+              cwd: (params as { cwds?: string[] }).cwds?.[0] ?? "/tmp/project",
+              skills: [
+                {
+                  name: skillListCalls === 1 ? "partial-skill" : "imagegen",
+                  description: "Generate images",
+                  enabled: true,
+                },
+              ],
+            },
+          ],
+        };
+      }
+      if (method === "mcpServerStatus/list") return { data: [] };
+      return {};
+    });
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    try {
+      const takeover = provider.takeover();
+      await vi.advanceTimersByTimeAsync(250);
+      await takeover;
+
+      expect(skillListCalls).toBe(2);
+      expect(mocks.clearDeferredSystemSkillsStderr).toHaveBeenCalledTimes(1);
+      expect(mocks.flushDeferredSystemSkillsStderr).not.toHaveBeenCalled();
+      expect(events.filter((event) => event.type === "slash-commands").at(-1)?.payload.commands)
+        .toContainEqual({ name: "imagegen", description: "Use Codex skill: Generate images" });
+    } finally {
+      provider.stop();
+      vi.useRealTimers();
+    }
   });
 
   it("starts a real empty thread when Web takes over without an active session", async () => {
@@ -922,6 +1117,55 @@ describe("CodexCliProvider takeover", () => {
 
     provider.stop();
   });
+
+  it("sends prompt image attachments to app-server input", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    await provider.takeover();
+    mocks.appRequest.mockClear();
+
+    const attachment = {
+      id: "att-1",
+      kind: "image" as const,
+      url: "https://storage.example.invalid/coding-attachments/u/2026/05/a.png",
+      mimeType: "image/png",
+      fileName: "a.png",
+      sizeBytes: 1234,
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      headers: new Headers({ "content-type": "image/png" }),
+      arrayBuffer: async () => Buffer.from("png-bytes").buffer,
+    })));
+
+    await provider.sendPrompt("", { attachments: [attachment] });
+
+    expect(mocks.appRequest).toHaveBeenCalledWith("turn/start", expect.objectContaining({
+      input: [
+        {
+          type: "image",
+          url: expect.stringMatching(/^data:image\/png;base64,/),
+          detail: "high",
+        },
+      ],
+    }));
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "message",
+      payload: expect.objectContaining({
+        role: "user",
+        text: "",
+        attachments: [attachment],
+      }),
+    }));
+
+    provider.stop();
+  });
 });
 
 describe("CodexCliProvider abort", () => {
@@ -949,6 +1193,94 @@ describe("CodexCliProvider abort", () => {
     )).toBe(false);
 
     provider.stop();
+  });
+
+  it("interrupts the active turn and emits run.aborted before switching sessions", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    await provider.takeover();
+    await provider.sendPrompt("hello");
+    mocks.appRequest.mockClear();
+
+    await provider.switchSession("019e0000-0000-7000-8000-000000000001");
+
+    expect(mocks.appRequest).toHaveBeenCalledWith("turn/interrupt", {
+      threadId: "019e2110-d96f-7e40-882e-b524fa9148e4",
+      turnId: "turn-1",
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "run.aborted",
+      payload: expect.objectContaining({
+        message: "Codex session switched.",
+        sessionId: "019e2110-d96f-7e40-882e-b524fa9148e4",
+      }),
+    }));
+    expect(provider.state.activeSessionId).toBe("019e0000-0000-7000-8000-000000000001");
+
+    provider.stop();
+  });
+
+  it("emits run.aborted when releasing Web control during an active turn", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    await provider.takeover();
+    await provider.sendPrompt("hello");
+    mocks.appRequest.mockClear();
+
+    await provider.releaseToLocal();
+
+    expect(mocks.appRequest).toHaveBeenCalledWith("turn/interrupt", {
+      threadId: "019e2110-d96f-7e40-882e-b524fa9148e4",
+      turnId: "turn-1",
+    });
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "run.aborted",
+      payload: expect.objectContaining({
+        message: "Web control released to local CLI.",
+        sessionId: "019e2110-d96f-7e40-882e-b524fa9148e4",
+      }),
+    }));
+    expect(provider.state.owner).toBe("local");
+
+    provider.stop();
+  });
+
+  it("emits run.aborted when the provider stops during an active turn", async () => {
+    const events: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+      onEvent: (event) => events.push(event),
+    });
+
+    await provider.takeover();
+    await provider.sendPrompt("hello");
+    mocks.appRequest.mockClear();
+
+    provider.stop();
+
+    expect(mocks.appRequest).not.toHaveBeenCalledWith("turn/interrupt", expect.anything());
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "run.aborted",
+      payload: expect.objectContaining({
+        message: "Codex provider stopped.",
+        sessionId: "019e2110-d96f-7e40-882e-b524fa9148e4",
+      }),
+    }));
+    expect(provider.state.owner).toBe("stopped");
   });
 });
 

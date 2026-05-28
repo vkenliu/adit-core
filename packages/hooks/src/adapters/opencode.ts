@@ -960,17 +960,22 @@ export const opencodeAdapter: PlatformAdapter = {
     return "opencode";
   },
 
+  async hasHooks(projectRoot: string): Promise<boolean> {
+    const pluginPath = join(projectRoot, ".opencode", "plugins", PLUGIN_FILENAME);
+    if (existsSync(pluginPath)) {
+      return true;
+    }
+    if (existsSync(join(projectRoot, ".opencode", "commands", ADIT_COMMAND.filename))) return true;
+    if (existsSync(join(projectRoot, ".opencode", "tools", ADIT_TOOLS.filename))) return true;
+    return LEGACY_COMMAND_FILES.some((legacy) =>
+      existsSync(join(projectRoot, ".opencode", "commands", legacy)),
+    );
+  },
+
   async uninstallHooks(projectRoot: string): Promise<void> {
     // Remove the event-hook plugin
     const pluginPath = join(projectRoot, ".opencode", "plugins", PLUGIN_FILENAME);
-    if (existsSync(pluginPath)) {
-      try {
-        const content = readFileSync(pluginPath, "utf-8");
-        if (isAditPlugin(content)) {
-          unlinkSync(pluginPath);
-        }
-      } catch { /* best-effort */ }
-    }
+    try { unlinkSync(pluginPath); } catch { /* best-effort */ }
 
     // Remove slash command
     const commandsDir = join(projectRoot, ".opencode", "commands");

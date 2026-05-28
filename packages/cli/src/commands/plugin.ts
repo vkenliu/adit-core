@@ -283,8 +283,8 @@ export async function uninstallInstalledPlatformHooks(
 
   for (const adapter of toCheck.values()) {
     try {
-      const result = await adapter.validateInstallation(projectRoot);
-      if (result.valid) {
+      const installed = await hasInstalledHooks(adapter, projectRoot);
+      if (installed) {
         await adapter.uninstallHooks(projectRoot);
         uninstalled.push(adapter.displayName);
       }
@@ -294,6 +294,15 @@ export async function uninstallInstalledPlatformHooks(
   }
 
   return { uninstalled, errors };
+}
+
+async function hasInstalledHooks(adapter: PlatformAdapter, projectRoot: string): Promise<boolean> {
+  if (adapter.hasHooks) {
+    return adapter.hasHooks(projectRoot);
+  }
+
+  const result = await adapter.validateInstallation(projectRoot);
+  return result.valid;
 }
 
 /** Uninstall hooks for ALL installed platforms (--all flag) */
@@ -308,8 +317,8 @@ async function uninstallAll(
   for (const adapter of listAdapters()) {
     if (adapter.hookMappings.length === 0) continue;
     try {
-      const result = await adapter.validateInstallation(projectRoot);
-      if (result.valid) {
+      const installed = await hasInstalledHooks(adapter, projectRoot);
+      if (installed) {
         await adapter.uninstallHooks(projectRoot);
         uninstalled.push(adapter.displayName);
       }

@@ -1,5 +1,55 @@
 # @varveai/adit-hooks
 
+## 0.4.13
+
+### Patch Changes
+
+- 部分代码重构
+- Updated dependencies
+  - @varveai/adit-engine@0.4.13
+  - @varveai/adit-cloud@0.4.13
+  - @varveai/adit-core@0.4.13
+
+## 0.4.12
+
+### Patch Changes
+
+- 代码重构
+- Updated dependencies
+  - @varveai/adit-engine@0.4.12
+  - @varveai/adit-cloud@0.4.12
+  - @varveai/adit-core@0.4.12
+
+## 0.4.11
+
+### Patch Changes
+
+- codex 安装方式重构
+- Updated dependencies
+  - @varveai/adit-engine@0.4.11
+  - @varveai/adit-cloud@0.4.11
+  - @varveai/adit-core@0.4.11
+
+## 0.4.10
+
+### Patch Changes
+
+- 项目推送策略优化
+- Updated dependencies
+  - @varveai/adit-engine@0.4.10
+  - @varveai/adit-cloud@0.4.10
+  - @varveai/adit-core@0.4.10
+
+## 0.4.9
+
+### Patch Changes
+
+- 项目推送策略优化
+- Updated dependencies
+  - @varveai/adit-engine@0.4.9
+  - @varveai/adit-cloud@0.4.9
+  - @varveai/adit-core@0.4.9
+
 ## 0.4.8
 
 ### Patch Changes

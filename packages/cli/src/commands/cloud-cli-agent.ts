@@ -45,7 +45,7 @@ export function registerCloudCliAgentCommands(
     .description("Connect local Codex CLI to adit-cloud Coding")
     .allowUnknownOption(true)
     .argument("[cliArgs...]", "Args passed to Codex CLI")
-    .option("--bin <name>", "Codex CLI binary", "codex")
+    .option("--bin <name>", "Codex CLI binary")
     .option("--arg <a...>", "Extra args passed to Codex CLI", [] as string[])
     .action((cliArgs: string[], opts: CloudCliAgentOptions) =>
       runCodex({

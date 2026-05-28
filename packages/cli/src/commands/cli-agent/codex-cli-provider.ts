@@ -11,8 +11,10 @@ import type {
   CliSlashCommandInfo,
   CliAgentContextUsage,
   CliAgentTokenUsage,
+  PromptImageAttachment,
 } from "./types.js";
 import {
+  CODEX_DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE,
   CodexAppServerClient,
   type CodexJsonRpcMessage,
 } from "./codex-app-server-client.js";
@@ -22,9 +24,14 @@ import {
   parseCodexToolInput,
 } from "./codex-plan-normalizer.js";
 import { spawnCliProcess } from "./cli-process.js";
+import {
+  startCodexResumeLogWatcher,
+  type CodexResumeLogWatcher,
+} from "./codex-resume-log-watcher.js";
 
 interface PendingPrompt {
   message: string;
+  attachments: PromptImageAttachment[];
   mode: CodexPromptMode;
   pendingSessionId: string | null;
   localMessageId: string | null;
@@ -62,10 +69,18 @@ interface CodexCliProviderOptions {
 }
 
 export type CodexPromptMode = "build" | "plan";
+type CliToolScope =
+  | "approval"
+  | "internal"
+  | "internal_plan"
+  | "shell"
+  | "workspace_read"
+  | "workspace_write";
 
 const RECLAIM_COMMAND = "/local";
 const CLEAR_TERMINAL_LINE = "\r\x1b[2K";
 const CLEAR_TO_END_OF_LINE = "\x1b[0K";
+const LOCAL_CLI_EXIT_WAIT_MS = 750;
 const TERMINAL_RECLAIM_RESET = [
   "\x1b[?1004l", // Focus in/out reporting.
   "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l", // Mouse modes.
@@ -95,10 +110,40 @@ const CODEX_CLOUD_SLASH_COMMAND_SPECS: CodexSlashCommandSpec[] = [
 ];
 const CODEX_MCP_SLASH_COMMAND_PREFIX = "mcp.";
 const BRANCH_REFRESH_INTERVAL_MS = 5_000;
+const CODEX_SYSTEM_SKILLS_RETRY_DELAYS_MS = [250, 1_000];
+const CODEX_ADIT_THREAD_CONFIG = {
+  [`features.${CODEX_DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE}`]: true,
+};
 const CODEX_MODEL_CONTEXT_WINDOWS: Array<[RegExp, number]> = [
   [/^gpt-5\.5(?:$|[-_\s])/, 1_050_000],
   [/^gpt-5(?:\.\d+)?(?:-codex(?:-max|-mini)?|-chat-latest)?(?:$|[-_\s])/, 400_000],
 ];
+
+function codexToolScope(toolName: string, mode: CodexPromptMode | null): CliToolScope {
+  const normalized = toolName.trim().toLowerCase();
+  if (normalized === CODEX_UPDATE_PLAN_TOOL.toLowerCase() || normalized === "update_plan") {
+    return mode === "plan" ? "internal_plan" : "internal";
+  }
+  if (
+    normalized === "bash" ||
+    normalized === "commandexecution" ||
+    normalized === "exec_command"
+  ) {
+    return "shell";
+  }
+  if (
+    normalized === "read" ||
+    normalized === "grep" ||
+    normalized === "glob" ||
+    normalized === "ls"
+  ) {
+    return "workspace_read";
+  }
+  if (normalized === "apply_patch" || normalized === "filechange") {
+    return mode === "plan" ? "internal_plan" : "workspace_write";
+  }
+  return "internal";
+}
 
 export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   readonly provider = "codex" as const;
@@ -121,6 +166,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   private promptQueue: PendingPrompt[] = [];
   private promptActive = false;
   private activeTurnId: string | null = null;
+  private activePromptMode: CodexPromptMode | null = null;
   private loadedThreadIds = new Set<string>();
   private emptyThreadIds = new Set<string>();
   private boundPendingSessionIds = new Set<string>();
@@ -136,6 +182,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   private mcpSlashCommandsByName = new Map<string, Record<string, unknown>>();
   private codexSkills: Array<Record<string, unknown>> = [];
   private codexMcpServers: Array<Record<string, unknown>> = [];
+  private localResumeLogWatcher: CodexResumeLogWatcher | null = null;
 
   constructor(private readonly opts: CodexCliProviderOptions) {
     super();
@@ -155,6 +202,13 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       currentBranch: this.currentBranch,
       contextUsage: this.contextUsage,
       lastTokenUsage: this.lastTokenUsage,
+      metadata: {
+        codex: {
+          bin: this.opts.bin,
+          defaultModeRequestUserInput: true,
+          systemSkillsRetry: true,
+        },
+      },
     };
   }
 
@@ -223,12 +277,11 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       await this.startThread("build");
     }
 
-    this.suppressNextLocalExit = true;
     const oldLocal = this.local;
+    this.suppressNextLocalExit = Boolean(oldLocal);
     this.local = null;
-    try {
-      oldLocal?.kill("SIGTERM");
-    } catch {}
+    this.stopLocalResumeLogWatcher();
+    await stopLocalCodexProcess(oldLocal);
 
     this.ownerValue = "web";
     this.emitState();
@@ -243,8 +296,11 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     if (this.ownerValue !== "web") return;
     this.detachReclaimInput();
     process.stderr.write("\n[adit cloud codex] releasing Web control back to local Codex CLI...\n");
-    this.finishWebPrompts(new Error("Web control released to local CLI"));
-    this.rejectPendingRequests(new Error("Web control released to local CLI"));
+    await this.finishActiveRunAsAborted({
+      errorMessage: "Web control released to local CLI",
+      eventMessage: "Web control released to local CLI.",
+      interruptTurn: true,
+    });
     this.appServer?.stop();
     this.appServer = null;
     this.loadedThreadIds = new Set<string>();
@@ -264,6 +320,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       this.suppressNextLocalExit = true;
       const oldLocal = this.local;
       this.local = null;
+      this.stopLocalResumeLogWatcher();
       try {
         oldLocal?.kill("SIGTERM");
       } catch {}
@@ -277,13 +334,17 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     }
 
     if (this.ownerValue === "web") {
+      await this.finishActiveRunAsAborted({
+        errorMessage: "Codex session switched",
+        eventMessage: "Codex session switched.",
+        interruptTurn: true,
+      });
       await this.ensureAppServer();
       if (this.loadedThreadIds.has(sessionId)) {
         this.noteThread({ id: sessionId }, null);
       } else {
         await this.resumeThread(sessionId);
       }
-      this.finishWebPrompts(new Error("Codex session switched"));
       this.setBusy(false);
       this.setThinking(false);
       return;
@@ -292,7 +353,12 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
 
   async sendPrompt(
     prompt: string,
-    opts: { mode?: "build" | "plan"; pendingSessionId?: string | null; localMessageId?: string | null } = {},
+    opts: {
+      mode?: "build" | "plan";
+      pendingSessionId?: string | null;
+      localMessageId?: string | null;
+      attachments?: PromptImageAttachment[];
+    } = {},
   ): Promise<void> {
     if (this.ownerValue !== "web") {
       throw Object.assign(new Error("Web has not taken over this Codex session"), {
@@ -300,11 +366,13 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       });
     }
     const trimmed = prompt.trim();
-    if (!trimmed) return;
+    const attachments = opts.attachments ?? [];
+    if (!trimmed && attachments.length === 0) return;
 
     await new Promise<void>((resolve, reject) => {
       this.promptQueue.push({
         message: trimmed,
+        attachments,
         mode: opts.mode === "plan" ? "plan" : "build",
         pendingSessionId: opts.pendingSessionId ?? null,
         localMessageId: opts.localMessageId ?? null,
@@ -317,7 +385,12 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
 
   async steerPrompt(
     prompt: string,
-    opts: { sessionId?: string | null; localMessageId?: string | null } = {},
+    opts: {
+      sessionId?: string | null;
+      localMessageId?: string | null;
+      mode?: CodexPromptMode;
+      attachments?: PromptImageAttachment[];
+    } = {},
   ): Promise<void> {
     if (this.ownerValue !== "web") {
       throw Object.assign(new Error("Web has not taken over this Codex session"), {
@@ -325,7 +398,8 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       });
     }
     const trimmed = prompt.trim();
-    if (!trimmed) return;
+    const attachments = opts.attachments ?? [];
+    if (!trimmed && attachments.length === 0) return;
     const threadId = this.activeSessionId ?? this.resumeSessionId;
     const turnId = this.activeTurnId;
     if (!threadId || !turnId || (!this.busyValue && !this.thinkingValue)) {
@@ -343,20 +417,16 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     await this.appServer?.request("turn/steer", {
       threadId,
       expectedTurnId: turnId,
-      input: [
-        {
-          type: "text",
-          text: trimmed,
-          text_elements: [],
-        },
-      ],
+      input: await codexInputItems(trimmed, "build", attachments),
     });
     this.pushEvent("message", {
       role: "user",
       sessionId: threadId,
       ...(opts.localMessageId ? { messageId: opts.localMessageId } : {}),
       text: trimmed,
+      attachments,
       inputKind: "steer",
+      mode: opts.mode ?? this.activePromptMode ?? "build",
       createdAt: Date.now(),
     });
   }
@@ -456,11 +526,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
 
     if (name === "skills") {
       await this.ensureAppServer();
-      const result = await this.appServer?.request("skills/list", {
-        cwds: [this.opts.cwd],
-        forceReload: false,
-      });
-      const skills = extractCodexSkills(result);
+      const skills = await this.fetchCodexSkillsWithRetry();
       this.codexSkills = skills;
       this.refreshSlashCommands();
       this.pushNotice({
@@ -614,34 +680,26 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
 
   async abort(): Promise<void> {
     if (this.ownerValue !== "web") return;
-    const threadId = this.activeSessionId ?? this.resumeSessionId;
-    const turnId = this.activeTurnId;
-    this.finishWebPrompts(new Error("Codex run aborted"));
-    this.rejectPendingRequests(new Error("Codex run aborted"));
-    if (threadId && turnId) {
-      try {
-        await this.appServer?.request("turn/interrupt", { threadId, turnId });
-      } catch {}
-    }
-    this.activeTurnId = null;
-    this.setThinking(false);
-    this.setBusy(false);
-    this.pushEvent("run.aborted", {
-      message: "Codex run aborted.",
-      sessionId: threadId,
-      createdAt: Date.now(),
+    await this.finishActiveRunAsAborted({
+      errorMessage: "Codex run aborted",
+      eventMessage: "Codex run aborted.",
+      interruptTurn: true,
     });
   }
 
   stop(): void {
-    this.finishWebPrompts(new Error("Codex provider stopped"));
-    this.rejectPendingRequests(new Error("Codex provider stopped"));
+    this.finishActiveRunAsAborted({
+      errorMessage: "Codex provider stopped",
+      eventMessage: "Codex provider stopped.",
+      interruptTurn: false,
+    });
     this.detachReclaimInput();
     this.appServer?.stop();
     this.appServer = null;
     try {
       this.local?.kill("SIGTERM");
     } catch {}
+    this.stopLocalResumeLogWatcher();
     this.local = null;
     this.ownerValue = "stopped";
     this.setThinking(false);
@@ -651,6 +709,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
 
   private startLocal(extraArgs: string[] = []): void {
     const wasWeb = this.ownerValue === "web";
+    this.stopLocalResumeLogWatcher();
     this.detachReclaimInput();
     this.finishWebPrompts(new Error("local mode active"));
     this.resetAppServerCapabilities();
@@ -664,6 +723,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     });
     this.local = child;
     this.ownerValue = "local";
+    this.startLocalResumeLogWatcher(child);
     this.emitState();
 
     child.on("error", (error) => {
@@ -671,6 +731,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       process.stderr.write(`\n[adit cloud codex] failed to start Codex CLI: ${error.message}\n`);
       if (this.local === child) {
         this.local = null;
+        this.stopLocalResumeLogWatcher();
         this.ownerValue = "stopped";
         this.emitState();
         this.emit("exit", { code: null, signal: null });
@@ -679,6 +740,9 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     child.on("exit", (code, signal) => {
       this.setThinking(false);
       this.setBusy(false);
+      if (this.local === child || this.suppressNextLocalExit) {
+        this.stopLocalResumeLogWatcher();
+      }
       if (this.suppressNextLocalExit) {
         this.suppressNextLocalExit = false;
         return;
@@ -692,11 +756,29 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     });
   }
 
+  private startLocalResumeLogWatcher(child: ChildProcess): void {
+    this.localResumeLogWatcher = startCodexResumeLogWatcher({
+      cwd: this.opts.cwd,
+      onResume: (threadId) => {
+        if (this.ownerValue !== "local" || this.local !== child) return;
+        this.noteLocalSession(threadId);
+      },
+    });
+  }
+
+  private stopLocalResumeLogWatcher(): void {
+    try {
+      this.localResumeLogWatcher?.stop();
+    } catch {}
+    this.localResumeLogWatcher = null;
+  }
+
   private async drainPromptQueue(): Promise<void> {
     if (this.promptActive || this.busyValue || this.ownerValue !== "web") return;
     const item = this.promptQueue.shift();
     if (!item) return;
     this.promptActive = true;
+    this.activePromptMode = item.mode;
     try {
       await this.ensureAppServer();
       const threadId = await this.ensureThreadForPrompt(item.pendingSessionId, item.mode);
@@ -705,17 +787,14 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
         sessionId: threadId,
         ...(item.localMessageId ? { messageId: item.localMessageId } : {}),
         text: item.message,
+        attachments: item.attachments,
+        inputKind: "prompt",
+        mode: item.mode,
         createdAt: Date.now(),
       });
       const result = asRecord(await this.appServer?.request("turn/start", {
         threadId,
-        input: [
-          {
-            type: "text",
-            text: promptInputForCodexMode(item.message, item.mode),
-            text_elements: [],
-          },
-        ],
+        input: await codexInputItems(item.message, item.mode, item.attachments),
         cwd: this.opts.cwd,
         ...codexTurnModeOverrides(item.mode),
       }));
@@ -726,6 +805,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       this.setThinking(true);
       item.resolve();
     } catch (error) {
+      this.activePromptMode = null;
       item.reject(error instanceof Error ? error : new Error(String(error)));
       this.pushEvent("error", {
         message: error instanceof Error ? error.message : String(error),
@@ -849,6 +929,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
         });
       }
       this.activeTurnId = null;
+      this.activePromptMode = null;
       this.setThinking(false);
       this.setBusy(false);
       void this.drainPromptQueue();
@@ -988,6 +1069,9 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
           id,
           toolName,
           input: params,
+          tool_scope: codexToolScope(toolName, this.activePromptMode),
+          mode: this.activePromptMode ?? undefined,
+          inputKind: "prompt",
           createdAt: request.createdAt,
           sessionId,
         });
@@ -1036,6 +1120,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
         messageId: id,
         modelId: this.activeModelId ?? undefined,
         text,
+        mode: this.activePromptMode ?? undefined,
         createdAt,
       });
       return;
@@ -1051,6 +1136,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
         sessionId,
         messageId: id,
         text: content,
+        mode: this.activePromptMode ?? undefined,
         createdAt,
       });
       return;
@@ -1070,6 +1156,9 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
           source: item.source,
           commandActions: item.commandActions,
         },
+        tool_scope: codexToolScope("Bash", this.activePromptMode),
+        mode: this.activePromptMode ?? undefined,
+        inputKind: "prompt",
         output: readString(item.aggregatedOutput) ?? undefined,
         error: status === "failed" ? readString(item.aggregatedOutput) ?? "Command failed" : undefined,
         status: opts.running || status === "inProgress"
@@ -1090,6 +1179,9 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
         toolUseId: id,
         toolName: "apply_patch",
         input: { changes: item.changes },
+        tool_scope: codexToolScope("apply_patch", this.activePromptMode),
+        mode: this.activePromptMode ?? undefined,
+        inputKind: "prompt",
         output: status === "completed" ? safeJson(item.changes) : undefined,
         error: status === "failed" || status === "declined" ? `File change ${status}` : undefined,
         status: opts.running || status === "inProgress"
@@ -1123,6 +1215,9 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
         toolUseId: id,
         toolName,
         input,
+        tool_scope: codexToolScope(toolName, this.activePromptMode),
+        mode: this.activePromptMode ?? undefined,
+        inputKind: "prompt",
         output: item.result !== undefined ? safeJson(item.result) : undefined,
         error: item.error !== undefined ? safeJson(item.error) : undefined,
         status: opts.running || status === "inProgress" || status === "running"
@@ -1187,6 +1282,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   }
 
   private rejectPendingRequests(error: Error): void {
+    const hadPendingRequests = this.pendingPermissions.size > 0 || this.pendingQuestions.size > 0;
     for (const pending of this.pendingPermissions.values()) {
       pending.reject(error);
     }
@@ -1195,8 +1291,70 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
       pending.reject(error);
     }
     this.pendingQuestions.clear();
+    if (!hadPendingRequests) return;
     this.pushEvent("permission-resolved", { id: "all", approved: false });
     this.pushEvent("question.rejected", { id: "all" });
+  }
+
+  private hasActiveWebRun(): boolean {
+    return this.ownerValue === "web" && (
+      this.busyValue ||
+      this.thinkingValue ||
+      this.promptActive ||
+      this.activeTurnId !== null ||
+      this.pendingPermissions.size > 0 ||
+      this.pendingQuestions.size > 0
+    );
+  }
+
+  private finishActiveRunAsAborted(input: {
+    errorMessage: string;
+    eventMessage: string;
+    interruptTurn: false;
+  }): void;
+  private finishActiveRunAsAborted(input: {
+    errorMessage: string;
+    eventMessage: string;
+    interruptTurn: true;
+  }): Promise<void>;
+  private finishActiveRunAsAborted(input: {
+    errorMessage: string;
+    eventMessage: string;
+    interruptTurn: boolean;
+  }): void | Promise<void> {
+    const sessionId = this.activeSessionId ?? this.resumeSessionId;
+    const turnId = this.activeTurnId;
+    const hadActiveRun = this.hasActiveWebRun();
+    const error = new Error(input.errorMessage);
+
+    this.finishWebPrompts(error);
+    this.rejectPendingRequests(error);
+    this.activeTurnId = null;
+    this.setThinking(false);
+    this.setBusy(false);
+
+    const emitAbortEvent = () => {
+      if (!hadActiveRun) return;
+      this.pushEvent("run.aborted", {
+        message: input.eventMessage,
+        ...(sessionId ? { sessionId } : {}),
+        createdAt: Date.now(),
+      });
+    };
+
+    if (!input.interruptTurn) {
+      emitAbortEvent();
+      return;
+    }
+
+    return (async () => {
+      if (sessionId && turnId) {
+        try {
+          await this.appServer?.request("turn/interrupt", { threadId: sessionId, turnId });
+        } catch {}
+      }
+      emitAbortEvent();
+    })();
   }
 
   private acceptsSteerSessionId(sessionIdInput: string, threadId: string): boolean {
@@ -1317,7 +1475,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
 
       const [skills, mcpServers] = await Promise.all([
         methods.has("skills/list")
-          ? this.fetchCodexSkills().catch(() => [] as Array<Record<string, unknown>>)
+          ? this.fetchCodexSkillsWithRetry().catch(() => [] as Array<Record<string, unknown>>)
           : Promise.resolve([] as Array<Record<string, unknown>>),
         methods.has("mcpServerStatus/list")
           ? this.fetchCodexMcpServers().catch(() => [] as Array<Record<string, unknown>>)
@@ -1349,6 +1507,45 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     return extractCodexSkills(result);
   }
 
+  private async fetchCodexSkillsWithRetry(): Promise<Array<Record<string, unknown>>> {
+    let lastSkills: Array<Record<string, unknown>> = [];
+    let lastError: unknown = null;
+
+    for (let attempt = 0; attempt <= CODEX_SYSTEM_SKILLS_RETRY_DELAYS_MS.length; attempt += 1) {
+      const sawDeferredBeforeRequest = this.appServer?.hasDeferredSystemSkillsStderr?.() ?? false;
+      try {
+        const skills = await this.fetchCodexSkills();
+        const sawDeferredAfterRequest = this.appServer?.hasDeferredSystemSkillsStderr?.() ?? false;
+        const sawTransientSystemSkillsError = sawDeferredBeforeRequest || sawDeferredAfterRequest;
+        if (!sawTransientSystemSkillsError) return skills;
+
+        lastSkills = skills;
+        if (attempt < CODEX_SYSTEM_SKILLS_RETRY_DELAYS_MS.length) {
+          this.appServer?.clearDeferredSystemSkillsStderr?.();
+          await delay(CODEX_SYSTEM_SKILLS_RETRY_DELAYS_MS[attempt]);
+          continue;
+        }
+
+        this.appServer?.flushDeferredSystemSkillsStderr?.();
+        return skills;
+      } catch (error) {
+        lastError = error;
+        const sawDeferredAfterRequest = this.appServer?.hasDeferredSystemSkillsStderr?.() ?? false;
+        const sawTransientSystemSkillsError = sawDeferredBeforeRequest || sawDeferredAfterRequest;
+        if (sawTransientSystemSkillsError && attempt < CODEX_SYSTEM_SKILLS_RETRY_DELAYS_MS.length) {
+          this.appServer?.clearDeferredSystemSkillsStderr?.();
+          await delay(CODEX_SYSTEM_SKILLS_RETRY_DELAYS_MS[attempt]);
+          continue;
+        }
+        this.appServer?.flushDeferredSystemSkillsStderr?.();
+        throw error;
+      }
+    }
+
+    if (lastError) throw lastError;
+    return lastSkills;
+  }
+
   private async fetchCodexMcpServers(): Promise<Array<Record<string, unknown>>> {
     const result = await this.appServer?.request("mcpServerStatus/list", {
       detail: "toolsAndAuthOnly",
@@ -1359,7 +1556,7 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   private async resolveSkillSlashCommand(name: string): Promise<Record<string, unknown> | null> {
     if (!this.skillSlashCommandsByName.has(name)) return null;
     await this.ensureAppServer();
-    this.codexSkills = await this.fetchCodexSkills();
+    this.codexSkills = await this.fetchCodexSkillsWithRetry();
     this.refreshSlashCommands();
     return this.skillSlashCommandsByName.get(name) ?? null;
   }
@@ -1508,14 +1705,13 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
 
   private onReclaimInput = (chunk: string | Buffer) => {
     const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-    if (text.includes("\u0003")) {
+    const normalized = normalizeCodexReclaimInput(text);
+    if (text.includes("\u0003") || normalized.includes("\u0003")) {
       this.stop();
+      this.emit("exit", { code: null, signal: "SIGINT" });
       return;
     }
-    this.reclaimBuffer = applyReclaimText(
-      this.reclaimBuffer,
-      normalizeCodexReclaimInput(text),
-    );
+    this.reclaimBuffer = applyReclaimText(this.reclaimBuffer, normalized);
     if (this.reclaimBuffer.length > 200) {
       this.reclaimBuffer = this.reclaimBuffer.slice(-200);
     }
@@ -1542,6 +1738,34 @@ export function formatCodexTerminalNotice(message: string, isTTY = Boolean(proce
   return `${CLEAR_TERMINAL_LINE}\r\n${CLEAR_TERMINAL_LINE}${text}${CLEAR_TO_END_OF_LINE}\r\n`;
 }
 
+async function stopLocalCodexProcess(child: ChildProcess | null): Promise<void> {
+  if (!child) return;
+  const exited = waitForChildExit(child, LOCAL_CLI_EXIT_WAIT_MS);
+  try {
+    child.kill("SIGTERM");
+  } catch {}
+  await exited;
+}
+
+function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<void> {
+  if (child.exitCode != null || child.signalCode != null) return Promise.resolve();
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      child.off("exit", finish);
+      child.off("close", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    timer.unref?.();
+    child.once("exit", finish);
+    child.once("close", finish);
+  });
+}
+
 function restoreTerminalForCodexReclaim(): void {
   try {
     if (process.stdin.isTTY && typeof process.stdin.setRawMode === "function") {
@@ -1557,14 +1781,15 @@ function restoreTerminalForCodexReclaim(): void {
 
 export function normalizeCodexReclaimInput(text: string): string {
   return text
-    .replace(/\x1b\[(\d+)(?:;[0-9:]+)?u/g, (_match, rawCode: string) =>
-      decodeCsiUCode(Number(rawCode)),
+    .replace(/\x1b\[(\d+)(?:;([0-9:]+))?u/g, (_match, rawCode: string, rawModifier: string | undefined) =>
+      decodeCsiUCode(Number(rawCode), rawModifier),
     )
     .replace(/\x1b\[(?:I|O)/g, "")
     .replace(/\x1b\[[?=>]?[0-9;:]*[A-Za-z~]/g, "");
 }
 
-function decodeCsiUCode(code: number): string {
+function decodeCsiUCode(code: number, rawModifier?: string): string {
+  if (code === 99 && isCsiUCtrlModifier(rawModifier)) return "\u0003";
   if (code === 13) return "\n";
   if (code === 9) return "\t";
   if (code === 8 || code === 127) return "\b";
@@ -1574,6 +1799,11 @@ function decodeCsiUCode(code: number): string {
   } catch {
     return "";
   }
+}
+
+function isCsiUCtrlModifier(rawModifier: string | undefined): boolean {
+  if (!rawModifier) return false;
+  return rawModifier.split(":").includes("5");
 }
 
 function applyReclaimText(buffer: string, text: string): string {
@@ -1596,6 +1826,45 @@ export function promptInputForCodexMode(
   return `${CODEX_PLAN_MODE_INSTRUCTION}\n\nUser request:\n${prompt}`;
 }
 
+async function codexInputItems(
+  prompt: string,
+  mode: CodexPromptMode,
+  attachments: PromptImageAttachment[] = [],
+): Promise<Array<Record<string, unknown>>> {
+  const imageItems = await Promise.all(attachments.map(codexImageInputItem));
+  return [
+    ...(prompt || mode === "plan"
+      ? [{
+          type: "text",
+          text: promptInputForCodexMode(prompt, mode),
+          text_elements: [],
+        }]
+      : []),
+    ...imageItems,
+  ];
+}
+
+async function codexImageInputItem(
+  attachment: PromptImageAttachment,
+): Promise<Record<string, unknown>> {
+  return {
+    type: "image",
+    url: await imageAttachmentDataUrl(attachment),
+    detail: "high",
+  };
+}
+
+async function imageAttachmentDataUrl(attachment: PromptImageAttachment): Promise<string> {
+  if (attachment.url.startsWith("data:image/")) return attachment.url;
+  const response = await fetch(attachment.url);
+  if (!response.ok) {
+    throw new Error(`Failed to load image attachment ${attachment.fileName ?? attachment.id} (${response.status})`);
+  }
+  const contentType = response.headers.get("content-type")?.split(";")[0]?.trim() || attachment.mimeType;
+  const data = Buffer.from(await response.arrayBuffer()).toString("base64");
+  return `data:${contentType};base64,${data}`;
+}
+
 export function codexThreadModeOverrides(
   mode: CodexPromptMode,
 ): Record<string, unknown> {
@@ -1603,6 +1872,7 @@ export function codexThreadModeOverrides(
     approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: mode === "plan" ? "read-only" : "danger-full-access",
+    config: { ...CODEX_ADIT_THREAD_CONFIG },
   };
 }
 
@@ -1631,6 +1901,10 @@ export function codexTurnModeOverrides(
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function readDeltaString(value: unknown): string | null {

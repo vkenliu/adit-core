@@ -1,10 +1,11 @@
 {
   "name": "@varveai/adit-core",
-  "version": "0.4.8",
+  "version": "0.4.13",
   "description": "Core types, database, and sync primitives for ADIT",
   "type": "module",
   "files": [
-    "dist"
+    "dist",
+    "scripts"
   ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -15,6 +16,7 @@
     }
   },
   "scripts": {
+    "preinstall": "node ./scripts/check-native-install.js",
     "build": "tsc",
     "typecheck": "tsc --noEmit"
   },

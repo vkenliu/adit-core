@@ -38,7 +38,7 @@ export class CodexTranscriptSync {
     const modelId = readModelId(input.body);
     if (modelId) session.activeModelId = modelId;
 
-    const transcriptPath = readString(input.body.transcript_path);
+    const transcriptPath = readString(input.body.transcript_path) ?? readString(input.body.transcriptPath);
     const isNewTranscript = Boolean(transcriptPath && transcriptPath !== session.transcriptPath);
     if (transcriptPath) {
       session.transcriptPath = transcriptPath;
@@ -572,7 +572,10 @@ function readSessionId(body: Record<string, unknown>): string | null {
   return (
     readString(body.sessionId) ??
     readString(body.session_id) ??
-    readString(body.transcript_path)?.match(/([0-9a-f-]{8}-[0-9a-f-]{4}-[0-9a-f-]{4}-[0-9a-f-]{4}-[0-9a-f-]{12})\.jsonl$/i)?.[1] ??
+    readString(body.threadId) ??
+    readString(body.thread_id) ??
+    (readString(body.transcript_path) ?? readString(body.transcriptPath))
+      ?.match(/([0-9a-f-]{8}-[0-9a-f-]{4}-[0-9a-f-]{4}-[0-9a-f-]{4}-[0-9a-f-]{12})\.jsonl$/i)?.[1] ??
     null
   );
 }

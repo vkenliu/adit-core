@@ -216,6 +216,23 @@ export const geminiAdapter: PlatformAdapter = {
     return "gemini";
   },
 
+  async hasHooks(projectRoot: string): Promise<boolean> {
+    const settingsPath = join(projectRoot, ".gemini", "settings.json");
+    if (!existsSync(settingsPath)) return false;
+
+    try {
+      const settings = JSON.parse(readFileSync(settingsPath, "utf-8")) as { hooks?: unknown };
+      if (!settings.hooks || typeof settings.hooks !== "object" || Array.isArray(settings.hooks)) {
+        return false;
+      }
+      return Object.values(settings.hooks).some((entries) =>
+        Array.isArray(entries) && entries.some(entryContainsAditHook),
+      );
+    } catch {
+      return false;
+    }
+  },
+
   async uninstallHooks(projectRoot: string): Promise<void> {
     const settingsPath = join(projectRoot, ".gemini", "settings.json");
     if (!existsSync(settingsPath)) return;
@@ -256,3 +273,11 @@ export const geminiAdapter: PlatformAdapter = {
     }
   },
 };
+
+function entryContainsAditHook(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+  const raw = entry as { command?: string; hooks?: Array<{ command?: string }> };
+  if (typeof raw.command === "string" && isAditHookCommand(raw.command)) return true;
+  return Array.isArray(raw.hooks) &&
+    raw.hooks.some((hook) => typeof hook.command === "string" && isAditHookCommand(hook.command));
+}
