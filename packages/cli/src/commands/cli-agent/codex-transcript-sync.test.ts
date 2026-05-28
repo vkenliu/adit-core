@@ -171,6 +171,52 @@ describe("CodexTranscriptSync", () => {
     }
   });
 
+  it("treats Codex thread_id hook payloads as session IDs", () => {
+    const dir = tempDir();
+    try {
+      const transcriptPath = join(dir, "019e0d36-9fd9-7c40-add5-01d6d8bc49d3.jsonl");
+      const sync = new CodexTranscriptSync();
+      const sessionId = "019e0d36-9fd9-7c40-add5-01d6d8bc49d3";
+      const timestamp = new Date().toISOString();
+
+      writeFileSync(transcriptPath, `${JSON.stringify({
+        timestamp,
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Old answer" }],
+        },
+      })}\n`);
+
+      expect(sync.noteHook({
+        eventType: "SessionStart",
+        body: { thread_id: sessionId, transcriptPath },
+      })).toBe(sessionId);
+
+      appendFileSync(transcriptPath, `${JSON.stringify({
+        timestamp,
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Fresh answer" }],
+        },
+      })}\n`);
+
+      const events = sync.drainSession(sessionId);
+
+      expect(events).toHaveLength(1);
+      expect(events[0]?.payload).toMatchObject({
+        role: "assistant",
+        sessionId,
+        text: "Fresh answer",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("uses the hook model for stop fallback events", () => {
     const sync = new CodexTranscriptSync();
     const sessionId = "019e0d36-9fd9-7c40-add5-01d6d8bc49d3";
