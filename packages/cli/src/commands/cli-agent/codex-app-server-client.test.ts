@@ -12,12 +12,16 @@ vi.mock("./cli-process.js", () => ({
 import {
   CODEX_DEFAULT_MODE_REQUEST_USER_INPUT_FEATURE,
   CodexAppServerClient,
+  isRecoverableCodexAppServerToolError,
   isTransientCodexSystemSkillsError,
 } from "./codex-app-server-client.js";
+
+const originalEnv = { ...process.env };
 
 afterEach(() => {
   vi.clearAllMocks();
   vi.restoreAllMocks();
+  process.env = { ...originalEnv };
 });
 
 describe("CodexAppServerClient", () => {
@@ -78,6 +82,31 @@ describe("CodexAppServerClient", () => {
     expect(client.hasDeferredSystemSkillsStderr()).toBe(false);
     expect(stderrWrite).toHaveBeenCalledWith("[codex app-server] regular app-server warning\n");
   });
+
+  it("suppresses known recoverable write_stdin stderr unless debug logging is enabled", async () => {
+    const child = mockAppServerProcess();
+    mocks.spawnCliProcess.mockReturnValue(child);
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const client = new CodexAppServerClient({ bin: "codex", cwd: "/tmp/project" });
+    await client.start();
+
+    child.stderr.emit(
+      "data",
+      "2026 ERROR codex_core::tools::router: error=write_stdin failed: stdin is closed for this session; rerun exec_command with tty=true to keep stdin open\n",
+    );
+
+    expect(stderrWrite).not.toHaveBeenCalled();
+
+    process.env.ADIT_DEBUG = "1";
+    child.stderr.emit(
+      "data",
+      "2026 ERROR codex_core::tools::router: error=write_stdin failed: stdin is closed for this session; rerun exec_command with tty=true to keep stdin open\n",
+    );
+
+    expect(stderrWrite).toHaveBeenCalledWith(
+      expect.stringContaining("[codex app-server] 2026 ERROR codex_core::tools::router"),
+    );
+  });
 });
 
 describe("isTransientCodexSystemSkillsError", () => {
@@ -87,6 +116,17 @@ describe("isTransientCodexSystemSkillsError", () => {
     )).toBe(true);
     expect(isTransientCodexSystemSkillsError(
       "ERROR codex_core_skills::loader: failed to read skills dir /Users/edy/.codex/skills/custom: No such file or directory (os error 2)",
+    )).toBe(false);
+  });
+});
+
+describe("isRecoverableCodexAppServerToolError", () => {
+  it("matches only known recoverable write_stdin closed-session lines", () => {
+    expect(isRecoverableCodexAppServerToolError(
+      "ERROR codex_core::tools::router: error=write_stdin failed: stdin is closed for this session; rerun exec_command with tty=true to keep stdin open",
+    )).toBe(true);
+    expect(isRecoverableCodexAppServerToolError(
+      "ERROR codex_core::tools::router: error=app-server crashed",
     )).toBe(false);
   });
 });
