@@ -25,6 +25,7 @@ Thumbs.db
 # AI tool configs
 .claude/
 .opencode/
+.codex/
 
 # CLI build artifacts
 packages/cli/bin/

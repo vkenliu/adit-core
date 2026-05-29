@@ -4,7 +4,10 @@ import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import Database from "better-sqlite3";
-import { readCodexResumeLogEvents } from "./codex-resume-log-watcher.js";
+import {
+  isCodexThreadSavedForCwd,
+  readCodexResumeLogEvents,
+} from "./codex-resume-log-watcher.js";
 
 function tempDir(): string {
   const dir = join(tmpdir(), `adit-codex-resume-log-${randomBytes(8).toString("hex")}`);
@@ -95,6 +98,45 @@ describe("readCodexResumeLogEvents", () => {
 
       expect(result.threadIds).toEqual([]);
       expect(result.lastLogId).toBe(logId);
+    } finally {
+      rmSync(codexHome, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("isCodexThreadSavedForCwd", () => {
+  it("returns true when a thread is saved for the current project cwd", () => {
+    const codexHome = tempDir();
+    try {
+      setupCodexDatabases(codexHome);
+      insertThread(codexHome, "thread-current", "/tmp/project");
+
+      expect(isCodexThreadSavedForCwd({
+        codexHome,
+        cwd: "/tmp/project",
+        threadId: "thread-current",
+      })).toBe(true);
+    } finally {
+      rmSync(codexHome, { recursive: true, force: true });
+    }
+  });
+
+  it("returns false for missing threads and threads from other projects", () => {
+    const codexHome = tempDir();
+    try {
+      setupCodexDatabases(codexHome);
+      insertThread(codexHome, "thread-other", "/tmp/other");
+
+      expect(isCodexThreadSavedForCwd({
+        codexHome,
+        cwd: "/tmp/project",
+        threadId: "thread-missing",
+      })).toBe(false);
+      expect(isCodexThreadSavedForCwd({
+        codexHome,
+        cwd: "/tmp/project",
+        threadId: "thread-other",
+      })).toBe(false);
     } finally {
       rmSync(codexHome, { recursive: true, force: true });
     }

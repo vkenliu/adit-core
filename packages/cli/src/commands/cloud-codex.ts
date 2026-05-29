@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { loadConfig, findGitRoot, projectNameFromRoot } from "@varveai/adit-core";
 import {
@@ -11,7 +10,10 @@ import {
   loadCredentials,
 } from "@varveai/adit-cloud";
 import { CodexCliProvider } from "./cli-agent/codex-cli-provider.js";
-import { resolveExecutable, spawnCliSync } from "./cli-agent/cli-process.js";
+import {
+  codexBinaryMismatchDebugLines,
+  selectCodexExecutable,
+} from "./cli-agent/codex-binary-resolver.js";
 import { CodexRelayEventDeduper, CodexTranscriptSync } from "./cli-agent/codex-transcript-sync.js";
 import {
   ensurePersistentCodexHooksInstalled,
@@ -30,22 +32,6 @@ interface CloudCodexOptions {
   bin?: string;
   arg?: string[];
 }
-
-interface CodexBinCandidate {
-  bin: string;
-  source: string;
-  explicit: boolean;
-}
-
-interface CodexExecutableSelection {
-  bin: string;
-  executable: string | null;
-  source: string;
-  supportsAppServer: boolean;
-  warnings: string[];
-}
-
-const MAC_CODEX_APP_CLI = "/Applications/Codex.app/Contents/Resources/codex";
 
 function createRelayLoopWake() {
   let wakeCurrent: (() => void) | null = null;
@@ -68,119 +54,6 @@ function createRelayLoopWake() {
       });
     },
   };
-}
-
-function checkCodexAppServer(command: string): boolean {
-  const result = spawnCliSync(command, ["app-server", "--help"], {
-    stdio: "ignore",
-  });
-  return result.status === 0;
-}
-
-function codexVersion(command: string): string | null {
-  const result = spawnCliSync(command, ["--version"], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  if (result.status !== 0) return null;
-  const output = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
-  return output || null;
-}
-
-function codexBinCandidates(explicitBin: string | undefined): CodexBinCandidate[] {
-  if (explicitBin?.trim()) {
-    return [{ bin: explicitBin.trim(), source: "--bin", explicit: true }];
-  }
-
-  const candidates: CodexBinCandidate[] = [];
-  const aditCodexBin = process.env.ADIT_CODEX_BIN?.trim();
-  const codexCliPath = process.env.CODEX_CLI_PATH?.trim();
-  if (aditCodexBin) candidates.push({ bin: aditCodexBin, source: "ADIT_CODEX_BIN", explicit: false });
-  if (codexCliPath) candidates.push({ bin: codexCliPath, source: "CODEX_CLI_PATH", explicit: false });
-  if (process.platform === "darwin" && fs.existsSync(MAC_CODEX_APP_CLI)) {
-    candidates.push({ bin: MAC_CODEX_APP_CLI, source: "Codex.app", explicit: false });
-  }
-  candidates.push({ bin: "codex", source: "PATH", explicit: false });
-
-  const seen = new Set<string>();
-  return candidates.filter((candidate) => {
-    const key = candidate.bin;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
-function selectCodexExecutable(explicitBin: string | undefined): CodexExecutableSelection {
-  const candidates = codexBinCandidates(explicitBin);
-  const warnings: string[] = [];
-  let firstResolved: Omit<CodexExecutableSelection, "warnings"> | null = null;
-
-  for (const candidate of candidates) {
-    const executable = resolveExecutable(candidate.bin);
-    if (!executable) {
-      if (candidate.explicit) {
-        return {
-          bin: candidate.bin,
-          executable: null,
-          source: candidate.source,
-          supportsAppServer: false,
-          warnings,
-        };
-      }
-      continue;
-    }
-
-    const supportsAppServer = checkCodexAppServer(executable);
-    const selection = {
-      bin: candidate.bin,
-      executable,
-      source: candidate.source,
-      supportsAppServer,
-    };
-    if (!firstResolved) firstResolved = selection;
-    if (supportsAppServer || candidate.explicit) {
-      return { ...selection, warnings };
-    }
-
-    warnings.push(
-      `[adit cloud codex] warning: ${candidate.source} Codex CLI does not expose app-server: ${executable}`,
-    );
-  }
-
-  if (firstResolved) return { ...firstResolved, warnings };
-  return {
-    bin: candidates[0]?.bin ?? "codex",
-    executable: null,
-    source: candidates[0]?.source ?? "PATH",
-    supportsAppServer: false,
-    warnings,
-  };
-}
-
-function codexBinaryMismatchWarnings(selectedExecutable: string): string[] {
-  const selectedVersion = codexVersion(selectedExecutable);
-  if (!selectedVersion) return [];
-
-  const alternatives: Array<{ label: string; bin: string }> = [
-    { label: "PATH codex", bin: "codex" },
-    { label: "Codex.app", bin: MAC_CODEX_APP_CLI },
-  ];
-  const seen = new Set([selectedExecutable]);
-  const warnings: string[] = [];
-
-  for (const alternative of alternatives) {
-    const executable = resolveExecutable(alternative.bin);
-    if (!executable || seen.has(executable)) continue;
-    seen.add(executable);
-    const version = codexVersion(executable);
-    if (!version || version === selectedVersion) continue;
-    warnings.push(
-      `[adit cloud codex] warning: selected Codex CLI (${selectedVersion}, ${selectedExecutable}) differs from ${alternative.label} (${version}, ${executable}). Mixed Codex binaries can rewrite ~/.codex/skills/.system during takeover; pin one binary with --bin if this is intentional.`,
-    );
-  }
-
-  return warnings;
 }
 
 function readString(value: unknown): string | null {
@@ -243,6 +116,16 @@ function withHooksEnabled(args: string[]): string[] {
     arg === "--config" && args[index + 1] === "features.hooks=true"
   );
   return hasHooksFlag ? args : ["--enable", "hooks", ...args];
+}
+
+function isAditDebugEnabled(): boolean {
+  const value = process.env.ADIT_DEBUG?.trim().toLowerCase();
+  return Boolean(value && value !== "0" && value !== "false" && value !== "off");
+}
+
+function writeCodexDebugLines(lines: string[]): void {
+  if (!isAditDebugEnabled()) return;
+  for (const line of lines) console.error(`[adit cloud codex] debug: ${line}`);
 }
 
 function printCloudError(prefix: string, error: unknown): void {
@@ -457,7 +340,7 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
     process.exitCode = 1;
     return;
   }
-  for (const warning of codexSelection.warnings) console.error(warning);
+  writeCodexDebugLines(codexSelection.debugLines);
   if (!codexSelection.supportsAppServer) {
     console.error(`Codex CLI does not expose 'app-server': ${codexSelection.bin}`);
     console.error("Upgrade Codex CLI to the latest version and try again.");
@@ -465,9 +348,11 @@ export async function cloudCodexCommand(opts?: CloudCodexOptions): Promise<void>
     return;
   }
   if (!opts?.bin && codexSelection.source !== "PATH") {
-    console.log(`[adit cloud codex] using Codex CLI from ${codexExecutable} (${codexSelection.source}).`);
+    writeCodexDebugLines([
+      `Using Codex CLI from ${codexExecutable} (${codexSelection.source})`,
+    ]);
   }
-  for (const warning of codexBinaryMismatchWarnings(codexExecutable)) console.error(warning);
+  writeCodexDebugLines(codexBinaryMismatchDebugLines(codexExecutable));
 
   const cloudConfig = loadCloudConfig();
   const serverUrl = cloudConfig.serverUrl ?? credentials.serverUrl ?? DEFAULT_SERVER_URL;

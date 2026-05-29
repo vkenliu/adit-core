@@ -19,6 +19,8 @@ const mocks = vi.hoisted(() => ({
   },
   resumeWatcherStop: vi.fn(),
   startResumeWatcher: vi.fn(),
+  savedThreadIds: new Set<string>(),
+  isSavedThread: vi.fn(),
 }));
 
 vi.mock("node:child_process", () => ({
@@ -66,6 +68,7 @@ vi.mock("./codex-app-server-client.js", () => ({
 }));
 
 vi.mock("./codex-resume-log-watcher.js", () => ({
+  isCodexThreadSavedForCwd: (options: unknown) => mocks.isSavedThread(options),
   startCodexResumeLogWatcher: (options: unknown) => {
     mocks.resumeWatcherOptions = options as typeof mocks.resumeWatcherOptions;
     mocks.startResumeWatcher(options);
@@ -134,6 +137,11 @@ beforeEach(() => {
   mocks.deferredSystemSkillsStderr = false;
   mocks.appServerOptions = null;
   mocks.resumeWatcherOptions = null;
+  mocks.savedThreadIds.clear();
+  mocks.isSavedThread.mockImplementation((options: unknown) => {
+    const threadId = (options as { threadId?: string }).threadId;
+    return typeof threadId === "string" && mocks.savedThreadIds.has(threadId);
+  });
   mocks.spawn.mockImplementation(() => mockChildProcess());
   mocks.appStart.mockResolvedValue(undefined);
   mocks.appRequest.mockImplementation(async (method: string, params: unknown) => {
@@ -226,7 +234,7 @@ describe("normalizeCodexReclaimInput", () => {
 describe("formatCodexTerminalNotice", () => {
   it("clears stale TUI content when writing notices to a TTY", () => {
     expect(formatCodexTerminalNotice("[adit cloud codex] taken over", true)).toBe(
-      "\r\x1b[2K\r\n\r\x1b[2K[adit cloud codex] taken over\x1b[0K\r\n",
+      "\r\x1b[2K\r\n\r\x1b[2K[adit cloud codex] taken over\x1b[0K\r\n\r\x1b[2K",
     );
   });
 
@@ -603,12 +611,68 @@ describe("CodexCliProvider takeover", () => {
     );
     expect(provider.state.owner).toBe("web");
     expect(provider.state.activeSessionId).toBe("019e2110-d96f-7e40-882e-b524fa9148e4");
-    expect(provider.state.resumeSessionId).toBe("019e2110-d96f-7e40-882e-b524fa9148e4");
+    expect(provider.state.resumeSessionId).toBeNull();
     expect(provider.state.sdkSessionId).toBe("019e2110-d96f-7e40-882e-b524fa9148e4");
     expect(events.some((event) =>
       event.type === "state" &&
       event.payload.activeSessionId === "019e2110-d96f-7e40-882e-b524fa9148e4"
     )).toBe(true);
+
+    provider.stop();
+  });
+
+  it("starts local Codex without resume when Web owns an unsaved empty thread", async () => {
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+    });
+
+    await provider.takeover();
+    mocks.spawn.mockClear();
+
+    await provider.releaseToLocal();
+
+    expect(mocks.isSavedThread).toHaveBeenCalledWith({
+      cwd: "/tmp/project",
+      threadId: "019e2110-d96f-7e40-882e-b524fa9148e4",
+    });
+    expect(mocks.spawn).toHaveBeenCalledWith(
+      "codex",
+      [],
+      expect.objectContaining({ cwd: "/tmp/project" }),
+    );
+    expect(provider.state.owner).toBe("local");
+    expect(provider.state.activeSessionId).toBeNull();
+    expect(provider.state.resumeSessionId).toBeNull();
+    expect(provider.state.sdkSessionId).toBeNull();
+
+    provider.stop();
+  });
+
+  it("resumes a saved local Codex session when releasing Web control", async () => {
+    const localSessionId = "019e2110-d96f-7e40-882e-b524fa9148e4";
+    mocks.savedThreadIds.add(localSessionId);
+    const provider = new CodexCliProvider({
+      bin: "codex",
+      args: [],
+      cwd: "/tmp/project",
+    });
+    provider.noteLocalSession(localSessionId);
+
+    await provider.takeover();
+    mocks.spawn.mockClear();
+
+    await provider.releaseToLocal();
+
+    expect(mocks.spawn).toHaveBeenCalledWith(
+      "codex",
+      ["resume", localSessionId],
+      expect.objectContaining({ cwd: "/tmp/project" }),
+    );
+    expect(provider.state.owner).toBe("local");
+    expect(provider.state.activeSessionId).toBe(localSessionId);
+    expect(provider.state.resumeSessionId).toBe(localSessionId);
 
     provider.stop();
   });
