@@ -18,6 +18,12 @@ export interface CodexResumeLogReadOptions {
   codexHome?: string;
 }
 
+export interface CodexSavedThreadLookupOptions {
+  cwd: string;
+  threadId: string;
+  codexHome?: string;
+}
+
 export interface StartCodexResumeLogWatcherOptions {
   cwd: string;
   onResume: (threadId: string) => void;
@@ -121,6 +127,29 @@ export function readCodexResumeLogEvents(
     } catch {}
     try {
       stateDb?.close();
+    } catch {}
+  }
+}
+
+export function isCodexThreadSavedForCwd(opts: CodexSavedThreadLookupOptions): boolean {
+  const threadId = readString(opts.threadId);
+  if (!threadId) return false;
+  const statePath = join(resolveCodexHome(opts.codexHome), "state_5.sqlite");
+  if (!existsSync(statePath)) return false;
+
+  let db: Database.Database | null = null;
+  try {
+    db = openReadonlyDatabase(statePath);
+    const row = db.prepare("SELECT cwd FROM threads WHERE id = ? LIMIT 1").get(threadId) as
+      | ThreadCwdRow
+      | undefined;
+    const threadCwd = readString(row?.cwd);
+    return Boolean(threadCwd && normalizePath(threadCwd) === normalizePath(opts.cwd));
+  } catch {
+    return false;
+  } finally {
+    try {
+      db?.close();
     } catch {}
   }
 }

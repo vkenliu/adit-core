@@ -4,20 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Exact semver version to publish for all ADIT packages"
-        required: true
+        description: "Exact semver version to publish. Leave empty to bump npm latest patch."
+        required: false
         type: string
-      dist_tag:
-        description: "npm dist-tag to assign"
-        required: true
-        default: "develop"
-        type: choice
-        options:
-          - "develop"
-          - "latest"
-          - "next"
-          - "beta"
-          - "alpha"
       dry_run:
         description: "Validate and pack without publishing"
         required: true
@@ -31,8 +20,7 @@ jobs:
     permissions:
       contents: read
     env:
-      RELEASE_VERSION: ${{ inputs.version }}
-      DIST_TAG: ${{ inputs.dist_tag }}
+      REQUESTED_VERSION: ${{ inputs.version }}
       DRY_RUN: ${{ inputs.dry_run }}
 
     steps:
@@ -64,19 +52,94 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Validate requested version
+      - name: Resolve release version
         run: |
           node <<'NODE'
-          const version = process.env.RELEASE_VERSION ?? "";
+          const { execFileSync } = require("node:child_process");
+
+          const requestedVersion = (process.env.REQUESTED_VERSION ?? "").trim();
           const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
-          if (!semver.test(version)) {
+
+          function validate(version) {
+            if (semver.test(version)) return;
+
             console.error(`Invalid release version: ${version}`);
             console.error("Use an exact semver version, for example 0.4.14 or 0.5.0-beta.1.");
             process.exit(1);
           }
+
+          function nextPatch(version) {
+            const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+            if (match === null) {
+              console.error(`Cannot auto-bump non-stable npm latest version: ${version}`);
+              console.error("Please run the workflow again and enter the version manually.");
+              process.exit(1);
+            }
+
+            return `${match[1]}.${match[2]}.${Number(match[3]) + 1}`;
+          }
+
+          let version = requestedVersion;
+          if (version === "") {
+            try {
+              const latest = execFileSync("npm", ["view", "@varveai/adit-cli@latest", "version"], {
+                encoding: "utf8",
+                stdio: ["ignore", "pipe", "pipe"],
+              }).trim();
+
+              if (latest === "") {
+                throw new Error("npm returned an empty version");
+              }
+
+              version = nextPatch(latest);
+              console.log(`Resolved release version from npm latest: ${latest} -> ${version}`);
+            } catch (error) {
+              console.error("Could not read @varveai/adit-cli@latest from npm.");
+              console.error("Please run the workflow again and enter the version manually.");
+              console.error(error instanceof Error ? error.message : String(error));
+              process.exit(1);
+            }
+          }
+
+          validate(version);
+
+          console.log(`RELEASE_VERSION=${version}`);
+          require("node:fs").appendFileSync(process.env.GITHUB_ENV, `RELEASE_VERSION=${version}\n`);
           NODE
 
-      - name: Apply requested package version
+      - name: Verify package versions are unpublished
+        run: |
+          set -euo pipefail
+
+          node <<'NODE' > /tmp/adit-package-names.txt
+          const { readFileSync } = require("node:fs");
+          const packageJsonPaths = [
+            "packages/core/package.json",
+            "packages/engine/package.json",
+            "packages/hooks/package.json",
+            "packages/cli/package.json",
+            "packages/cloud/package.json",
+            "packages/plans/package.json",
+          ];
+          for (const path of packageJsonPaths) {
+            console.log(JSON.parse(readFileSync(path, "utf8")).name);
+          }
+          NODE
+
+          while IFS= read -r package_name; do
+            if npm view "${package_name}@${RELEASE_VERSION}" version >/dev/null 2>&1; then
+              echo "${package_name}@${RELEASE_VERSION} already exists on npm." >&2
+              exit 1
+            fi
+          done < /tmp/adit-package-names.txt
+
+      - name: Build packages
+        run: pnpm build
+
+      - name: Run tests
+        run: pnpm test
+
+      - name: Apply release package version
         run: |
           node <<'NODE'
           const { readFileSync, writeFileSync } = require("node:fs");
@@ -117,38 +180,6 @@ jobs:
           }
           NODE
 
-      - name: Verify package versions are unpublished
-        run: |
-          set -euo pipefail
-
-          node <<'NODE' > /tmp/adit-package-names.txt
-          const { readFileSync } = require("node:fs");
-          const packageJsonPaths = [
-            "packages/core/package.json",
-            "packages/engine/package.json",
-            "packages/hooks/package.json",
-            "packages/cli/package.json",
-            "packages/cloud/package.json",
-            "packages/plans/package.json",
-          ];
-          for (const path of packageJsonPaths) {
-            console.log(JSON.parse(readFileSync(path, "utf8")).name);
-          }
-          NODE
-
-          while IFS= read -r package_name; do
-            if npm view "${package_name}@${RELEASE_VERSION}" version >/dev/null 2>&1; then
-              echo "${package_name}@${RELEASE_VERSION} already exists on npm." >&2
-              exit 1
-            fi
-          done < /tmp/adit-package-names.txt
-
-      - name: Build packages
-        run: pnpm build
-
-      - name: Run tests
-        run: pnpm test
-
       - name: Require npm token for publish
         if: ${{ inputs.dry_run == false }}
         run: |
@@ -168,7 +199,7 @@ jobs:
             "--access"
             "public"
             "--tag"
-            "${DIST_TAG}"
+            "latest"
             "--no-git-checks"
             "--ignore-scripts"
           )

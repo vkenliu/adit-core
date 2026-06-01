@@ -25,6 +25,7 @@ import {
 } from "./codex-plan-normalizer.js";
 import { spawnCliProcess } from "./cli-process.js";
 import {
+  isCodexThreadSavedForCwd,
   startCodexResumeLogWatcher,
   type CodexResumeLogWatcher,
 } from "./codex-resume-log-watcher.js";
@@ -305,7 +306,18 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     this.appServer = null;
     this.loadedThreadIds = new Set<string>();
     this.emptyThreadIds = new Set<string>();
-    const resumeId = this.resumeSessionId ?? this.activeSessionId;
+    const resumeId = this.pickLocalResumeSessionId();
+    if (resumeId) {
+      this.activeSessionId = resumeId;
+      this.resumeSessionId = resumeId;
+      this.sdkSessionId = resumeId;
+      this.applyStoredUsageForSession(resumeId);
+    } else {
+      this.activeSessionId = null;
+      this.resumeSessionId = null;
+      this.sdkSessionId = null;
+      this.applyStoredUsageForSession(null);
+    }
     this.startLocal(resumeId ? ["resume", resumeId] : []);
   }
 
@@ -882,7 +894,9 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     }));
     const thread = asRecord(result?.thread);
     const resumedId = readString(thread?.id) ?? threadId;
-    this.noteThread({ ...(thread ?? {}), id: resumedId }, result);
+    this.noteThread({ ...(thread ?? {}), id: resumedId }, result, {
+      markLocalResumable: true,
+    });
   }
 
   private handleAppNotification(message: CodexJsonRpcMessage): void {
@@ -1082,11 +1096,17 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
     return Promise.reject(new Error(`Unsupported Codex app-server request: ${message.method}`));
   }
 
-  private noteThread(thread: Record<string, unknown> | null, result: Record<string, unknown> | null): void {
+  private noteThread(
+    thread: Record<string, unknown> | null,
+    result: Record<string, unknown> | null,
+    opts: { markLocalResumable?: boolean } = {},
+  ): void {
     const threadId = readString(thread?.id);
     if (!threadId) return;
     this.activeSessionId = threadId;
-    this.resumeSessionId = threadId;
+    if (opts.markLocalResumable) {
+      this.resumeSessionId = threadId;
+    }
     this.sdkSessionId = threadId;
     this.loadedThreadIds.add(threadId);
     this.applyStoredUsageForSession(threadId);
@@ -1260,7 +1280,6 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
   private bindPendingSession(pendingSessionId: string, sessionId: string): void {
     if (!pendingSessionId || !sessionId) return;
     this.activeSessionId = sessionId;
-    this.resumeSessionId = sessionId;
     this.sdkSessionId = sessionId;
     this.applyStoredUsageForSession(sessionId);
     if (!this.boundPendingSessionIds.has(pendingSessionId)) {
@@ -1436,6 +1455,19 @@ export class CodexCliProvider extends EventEmitter implements CliAgentProvider {
 
   private currentUsageSessionId(): string | null {
     return this.activeSessionId ?? this.resumeSessionId ?? this.sdkSessionId;
+  }
+
+  private pickLocalResumeSessionId(): string | null {
+    const seen = new Set<string>();
+    for (const id of [this.resumeSessionId, this.activeSessionId, this.sdkSessionId]) {
+      const sessionId = readString(id);
+      if (!sessionId || seen.has(sessionId)) continue;
+      seen.add(sessionId);
+      if (isCodexThreadSavedForCwd({ cwd: this.opts.cwd, threadId: sessionId })) {
+        return sessionId;
+      }
+    }
+    return null;
   }
 
   private applyStoredUsageForSession(sessionId: string | null): void {
@@ -1735,7 +1767,7 @@ function writeCodexTerminalNotice(message: string): void {
 export function formatCodexTerminalNotice(message: string, isTTY = Boolean(process.stderr.isTTY)): string {
   const text = message.replace(/\r?\n$/u, "");
   if (!isTTY) return `\n${text}\n`;
-  return `${CLEAR_TERMINAL_LINE}\r\n${CLEAR_TERMINAL_LINE}${text}${CLEAR_TO_END_OF_LINE}\r\n`;
+  return `${CLEAR_TERMINAL_LINE}\r\n${CLEAR_TERMINAL_LINE}${text}${CLEAR_TO_END_OF_LINE}\r\n${CLEAR_TERMINAL_LINE}`;
 }
 
 async function stopLocalCodexProcess(child: ChildProcess | null): Promise<void> {

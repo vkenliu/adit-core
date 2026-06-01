@@ -40,9 +40,15 @@ const CODEX_APP_SERVER_ARGS = [
 ];
 const CODEX_SYSTEM_SKILLS_TRANSIENT_ERROR_RE =
   /codex_core_skills::loader: failed to (?:read skills dir|stat skills path) .*[\/\\]skills[\/\\]\.system[\/\\].*No such file or directory/i;
+const CODEX_RECOVERABLE_TOOL_ERROR_RE =
+  /codex_core::tools::router: error=write_stdin failed: stdin is closed for this session/i;
 
 export function isTransientCodexSystemSkillsError(line: string): boolean {
   return CODEX_SYSTEM_SKILLS_TRANSIENT_ERROR_RE.test(line);
+}
+
+export function isRecoverableCodexAppServerToolError(line: string): boolean {
+  return CODEX_RECOVERABLE_TOOL_ERROR_RE.test(line);
 }
 
 export class CodexAppServerClient extends EventEmitter {
@@ -186,6 +192,9 @@ export class CodexAppServerClient extends EventEmitter {
       this.deferredSystemSkillsStderr.push(line);
       return;
     }
+    if (isRecoverableCodexAppServerToolError(line) && !isAditDebugEnabled()) {
+      return;
+    }
     this.writeStderrLine(line);
   }
 
@@ -248,4 +257,9 @@ export class CodexAppServerClient extends EventEmitter {
     }
     if (!this.stopped) this.opts.onError?.(error);
   }
+}
+
+function isAditDebugEnabled(): boolean {
+  const value = process.env.ADIT_DEBUG?.trim().toLowerCase();
+  return Boolean(value && value !== "0" && value !== "false" && value !== "off");
 }

@@ -93,12 +93,24 @@ function createRemoteQuery(abortController?: AbortController) {
   };
 }
 
-function findRemotePromptStream(): AsyncIterable<Record<string, unknown>> {
+function findRemoteQueryCall(): {
+  options?: Record<string, unknown>;
+  prompt?: AsyncIterable<Record<string, unknown>>;
+} {
   const call = mocks.query.mock.calls.find(([input]) =>
     (input as { options?: { includePartialMessages?: boolean } }).options?.includePartialMessages === true
   );
   expect(call).toBeTruthy();
-  return (call?.[0] as { prompt: AsyncIterable<Record<string, unknown>> }).prompt;
+  return call?.[0] as {
+    options?: Record<string, unknown>;
+    prompt?: AsyncIterable<Record<string, unknown>>;
+  };
+}
+
+function findRemotePromptStream(): AsyncIterable<Record<string, unknown>> {
+  const prompt = findRemoteQueryCall().prompt;
+  expect(prompt).toBeTruthy();
+  return prompt as AsyncIterable<Record<string, unknown>>;
 }
 
 function tick(): Promise<void> {
@@ -266,6 +278,7 @@ describe("ClaudeCodeProvider abort", () => {
         };
       }).options?.canUseTool;
       expect(canUseTool).toBeTypeOf("function");
+      expect(findRemoteQueryCall().options?.disallowedTools).toBeUndefined();
 
       const toolSignal = new AbortController();
       const permission = canUseTool?.("Edit", { file_path: "aaa.md" }, {
@@ -686,6 +699,28 @@ describe("ClaudeCodeProvider takeover", () => {
 
     await provider.abort();
     provider.stop();
+  });
+
+  it("disables AskUserQuestion for Build mode while keeping bypass permissions", async () => {
+    const provider = new ClaudeCodeProvider({
+      bin: "claude",
+      args: [],
+      cwd: "/tmp/project",
+    });
+
+    try {
+      await provider.takeover();
+      await provider.sendPrompt("start", { mode: "build" });
+
+      const options = findRemoteQueryCall().options;
+      expect(options?.permissionMode).toBe("bypassPermissions");
+      expect(options?.allowDangerouslySkipPermissions).toBe(true);
+      expect(options?.disallowedTools).toEqual(["AskUserQuestion"]);
+      expect(options?.canUseTool).toBeUndefined();
+    } finally {
+      await provider.abort().catch(() => undefined);
+      provider.stop();
+    }
   });
 
   it("ignores zero-token Claude context usage placeholders", async () => {
