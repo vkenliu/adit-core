@@ -22,10 +22,7 @@
     "lint:fix": "eslint packages/*/src/**/*.ts --fix",
     "format": "prettier --write \"packages/*/src/**/*.ts\"",
     "format:check": "prettier --check \"packages/*/src/**/*.ts\"",
-    "typecheck": "pnpm -r run typecheck",
-    "changeset": "changeset",
-    "version-packages": "changeset version",
-    "release": "pnpm build && changeset publish"
+    "typecheck": "pnpm -r run typecheck"
   },
   "keywords": [
     "ai",
@@ -47,7 +44,6 @@
     ]
   },
   "devDependencies": {
-    "@changesets/cli": "^2.30.0",
     "vitest": "^4.0.18"
   }
 }
